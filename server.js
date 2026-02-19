@@ -21,6 +21,7 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
 import webhookRoutes from './routes/webhooks.js';
+import reminderRoutes from './routes/reminderRoutes.js';
 
 // Load environment variables
 dotenv.config();
@@ -69,6 +70,7 @@ app.use('/api/expenses', expenseRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/reminders', reminderRoutes);
 
 // Shared prefixes / General Routes
 app.use('/api', settingRoutes);   // Handles /api/settings, /api/inventory/settings

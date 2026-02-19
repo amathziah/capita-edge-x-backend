@@ -2,6 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { authenticateUser } from './middleware/auth.js';
@@ -26,7 +29,8 @@ import reminderRoutes from './routes/reminderRoutes.js';
 // Load environment variables
 dotenv.config();
 
-
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,8 +40,6 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(sanitizeInput);
-
-
 
 // ============================================================================
 // WEBHOOKS
@@ -64,20 +66,29 @@ app.use('/api/', checkPlanLimits);
 // Mount Routes
 app.use('/api', aiRoutes); // Mount at /api to support /api/ai/* AND /api/negotiate-settlement
 app.use('/api/invoices', invoiceRoutes);
+app.use('/api/reminders', reminderRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/reminders', reminderRoutes);
 
 // Shared prefixes / General Routes
 app.use('/api', settingRoutes);   // Handles /api/settings, /api/inventory/settings
 app.use('/api', uploadRoutes);    // Handles /api/upload/logo, /api/uploads/*
 app.use('/api', analyticsRoutes); // Handles /api/dashboard-stats, /api/analytics/*
 
-
+// SERVE FRONTEND (Optional)
+const CLIENT_BUILD_PATH = path.join(__dirname, 'dist');
+if (fs.existsSync(CLIENT_BUILD_PATH)) {
+    app.use(express.static(CLIENT_BUILD_PATH));
+    app.get(/(.*)/, (req, res) => {
+        if (!req.path.startsWith('/api')) {
+            res.sendFile(path.join(CLIENT_BUILD_PATH, 'index.html'));
+        }
+    });
+}
 
 // Error Handling
 app.use(notFoundHandler);

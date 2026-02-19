@@ -20,40 +20,110 @@ export const getInvoices = async (req, res) => {
     res.json(invoices);
 };
 
+export const getNextInvoiceNumber = async (req, res) => {
+    // Find the latest invoice to increment the number
+    const { data: latest, error } = await supabase
+        .from('invoices')
+        .select('invoiceNumber')
+        .eq('organization_id', req.user.organizationId)
+        .order('createdAt', { ascending: false })
+        .limit(1);
+
+    if (error) throw new APIError(error.message, 500);
+
+    let nextNumber = 'INV-0001';
+    if (latest && latest.length > 0 && latest[0].invoiceNumber) {
+        const match = latest[0].invoiceNumber.match(/INV-(\d+)/);
+        if (match) {
+            const num = parseInt(match[1], 10) + 1;
+            nextNumber = `INV-${num.toString().padStart(4, '0')}`;
+        }
+    }
+
+    res.json({ nextNumber });
+};
+
 export const createInvoice = async (req, res) => {
-    const { customer_id, items, dueDate, notes, taxRate } = req.body;
+    let {
+        buyer,
+        items,
+        dueDate,
+        notes,
+        taxRate,
+        taxAmount,
+        subtotal,
+        total,
+        invoiceNumber,
+        status,
+        date,
+        seller,
+        shipTo,
+        taxType,
+        discount,
+        shipping
+    } = req.body;
 
     if (!items || items.length === 0) {
         throw new APIError('Invoice must have at least one item', 400);
     }
 
-    // Customer Validation
-    const { data: customer } = await supabase
+    if (!buyer || !buyer.name) {
+        throw new APIError('Buyer information is required', 400);
+    }
+
+    // Find or create customer
+    let customer_id;
+    const { data: existingCustomer } = await supabase
         .from('customers')
-        .select('*')
-        .eq('id', customer_id)
+        .select('id')
+        .eq('name', buyer.name)
         .eq('organization_id', req.user.organizationId)
         .single();
 
-    if (!customer) throw new APIError('Invalid customer', 400);
+    if (existingCustomer) {
+        customer_id = existingCustomer.id;
+    } else {
+        const { data: newCustomer, error: createError } = await supabase
+            .from('customers')
+            .insert([{
+                name: buyer.name,
+                email: buyer.email || null,
+                phone: buyer.phone || null,
+                address: buyer.address || null,
+                organization_id: req.user.organizationId
+            }])
+            .select()
+            .single();
 
-    // Calculate totals
-    const subtotal = items.reduce((acc, item) => acc + (item.quantity * item.price), 0);
-    const tax = subtotal * (taxRate / 100);
-    const total = subtotal + tax;
+        if (createError) throw new APIError('Failed to create customer', 500);
+        customer_id = newCustomer.id;
+    }
+
+    // Calculate totals if not provided
+    const calculatedSubtotal = items.reduce((acc, item) => acc + ((item.quantity || 1) * (item.price || 0)), 0);
+    const calculatedTax = calculatedSubtotal * ((taxRate || 0) / 100);
+    const calculatedTotal = calculatedSubtotal + calculatedTax;
 
     // Create Invoice
     const { data: invoice, error } = await supabase
         .from('invoices')
         .insert([{
             customer_id,
+            buyer, // Store the buyer JSON object
+            seller,
+            shipTo,
+            date: date || new Date().toISOString(),
             dueDate,
             notes,
-            subtotal,
-            tax,
-            total,
-            status: 'draft',
-            invoiceNumber: `INV-${Date.now()}`, // Simple generation
+            subtotal: subtotal !== undefined ? subtotal : calculatedSubtotal,
+            taxAmount: taxAmount !== undefined ? taxAmount : calculatedTax,
+            taxType,
+            taxRate: taxRate || 0,
+            discount: discount || 0,
+            shipping: shipping || 0,
+            total: total !== undefined ? total : calculatedTotal,
+            status: status || 'draft',
+            invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
             organization_id: req.user.organizationId
         }])
         .select()
@@ -63,7 +133,7 @@ export const createInvoice = async (req, res) => {
 
     // Insert Items
     const invoiceItems = items.map(item => ({
-        invoice_id: invoice.id,
+        invoiceId: invoice.id,
         description: item.description,
         quantity: item.quantity,
         price: item.price,
@@ -101,7 +171,7 @@ export const getInvoiceById = async (req, res) => {
 
 export const updateInvoice = async (req, res) => {
     const id = req.params.id;
-    const updates = req.body;
+    const { items, ...updates } = req.body;
 
     // Check ownership
     const { data: existing } = await supabase
@@ -113,6 +183,7 @@ export const updateInvoice = async (req, res) => {
 
     if (!existing) throw new APIError('Invoice not found', 404);
 
+    // Update main invoice data
     const { data: updated, error } = await supabase
         .from('invoices')
         .update(updates)
@@ -121,7 +192,46 @@ export const updateInvoice = async (req, res) => {
         .single();
 
     if (error) throw new APIError(error.message, 500);
-    res.json(updated);
+
+    // Handle items if provided
+    if (items) {
+        // Delete existing items
+        await supabase
+            .from('invoice_items')
+            .delete()
+            .eq('invoiceId', id)
+            .eq('organization_id', req.user.organizationId);
+
+        // Insert new items
+        if (items.length > 0) {
+            const invoiceItems = items.map(item => ({
+                invoiceId: id,
+                description: item.description,
+                quantity: item.quantity,
+                price: item.price,
+                organization_id: req.user.organizationId
+            }));
+
+            const { error: itemsError } = await supabase
+                .from('invoice_items')
+                .insert(invoiceItems);
+
+            if (itemsError) console.error("Error updating invoice items:", itemsError);
+        }
+    }
+
+    // Fetch the fully updated invoice to return
+    const { data: fullInvoice } = await supabase
+        .from('invoices')
+        .select(`
+            *,
+            customers!invoices_customer_id_fkey (*),
+            items: invoice_items (*)
+        `)
+        .eq('id', id)
+        .single();
+
+    res.json(fullInvoice || updated);
 };
 
 export const deleteInvoice = async (req, res) => {

@@ -5,8 +5,8 @@ import * as settingController from '../controllers/settingController.js';
 const router = express.Router();
 
 // General
-router.get('/', asyncHandler(settingController.getSettings));
-router.post('/', asyncHandler(settingController.updateSetting));
+router.get('/settings', asyncHandler(settingController.getSettings));
+router.post('/settings', asyncHandler(settingController.updateSetting));
 
 // Inventory
 router.get('/inventory/settings', asyncHandler(settingController.getInventorySettings)); // Maps to /api/inventory/settings if mounted at /api? 

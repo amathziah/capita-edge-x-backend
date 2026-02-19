@@ -7,6 +7,7 @@ const router = express.Router();
 
 // Routes
 router.get('/', asyncHandler(invoiceController.getInvoices));
+router.get('/next-number', asyncHandler(invoiceController.getNextInvoiceNumber));
 router.post('/', validateInvoice, asyncHandler(invoiceController.createInvoice));
 router.get('/:id', validateId, asyncHandler(invoiceController.getInvoiceById));
 router.put('/:id', validateId, asyncHandler(invoiceController.updateInvoice));

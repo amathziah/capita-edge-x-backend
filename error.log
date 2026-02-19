@@ -1,0 +1,199 @@
+[2026-02-07T12:29:04.183Z] Error: Invalid login: 535-5.7.8 Username and Password not accepted. For more information, go to
+535 5.7.8  https://support.google.com/mail/?p=BadCredentials d9443c01a7336-2a9521baf7fsm63257315ad.59 - gsmtp
+    at SMTPConnection._formatError (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:814:19)
+    at SMTPConnection._actionAUTHComplete (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:1622:34)
+    at SMTPConnection.<anonymous> (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:556:26)
+    at SMTPConnection._processResponse (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:998:20)
+    at SMTPConnection._onData (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:774:14)
+    at SMTPConnection._onSocketData (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:195:44)
+    at TLSSocket.emit (node:events:524:28)
+    at addChunk (node:internal/streams/readable:561:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)
+    at Readable.push (node:internal/streams/readable:392:5)
+[2026-02-07T12:29:35.692Z] Error: Invalid login: 535-5.7.8 Username and Password not accepted. For more information, go to
+535 5.7.8  https://support.google.com/mail/?p=BadCredentials d9443c01a7336-2a96251b6edsm23211575ad.69 - gsmtp
+    at SMTPConnection._formatError (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:814:19)
+    at SMTPConnection._actionAUTHComplete (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:1622:34)
+    at SMTPConnection.<anonymous> (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:556:26)
+    at SMTPConnection._processResponse (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:998:20)
+    at SMTPConnection._onData (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:774:14)
+    at SMTPConnection._onSocketData (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:195:44)
+    at TLSSocket.emit (node:events:524:28)
+    at addChunk (node:internal/streams/readable:561:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)
+    at Readable.push (node:internal/streams/readable:392:5)
+[2026-02-07T12:36:04.908Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendInvoice (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:130:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1311:20
+[2026-02-07T12:38:23.294Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendInvoice (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:130:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1311:20
+[2026-02-07T12:38:30.111Z] Error: Invalid login: 535-5.7.8 Username and Password not accepted. For more information, go to
+535 5.7.8  https://support.google.com/mail/?p=BadCredentials 41be03b00d2f7-c6dcb5e5f98sm5415643a12.17 - gsmtp
+    at SMTPConnection._formatError (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:814:19)
+    at SMTPConnection._actionAUTHComplete (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:1622:34)
+    at SMTPConnection.<anonymous> (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:556:26)
+    at SMTPConnection._processResponse (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:998:20)
+    at SMTPConnection._onData (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:774:14)
+    at SMTPConnection._onSocketData (/Users/amathziah/Downloads/baby-1/server/node_modules/nodemailer/lib/smtp-connection/index.js:195:44)
+    at TLSSocket.emit (node:events:524:28)
+    at addChunk (node:internal/streams/readable:561:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)
+    at Readable.push (node:internal/streams/readable:392:5)
+[2026-02-07T16:03:11.359Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/Downloads/baby-1/server/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-07T16:03:12.436Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/Downloads/baby-1/server/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-12T06:26:25.294Z] Error: TypeError: fetch failed
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:720:22
+[2026-02-18T08:26:23.797Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1434:24
+[2026-02-18T08:26:27.963Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1434:24
+[2026-02-18T08:26:32.155Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1434:24
+[2026-02-18T13:41:48.910Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1437:24
+[2026-02-18T13:45:31.094Z] APIError: Invoice not found
+    at engage (file:///Users/amathziah/Downloads/baby-1/server/controllers/CollectionController.js:31:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T13:53:24.996Z] Error: null value in column "organization_id" of relation "invoice_items" violates not-null constraint
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:556:32
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T13:54:00.468Z] APIError: Invoice number INV-0098 already exists. Please use a unique number.
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:500:23
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T13:57:42.998Z] Error: null value in column "organization_id" of relation "invoice_items" violates not-null constraint
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:556:32
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T14:11:42.926Z] Error: null value in column "organization_id" of relation "invoice_items" violates not-null constraint
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:553:32
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T14:55:25.021Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/Downloads/baby-1/server/middleware/checkPlan.js:17:19)
+[2026-02-18T15:30:32.566Z] Error: null value in column "organization_id" of relation "invoice_items" violates not-null constraint
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:553:32
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T15:30:51.052Z] APIError: Invoice number INV-0099 already exists. Please use a unique number.
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:497:23
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T18:09:44.146Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/Downloads/baby-1/server/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T18:31:41.246Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1434:24
+[2026-02-18T18:32:09.070Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1434:24
+[2026-02-18T18:56:09.327Z] Error: null value in column "organization_id" of relation "invoice_items" violates not-null constraint
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:553:32
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-18T20:16:52.035Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async file:///Users/amathziah/Downloads/baby-1/server/server.js:1434:24
+[2026-02-19T12:40:11.540Z] Error: null value in column "organization_id" of relation "invoice_items" violates not-null constraint
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:553:32
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T12:46:55.824Z] Error: null value in column "organization_id" of relation "invoice_items" violates not-null constraint
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:553:32
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T12:48:36.169Z] APIError: Invoice number INV-068899 already exists. Please use a unique number.
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:497:23
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T12:49:24.381Z] Error: Could not find the 'user_id' column of 'payments' in the schema cache
+    at file:///Users/amathziah/Downloads/baby-1/server/server.js:740:22
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:35:15.713Z] APIError: Could not embed because more than one relationship was found for 'invoices' and 'customers'
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:18:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:35:16.502Z] APIError: Could not embed because more than one relationship was found for 'invoices' and 'customers'
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:18:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:35:21.825Z] APIError: Could not embed because more than one relationship was found for 'invoices' and 'customers'
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:18:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:36:19.613Z] APIError: Could not embed because more than one relationship was found for 'invoices' and 'customers'
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:18:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:36:45.368Z] APIError: Could not find a relationship between 'invoices' and 'invoice_items' in the schema cache
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:36:46.129Z] APIError: Could not find a relationship between 'invoices' and 'invoice_items' in the schema cache
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:36:54.725Z] APIError: Could not find a relationship between 'invoices' and 'invoice_items' in the schema cache
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:36:55.495Z] APIError: Could not find a relationship between 'invoices' and 'invoice_items' in the schema cache
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:37:31.704Z] APIError: Could not find a relationship between 'invoices' and 'invoice_items' in the schema cache
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:37:32.518Z] APIError: Could not find a relationship between 'invoices' and 'invoice_items' in the schema cache
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:37:33.343Z] APIError: Could not find a relationship between 'invoices' and 'invoice_items' in the schema cache
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:37:34.152Z] APIError: Could not find a relationship between 'invoices' and 'invoice_items' in the schema cache
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:39:43.727Z] APIError: column invoices.created_at does not exist
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:39:46.168Z] APIError: column invoices.created_at does not exist
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:39:46.983Z] APIError: column invoices.created_at does not exist
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:39:47.784Z] APIError: column invoices.created_at does not exist
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:39:48.642Z] APIError: column invoices.created_at does not exist
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:39:56.594Z] APIError: column invoices.created_at does not exist
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:39:57.406Z] APIError: column invoices.created_at does not exist
+    at getInvoices (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:41:24.463Z] APIError: Invoice not found
+    at getInvoiceById (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:98:34)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:41:27.933Z] APIError: Invoice not found
+    at getInvoiceById (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:98:34)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:41:30.408Z] APIError: Invoice not found
+    at getInvoiceById (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:98:34)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T18:47:41.846Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async sendInvoiceEmail (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:216:24)
+[2026-02-19T18:48:49.781Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async sendInvoiceEmail (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:216:24)
+[2026-02-19T18:51:07.831Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async sendInvoiceEmail (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:216:24)

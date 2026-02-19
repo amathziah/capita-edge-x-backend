@@ -95,3 +95,61 @@ export const deleteCustomer = async (req, res) => {
     if (error) throw new APIError(error.message, 500);
     res.json({ success: true });
 };
+
+export const getCustomerInvoices = async (req, res) => {
+    const { data: invoices, error } = await supabase
+        .from('invoices')
+        .select(`
+            *,
+            items: invoice_items (*)
+        `)
+        .eq('customer_id', req.params.id)
+        .eq('organization_id', req.user.organizationId)
+        .order('createdAt', { ascending: false });
+
+    if (error) throw new APIError(error.message, 500);
+    res.json(invoices);
+};
+
+export const getCustomerInsights = async (req, res) => {
+    const { data: invoices, error } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('customer_id', req.params.id)
+        .eq('organization_id', req.user.organizationId);
+
+    if (error) throw new APIError(error.message, 500);
+
+    const totalInvoices = invoices.length;
+    const totalRevenue = invoices.reduce((acc, inv) => acc + (inv.total || 0), 0);
+    const lastTransactionDate = invoices.length > 0 ? invoices[0].createdAt : null;
+
+    const breakdown = {
+        paid: invoices.filter(i => i.status === 'paid').length,
+        pending: invoices.filter(i => i.status === 'pending').length,
+        overdue: invoices.filter(i => i.status === 'overdue').length,
+        draft: invoices.filter(i => i.status === 'draft').length,
+    };
+
+    // Simple Health Score Logic
+    let healthScore = 70; // Baseline
+    if (totalInvoices > 5) healthScore += 10;
+    if (totalRevenue > 50000) healthScore += 10;
+    if (breakdown.overdue > 0) healthScore -= 20;
+
+    let healthLabel = 'Regular';
+    if (healthScore >= 90) healthLabel = 'VIP';
+    else if (healthScore >= 80) healthLabel = 'Active';
+    else if (healthScore < 50) healthLabel = 'At Risk';
+
+    if (totalInvoices === 0) healthLabel = 'New';
+
+    res.json({
+        totalInvoices,
+        totalRevenue,
+        lastTransactionDate,
+        invoiceStatusBreakdown: breakdown,
+        healthScore: Math.min(100, Math.max(0, healthScore)),
+        healthLabel
+    });
+};

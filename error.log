@@ -197,3 +197,6 @@
     at EmailService.sendPaymentReminder (file:///Users/amathziah/Downloads/baby-1/server/services/emailService.js:181:23)
     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
     at async sendInvoiceEmail (file:///Users/amathziah/Downloads/baby-1/server/controllers/invoiceController.js:216:24)
+[2026-02-19T21:14:37.547Z] Error: insert or update on table "customers" violates foreign key constraint "customers_user_id_fkey"
+    at createCustomer (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/customerController.js:70:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)

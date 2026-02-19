@@ -16,7 +16,7 @@ export const authenticateUser = async (req, res, next) => {
         // --- DEVELOPER BYPASS ---
         if (token === 'mock-token-xyz-developer-bypass') {
             req.user = {
-                id: '00000000-0000-0000-0000-000000000000',
+                id: '02422ae6-2dcf-4ba0-aab5-9bc88710467d',
                 email: 'admin@zia.ai',
                 // Mock Org Context
                 organizationId: orgIdHeader || 'mock-org-id',

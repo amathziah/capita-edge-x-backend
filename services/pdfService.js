@@ -332,10 +332,108 @@ class PDFService {
     }
 
     /**
+     * Generate payment receipt PDF
+     */
+    async generateReceiptPDF(payment, invoice, settings = {}, outputPath) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const doc = new PDFDocument({ size: 'A4', margin: 50 });
+                const stream = fs.createWriteStream(outputPath);
+
+                doc.pipe(stream);
+
+                // Header with logo
+                await this.addHeader(doc, settings);
+
+                // Title
+                doc.fontSize(24)
+                    .font('Helvetica-Bold')
+                    .fillColor('#0D9488') // Teal-600
+                    .text('PAYMENT RECEIPT', 50, 150);
+
+                doc.fontSize(10)
+                    .font('Helvetica')
+                    .fillColor('#000000')
+                    .text(`Receipt #: REC-${payment.id.split('-')[0].toUpperCase()}`, 400, 155)
+                    .text(`Date: ${new Date(payment.date || payment.createdAt).toLocaleDateString()}`, 400, 170);
+
+                doc.moveDown(2);
+
+                // Payment Details
+                doc.fontSize(12)
+                    .font('Helvetica-Bold')
+                    .text('Payment Details', 50, 220);
+
+                doc.fontSize(10)
+                    .font('Helvetica')
+                    .text(`Linked Invoice: ${invoice.invoiceNumber}`, 50, 240)
+                    .text(`Payment Method: ${payment.method}`, 50, 255)
+                    .text(`Status: ${payment.status || 'Completed'}`, 50, 270);
+
+                // Amount Box
+                doc.rect(400, 220, 150, 60)
+                    .fillAndStroke('#F0FDFA', '#B2F5EA');
+
+                doc.fontSize(10)
+                    .font('Helvetica-Bold')
+                    .fillColor('#0D9488')
+                    .text('AMOUNT PAID', 410, 230);
+
+                doc.fontSize(16)
+                    .font('Helvetica-Bold')
+                    .text(`Rs. ${Number(payment.amount).toFixed(2)}`, 410, 250);
+
+                doc.fillColor('#000000');
+                doc.moveDown(4);
+
+                // Invoice Summary
+                doc.fontSize(12)
+                    .font('Helvetica-Bold')
+                    .text('Invoice Summary', 50, 320);
+
+                doc.fontSize(10)
+                    .font('Helvetica')
+                    .text(`Invoice Total: Rs. ${Number(invoice.total).toFixed(2)}`, 50, 340);
+
+                // Final balance (simple calculation)
+                const balance = Number(invoice.total) - Number(payment.amount);
+                if (balance > 0) {
+                    doc.text(`Remaining Balance: Rs. ${balance.toFixed(2)}`, 50, 355);
+                } else {
+                    doc.font('Helvetica-Bold').fillColor('#059669')
+                        .text('INVOICE FULLY PAID', 50, 355);
+                }
+
+                // Footer
+                this.addFooter(doc, settings);
+
+                doc.end();
+
+                stream.on('finish', () => resolve(outputPath));
+                stream.on('error', reject);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    /**
      * Generate temporary PDF path
      */
     getTempPDFPath(invoiceNumber) {
         const filename = `invoice_${invoiceNumber}_${Date.now()}.pdf`;
+        return this._getTempPath(filename);
+    }
+
+    /**
+     * Generate temporary Receipt path
+     */
+    getTempReceiptPath(paymentId) {
+        const filename = `receipt_${paymentId}_${Date.now()}.pdf`;
+        return this._getTempPath(filename);
+    }
+
+    _getTempPath(filename) {
         // Use import.meta.url to get the directory of the current module
         const currentDir = path.dirname(new URL(import.meta.url).pathname);
         const tempDir = path.join(currentDir, '..', 'temp');

@@ -24,7 +24,6 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
 import webhookRoutes from './routes/webhooks.js';
-import reminderRoutes from './routes/reminderRoutes.js';
 
 // Load environment variables
 dotenv.config();
@@ -66,7 +65,6 @@ app.use('/api/', checkPlanLimits);
 // Mount Routes
 app.use('/api', aiRoutes); // Mount at /api to support /api/ai/* AND /api/negotiate-settlement
 app.use('/api/invoices', invoiceRoutes);
-app.use('/api/reminders', reminderRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/expenses', expenseRoutes);

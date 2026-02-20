@@ -8,7 +8,7 @@ const insightsCache = new Map(); // Key: orgId, Value: { data, timestamp }
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 export const processChat = async (req, res) => {
-    const { query } = req.body;
+    const { query, agentId } = req.body;
 
     if (!query) {
         throw new APIError('Query is required', 400);
@@ -27,7 +27,7 @@ export const processChat = async (req, res) => {
         analyticsService.getDashboardStats(req.user.organizationId) // Pass orgId to stats
     ]);
 
-    const context = { invoices, customers, products, stats };
+    const context = { invoices, customers, products, stats, agentId };
     const response = await aiService.processQuery(query, context);
 
     // [AUDIT] Log AI Request

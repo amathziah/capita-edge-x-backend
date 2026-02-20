@@ -200,3 +200,37 @@
 [2026-02-19T21:14:37.547Z] Error: insert or update on table "customers" violates foreign key constraint "customers_user_id_fkey"
     at createCustomer (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/customerController.js:70:19)
     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T23:39:08.085Z] APIError: Invoice not found
+    at getInvoiceById (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:98:34)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T23:39:08.868Z] APIError: Invoice not found
+    at getInvoiceById (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:98:34)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T23:39:23.357Z] APIError: Invalid customer
+    at createInvoice (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:38:26)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T23:43:44.723Z] APIError: Could not find the 'tax' column of 'invoices' in the schema cache
+    at createInvoice (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:108:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T23:46:59.827Z] APIError: Failed to create invoice items
+    at createInvoice (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:126:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-19T23:52:33.931Z] APIError: Failed to create invoice items
+    at createInvoice (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:150:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-20T09:02:28.218Z] Error: TypeError: fetch failed
+    at AnalyticsService.getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/services/analyticsService.js:274:29)
+    at async getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/analyticsController.js:5:19)
+[2026-02-20T09:02:28.220Z] Error: TypeError: fetch failed
+    at getPayments (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/paymentController.js:12:22)
+[2026-02-20T09:17:08.927Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+[2026-02-20T09:21:45.410Z] Error: TypeError: fetch failed
+    at getPayments (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/paymentController.js:12:22)
+[2026-02-20T09:21:45.416Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+[2026-02-20T09:21:45.423Z] Error: TypeError: fetch failed
+    at AnalyticsService.getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/services/analyticsService.js:280:30)
+    at async getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/analyticsController.js:5:19)
+[2026-02-20T09:21:45.425Z] Error: TypeError: fetch failed
+    at getPayments (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/paymentController.js:12:22)

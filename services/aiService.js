@@ -64,8 +64,39 @@ class AIService {
      * Build chatbot prompt with business context
      */
     buildChatbotPrompt(query, context) {
-        const { invoices = [], customers = [], products = [], stats = {} } = context;
+        const { invoices = [], customers = [], products = [], stats = {}, agentId } = context;
         const lowerQuery = query.toLowerCase();
+
+        // --------------------------------------------------
+        // SPECIFIC AGENT PERSONAS (From Control Room Map)
+        // --------------------------------------------------
+        if (agentId) {
+            let persona = '';
+            if (agentId === 'agent_analytics') {
+                persona = "You are the Cash Flow Analytics Agent. Focus on revenue metrics, cash flow health, pending pipeline analysis, and financial forecasting.";
+            } else if (agentId === 'agent_compliance') {
+                persona = "You are the Compliance Guard Agent. Focus on GST, TDS, compliance deadlines, anomalies, and tax calculations.";
+            }
+
+            if (persona) {
+                return `${persona}
+
+Business Context:
+- Total Revenue: ₹${stats.totalRevenue || 0}
+- Total Invoices: ${invoices.length}
+- Overdue Invoices: ${stats.overdueCount || 0}
+- Pending Payments: ₹${stats.pendingPayments || 0}
+
+User Query: "${query}"
+
+You MUST think and respond in the following format:
+1. **Identify**: Provide a short, sharp observation based on the query.
+2. **Evaluate**: Discuss numbers and risk factors succinctly.
+3. **Action**: Suggest the Next Best Action without overwhelming the user.
+Quote currency in Indian Rupees (₹).
+`;
+            }
+        }
 
         // --------------------------------------------------
         // INVENTORY INTELLIGENCE PERSONA
@@ -121,7 +152,7 @@ Answer concisely and proactively.`;
             'collect', 'outstanding', 'balance', 'receipt'
         ].some(keyword => lowerQuery.includes(keyword));
 
-        if (isPaymentContext) {
+        if (isPaymentContext || agentId === 'agent_reminder' || agentId === 'agent_settlement') {
             return `You are an AI Payment Workflow Assistant for an Invoice & Accounting platform.
 
 Your ONLY responsibility is to manage everything related to PAYMENTS.

@@ -53,9 +53,7 @@ class EmailService {
      * Create dynamic transporter based on settings
      */
     createTransporter(settings = {}) {
-        if (this.mockMode) return null;
-
-        // 1. If User has provided Gmail credentials, use them
+        // 1. If User has provided Gmail credentials, use them (Bypasses global mock mode if user explicitly configured)
         if (settings.smtp_user && settings.smtp_pass) {
             console.log('📧 Using User Gmail Credentials for current action');
             return nodemailer.createTransport({
@@ -67,7 +65,10 @@ class EmailService {
             });
         }
 
-        // 2. Fallback to system transporter
+        // 2. Global Mock Mode check (only for system/default transporter)
+        if (this.mockMode) return null;
+
+        // 3. Fallback to system transporter
         if (this.configured && this.transporter) {
             return this.transporter;
         }
@@ -93,14 +94,15 @@ class EmailService {
      * Send invoice email with PDF attachment
      */
     async sendInvoice(invoice, pdfPath, recipientEmail, settings = {}) {
-        if (this.mockMode) {
+        const transporter = this.createTransporter(settings);
+
+        if (!transporter && this.mockMode) {
             console.log('------ MOCK INVOICE SENT ------');
             console.log(`To: ${recipientEmail}`);
             console.log(`Subject: Invoice ${invoice.invoiceNumber}`);
             console.log('-------------------------------');
             return { success: true, messageId: `mock-invoice-${Date.now()}` };
         }
-        const transporter = this.createTransporter(settings);
 
         // Determine "From" address
         // If using custom Gmail, "from" must match the auth user (Gmail enforces this usually)
@@ -153,14 +155,15 @@ class EmailService {
      * Send payment reminder
      */
     async sendPaymentReminder(invoice, recipientEmail, settings = {}, pdfPath = null) {
-        if (this.mockMode) {
+        const transporter = this.createTransporter(settings);
+
+        if (!transporter && this.mockMode) {
             console.log('------ MOCK REMINDER SENT ------');
             console.log(`To: ${recipientEmail}`);
             console.log(`Subject: Payment Reminder: Invoice ${invoice.invoiceNumber}`);
             console.log('--------------------------------');
             return { success: true, messageId: `mock-reminder-${Date.now()}` };
         }
-        const transporter = this.createTransporter(settings);
 
         const fromAddress = settings.smtp_user
             ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
@@ -356,14 +359,15 @@ class EmailService {
      * Send receipt email
      */
     async sendReceipt(invoice, pdfPath, recipientEmail, settings = {}, emailType = 'INITIAL_RECEIPT') {
-        if (this.mockMode) {
+        const transporter = this.createTransporter(settings);
+
+        if (!transporter && this.mockMode) {
             console.log('------ MOCK RECEIPT SENT ------');
             console.log(`To: ${recipientEmail}`);
             console.log(`Subject: Receipt for Invoice ${invoice.invoiceNumber}`);
             console.log('------------------------------');
             return { success: true, messageId: `mock-receipt-${Date.now()}` };
         }
-        const transporter = this.createTransporter(settings);
 
         const fromAddress = settings.smtp_user
             ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`

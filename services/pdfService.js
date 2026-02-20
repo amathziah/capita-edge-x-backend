@@ -138,10 +138,10 @@ class PDFService {
     addItemsTable(doc, invoice) {
         const tableTop = 320;
         const itemCodeX = 50;
-        const descriptionX = 150;
+        const descriptionX = 50;
         const quantityX = 300;
-        const priceX = 370;
-        const amountX = 470;
+        const priceX = 350;
+        const amountX = 450;
 
         // Table header
         doc.fontSize(10)
@@ -151,7 +151,6 @@ class PDFService {
         this.drawTableRow(
             doc,
             tableTop,
-            'Item',
             'Description',
             'Qty',
             'Price',
@@ -180,11 +179,10 @@ class PDFService {
             this.drawTableRow(
                 doc,
                 yPos,
-                `${index + 1}`,
                 item.description,
                 `${item.quantity} ${item.unit || ''}`,
-                `₹${item.price.toFixed(2)}`,
-                `₹${amount.toFixed(2)}`
+                `Rs. ${item.price.toFixed(2)}`,
+                `Rs. ${amount.toFixed(2)}`
             );
 
             yPos += 25;
@@ -203,13 +201,12 @@ class PDFService {
     /**
      * Draw table row
      */
-    drawTableRow(doc, y, col1, col2, col3, col4, col5) {
+    drawTableRow(doc, y, col1, col2, col3, col4) {
         doc.fontSize(9)
-            .text(col1, 50, y, { width: 90 })
-            .text(col2, 150, y, { width: 140 })
-            .text(col3, 300, y, { width: 60 })
-            .text(col4, 370, y, { width: 90, align: 'right' })
-            .text(col5, 470, y, { width: 80, align: 'right' });
+            .text(col1, 50, y, { width: 250 })
+            .text(col2, 300, y, { width: 50, align: 'center' })
+            .text(col3, 350, y, { width: 100, align: 'right' })
+            .text(col4, 450, y, { width: 100, align: 'right' });
     }
 
     /**
@@ -226,15 +223,15 @@ class PDFService {
         doc.fontSize(10).font('Helvetica');
 
         // Subtotal
-        doc.text('Subtotal:', 370, yPos, { width: 90, align: 'right' })
-            .text(`₹${subtotal.toFixed(2)}`, 470, yPos, { width: 80, align: 'right' });
+        doc.text('Subtotal:', 350, yPos, { width: 100, align: 'right' })
+            .text(`Rs. ${subtotal.toFixed(2)}`, 450, yPos, { width: 100, align: 'right' });
 
         yPos += 20;
 
         // Discount
         if (discount > 0) {
-            doc.text('Discount:', 370, yPos, { width: 90, align: 'right' })
-                .text(`-₹${discount.toFixed(2)}`, 470, yPos, { width: 80, align: 'right' });
+            doc.text('Discount:', 350, yPos, { width: 100, align: 'right' })
+                .text(`-Rs. ${discount.toFixed(2)}`, 450, yPos, { width: 100, align: 'right' });
             yPos += 20;
         }
 
@@ -242,15 +239,15 @@ class PDFService {
         if (tax > 0) {
             const taxLabel = invoice.taxType || 'Tax';
             const taxRate = invoice.taxRate || 0;
-            doc.text(`${taxLabel} (${taxRate}%):`, 370, yPos, { width: 90, align: 'right' })
-                .text(`₹${tax.toFixed(2)}`, 470, yPos, { width: 80, align: 'right' });
+            doc.text(`${taxLabel} (${taxRate}%):`, 350, yPos, { width: 100, align: 'right' })
+                .text(`Rs. ${tax.toFixed(2)}`, 450, yPos, { width: 100, align: 'right' });
             yPos += 20;
         }
 
         // Total line
         doc.strokeColor('#4F46E5')
             .lineWidth(2)
-            .moveTo(370, yPos)
+            .moveTo(350, yPos)
             .lineTo(550, yPos)
             .stroke();
 
@@ -260,8 +257,8 @@ class PDFService {
         doc.fontSize(12)
             .font('Helvetica-Bold')
             .fillColor('#4F46E5')
-            .text('TOTAL:', 370, yPos, { width: 90, align: 'right' })
-            .text(`₹${total.toFixed(2)}`, 470, yPos, { width: 80, align: 'right' });
+            .text('TOTAL:', 350, yPos, { width: 100, align: 'right' })
+            .text(`Rs. ${total.toFixed(2)}`, 450, yPos, { width: 100, align: 'right' });
 
         doc.fillColor('#000000').font('Helvetica');
     }

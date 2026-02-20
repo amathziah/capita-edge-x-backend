@@ -131,9 +131,39 @@ export const createInvoice = async (req, res) => {
 
     if (error) throw new APIError(error.message, 500);
 
+    // 1. Group items by productId for aggregated stock updates
+    const productQuantities = items.reduce((acc, item) => {
+        if (item.productId) {
+            acc[item.productId] = (acc[item.productId] || 0) + (item.quantity || 0);
+        }
+        return acc;
+    }, {});
+
+    const productIdsToUpdate = Object.keys(productQuantities);
+
+    // 2. Validate stock levels before proceeding (Transactional logic simulation)
+    if (productIdsToUpdate.length > 0) {
+        const { data: currentProducts, error: fetchError } = await supabase
+            .from('products')
+            .select('id, name, stock')
+            .in('id', productIdsToUpdate)
+            .eq('organization_id', req.user.organizationId);
+
+        if (fetchError) throw new APIError('Failed to verify inventory stock', 500);
+
+        for (const p of currentProducts) {
+            const requestedQty = productQuantities[p.id];
+            // "Never less than 1" - User requested stock to not drop below 1
+            if ((p.stock || 0) - requestedQty < 0) {
+                throw new APIError(`Insufficient stock for ${p.name}. Available: ${p.stock}, Requested: ${requestedQty}`, 400);
+            }
+        }
+    }
+
     // Insert Items
     const invoiceItems = items.map(item => ({
         invoiceId: invoice.id,
+        productId: item.productId || null,
         description: item.description,
         quantity: item.quantity,
         price: item.price,
@@ -145,9 +175,30 @@ export const createInvoice = async (req, res) => {
         .insert(invoiceItems);
 
     if (itemsError) {
-        // Rollback invoice if items fail (Best effort without transactions in Supabase JS)
+        // Rollback invoice if items fail
         await supabase.from('invoices').delete().eq('id', invoice.id);
         throw new APIError('Failed to create invoice items', 500);
+    }
+
+    // Update Inventory Stock (Decrements)
+    if (productIdsToUpdate.length > 0) {
+        const stockUpdatePromises = productIdsToUpdate.map(async (productId) => {
+            const requestedQty = productQuantities[productId];
+
+            // Atomic decrement using raw SQL would be better, but via JS for now:
+            const { data: p } = await supabase.from('products').select('stock').eq('id', productId).single();
+            const newStock = Math.max(0, (p.stock || 0) - requestedQty);
+
+            await supabase
+                .from('products')
+                .update({ stock: newStock, updatedAt: new Date() })
+                .eq('id', productId);
+
+            console.log(`Aggregated stock update: Product ${productId} reduced by ${requestedQty} to ${newStock}`);
+        });
+
+        // Run updates in background
+        Promise.all(stockUpdatePromises).catch(err => console.error("Aggregated inventory update error:", err));
     }
 
     res.status(201).json(invoice);
@@ -206,6 +257,7 @@ export const updateInvoice = async (req, res) => {
         if (items.length > 0) {
             const invoiceItems = items.map(item => ({
                 invoiceId: id,
+                productId: item.productId || null,
                 description: item.description,
                 quantity: item.quantity,
                 price: item.price,
@@ -303,6 +355,11 @@ export const sendInvoiceEmail = async (req, res) => {
         acc[key] = curr.value;
         return acc;
     }, {});
+
+    // Email Service Validation
+    if (!settingsObj.smtp_user || !settingsObj.smtp_pass) {
+        throw new APIError('Email service not configured. Please go to Settings to connect your Gmail account.', 400);
+    }
 
     if (settingsObj.logoFilename) settingsObj.logoPath = fileService.getFilePath(settingsObj.logoFilename);
 

@@ -234,3 +234,31 @@
     at async getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/analyticsController.js:5:19)
 [2026-02-20T09:21:45.425Z] Error: TypeError: fetch failed
     at getPayments (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/paymentController.js:12:22)
+[2026-02-20T10:30:40.912Z] Error: TypeError: fetch failed
+    at AnalyticsService.getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/services/analyticsService.js:280:30)
+    at async getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/analyticsController.js:5:19)
+[2026-02-20T10:31:27.441Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-20T10:31:30.455Z] APIError: TypeError: fetch failed
+    at getInvoices (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:19:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-20T11:30:08.060Z] APIError: TypeError: fetch failed
+    at getInvoices (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:19:22)
+[2026-02-20T12:38:54.980Z] APIError: TypeError: fetch failed
+    at getInvoices (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:19:22)
+[2026-02-20T12:39:02.993Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+[2026-02-20T12:39:03.144Z] Error: TypeError: fetch failed
+    at AnalyticsService.getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/services/analyticsService.js:280:30)
+    at async getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/analyticsController.js:5:19)
+[2026-02-20T12:39:28.311Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-20T17:38:39.402Z] APIError: Insufficient stock for example product. Available: 149, Requested: 150
+    at createInvoice (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:158:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-20T17:54:17.098Z] APIError: Email authentication failed. Please check your SMTP credentials in Settings or .env file.
+    at EmailService.sendPaymentReminder (file:///Users/amathziah/malika/malika-ai-backend-standalone/services/emailService.js:207:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async sendInvoiceEmail (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:383:24)

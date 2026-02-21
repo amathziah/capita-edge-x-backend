@@ -3,6 +3,7 @@ import pdfService from '../services/pdfService.js';
 import emailService from '../services/emailService.js';
 import fileService from '../services/fileService.js';
 import { APIError } from '../middleware/errorHandler.js';
+import { mapConfigToFrontend } from '../utils/configUtils.js';
 
 export const getInvoices = async (req, res) => {
     const { data: invoices, error } = await supabase
@@ -343,11 +344,13 @@ export const sendInvoiceEmail = async (req, res) => {
     if (error || !invoice) throw new APIError('Invoice not found', 404);
 
     // Settings
-    const { data: settingsObj } = await supabase
+    const { data: config } = await supabase
         .from('organization_configs')
         .select('*')
         .eq('organization_id', req.user.organizationId)
         .single();
+
+    const settingsObj = mapConfigToFrontend(config);
 
     // Fetch SMTP pass from Vault
     if (settingsObj?.smtp_user) {
@@ -416,11 +419,13 @@ export const bulkReminders = async (req, res) => {
     const results = [];
 
     // Get settings once
-    const { data: settingsObj } = await supabase
+    const { data: config } = await supabase
         .from('organization_configs')
         .select('*')
         .eq('organization_id', req.user.organizationId)
         .single();
+
+    const settingsObj = mapConfigToFrontend(config);
 
     // Fetch SMTP pass from Vault
     if (settingsObj?.smtp_user) {

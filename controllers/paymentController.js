@@ -3,6 +3,7 @@ import ledgerService from '../services/ledgerService.js';
 import fileService from '../services/fileService.js';
 import pdfService from '../services/pdfService.js';
 import { APIError } from '../middleware/errorHandler.js';
+import { mapConfigToFrontend } from '../utils/configUtils.js';
 
 export const getPayments = async (req, res) => {
     const { data: payments, error } = await supabase
@@ -83,11 +84,13 @@ export const downloadReceipt = async (req, res) => {
     if (iError || !invoice) throw new APIError('Linked invoice not found', 404);
 
     // Get settings for branding
-    const { data: settingsObj } = await supabase
+    const { data: config } = await supabase
         .from('organization_configs')
         .select('*')
         .eq('organization_id', req.user.organizationId)
         .single();
+
+    const settingsObj = mapConfigToFrontend(config);
 
     // Add path for logo
     if (settingsObj?.logo_filename) settingsObj.logoPath = fileService.getFilePath(settingsObj.logo_filename);

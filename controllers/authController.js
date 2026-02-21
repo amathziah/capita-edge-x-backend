@@ -56,6 +56,7 @@ export const provisionOrganization = async (req, res) => {
         await supabase.from('organization_configs').insert([
             {
                 organization_id: org.id,
+                business_name: companyName,
                 currency: 'INR',
                 tax_label: 'GST',
                 invoice_prefix: 'INV-'

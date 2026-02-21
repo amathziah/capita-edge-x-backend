@@ -1,6 +1,7 @@
 import { supabase } from '../supabase.js';
 import emailService from '../services/emailService.js';
 import { APIError } from '../middleware/errorHandler.js';
+import { mapConfigToFrontend, mapKeyToDb } from '../utils/configUtils.js';
 
 // General Settings
 export const getSettings = async (req, res) => {
@@ -12,8 +13,8 @@ export const getSettings = async (req, res) => {
 
     if (error && error.code !== 'PGRST116') throw new Error(error.message);
 
-    // Return flattened object for compatibility
-    const settingsObj = config || {};
+    // Return flattened object for compatibility, mapping back to camelCase
+    const settingsObj = mapConfigToFrontend(config);
 
     // Scrub sensitive info (handled by Vault now, but for safety in old code)
     if (settingsObj.smtp_pass) {
@@ -28,8 +29,10 @@ export const updateSetting = async (req, res) => {
 
     if (!key) throw new APIError('Setting key is required', 400);
 
+    const dbColumn = mapKeyToDb(key);
+
     // Dynamic update for columnar table
-    if (key === 'smtp_pass') {
+    if (dbColumn === 'smtp_pass' || key === 'smtp_pass') {
         // Store in Supabase Vault via RPC
         const { error } = await supabase.rpc('set_organization_secret', {
             p_organization_id: req.user.organizationId,
@@ -42,7 +45,7 @@ export const updateSetting = async (req, res) => {
             .from('organization_configs')
             .upsert({
                 organization_id: req.user.organizationId,
-                [key]: value,
+                [dbColumn]: value,
                 updated_at: new Date()
             });
         if (error) throw new Error(error.message);

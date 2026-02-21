@@ -262,3 +262,8 @@
     at EmailService.sendPaymentReminder (file:///Users/amathziah/malika/malika-ai-backend-standalone/services/emailService.js:207:23)
     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
     at async sendInvoiceEmail (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:383:24)
+[2026-02-21T01:32:44.037Z] Error: TypeError: fetch failed
+    at getCustomers (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/customerController.js:11:22)
+[2026-02-21T05:11:05.121Z] Error: TypeError: fetch failed
+    at AnalyticsService.getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/services/analyticsService.js:274:29)
+    at async getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/analyticsController.js:5:19)

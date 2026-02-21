@@ -38,7 +38,7 @@ export const authenticateUser = async (req, res, next) => {
         if (organizationId === 'null' || organizationId === 'undefined') organizationId = null;
 
         // Skip organization enforced check ONLY for provisioning
-        if (req.path === '/provision' || req.path === '/api/auth/provision') {
+        if (req.path.endsWith('/provision')) {
             req.user = { ...user };
             return next();
         }

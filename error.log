@@ -267,3 +267,32 @@
 [2026-02-21T05:11:05.121Z] Error: TypeError: fetch failed
     at AnalyticsService.getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/services/analyticsService.js:274:29)
     at async getDashboardStats (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/analyticsController.js:5:19)
+[2026-02-21T10:13:24.710Z] TypeError: Cannot read properties of undefined (reading 'organizationId')
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:5:37)
+    at Layer.handleRequest (/Users/amathziah/malika/malika-ai-backend-standalone/node_modules/router/lib/layer.js:152:17)
+    at trimPrefix (/Users/amathziah/malika/malika-ai-backend-standalone/node_modules/router/index.js:342:13)
+    at /Users/amathziah/malika/malika-ai-backend-standalone/node_modules/router/index.js:297:9
+    at processParams (/Users/amathziah/malika/malika-ai-backend-standalone/node_modules/router/index.js:582:12)
+    at next (/Users/amathziah/malika/malika-ai-backend-standalone/node_modules/router/index.js:291:5)
+    at file:///Users/amathziah/malika/malika-ai-backend-standalone/server.js:60:55
+    at Layer.handleRequest (/Users/amathziah/malika/malika-ai-backend-standalone/node_modules/router/lib/layer.js:152:17)
+    at trimPrefix (/Users/amathziah/malika/malika-ai-backend-standalone/node_modules/router/index.js:342:13)
+    at /Users/amathziah/malika/malika-ai-backend-standalone/node_modules/router/index.js:297:9
+[2026-02-21T10:13:37.579Z] Error: Could not find the table 'public.organization_configs' in the schema cache
+    at getSettings (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/settingController.js:14:51)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:13:50.365Z] Error: Could not find the table 'public.organization_configs' in the schema cache
+    at getSettings (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/settingController.js:14:51)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:14:11.362Z] Error: Could not find the table 'public.organization_configs' in the schema cache
+    at getSettings (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/settingController.js:14:51)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:14:12.248Z] Error: Could not find the table 'public.organization_configs' in the schema cache
+    at getSettings (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/settingController.js:14:51)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:14:14.844Z] APIError: duplicate key value violates unique constraint "invoices_invoiceNumber_key"
+    at createInvoice (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:137:22)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:15:48.716Z] APIError: Email service not configured. Please go to Settings to connect your Gmail account.
+    at sendInvoiceEmail (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:366:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)

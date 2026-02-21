@@ -571,33 +571,37 @@ JSON:`;
         }
 
         try {
-            const { invoices = [], products = [], customers = [], stats = {} } = context;
+            const { invoices = [], products = [], customers = [], stats = {}, trends = [], topProducts = [], topCustomers = [], health = {} } = context;
 
-            const prompt = `Analyze this business data and provide 2-3 actionable insights.
+            const prompt = `You are a world-class Financial Strategist and Business Intelligence Agent.
+Analyze the following business data and provide 3-4 highly specific, actionable, and "useful" insights. 
+Avoid generic advice like "reduce expenses". Instead, use the data to provide deep intelligence.
 
-Business Metrics:
-- Total Revenue: ₹${stats.totalRevenue || 0}
-- Total Invoices: ${invoices.length}
-- Overdue Invoices: ${stats.overdueCount || 0}
-- Pending Payments: ₹${stats.pendingPayments || 0}
-- Low Stock Items: ${stats.lowStockCount || 0}
-- Total Customers: ${customers.length}
-- Total Products: ${products.length}
+BUSINESS CONTEXT:
+- Revenue (Total): ₹${stats.totalRevenue || 0}
+- Revenue Trends (Past 6 Months): ${JSON.stringify(trends)}
+- Top Products: ${JSON.stringify(topProducts)}
+- Top Customers: ${JSON.stringify(topCustomers)}
+- Health Score: ${health.score || 0}/100
+- Overdue Invoices: ${stats.overdueCount || 0} (₹${stats.pendingPayments || 0} pending)
+- Inventory Value: ₹${stats.inventoryValue || 0}
 
-Return ONLY valid JSON array with this structure:
-[
-  {
-    "type": "suggest|warn",
-    "message": "actionable insight here",
-    "priority": 1-10
-  }
-]
+OUTPUT INSTRUCTIONS:
+Return ONLY a valid JSON array of objects. Each object MUST follow this EXACT structure:
+{
+  "id": "unique-slug",
+  "title": "Short catchy title (e.g., 'Revenue Leak Detected')",
+  "value": "Key metric or short outcome (e.g., '14% Margin Drop')",
+  "subtitle": "Brief context (e.g., 'Mainly due to Customer Name')",
+  "description": "2-3 sentences of deep, actionable advice based on the data.",
+  "type": "success | warning | info | critical"
+}
 
-Focus on:
-- Cash flow issues (overdue invoices)
-- Inventory alerts (low stock)
-- Revenue opportunities
-- Customer engagement
+TYPES:
+- success: Positive performance milestones.
+- warning: Potential risks or dips.
+- info: General intelligence or optimization tips.
+- critical: Immediate cash flow or compliance threats.
 
 JSON:`;
 
@@ -609,15 +613,50 @@ JSON:`;
 
             const insights = JSON.parse(jsonText);
             return insights.map((insight, idx) => ({
-                id: `ai-${Date.now()}-${idx}`,
-                type: insight.type || 'suggest',
-                message: insight.message,
-                priority: insight.priority || 5
+                id: insight.id || `ai-${Date.now()}-${idx}`,
+                title: insight.title,
+                value: insight.value,
+                subtitle: insight.subtitle,
+                description: insight.description,
+                type: insight.type || 'info'
             }));
         } catch (error) {
             console.error('AI Insights Error:', error);
             return this.fallbackGenerateInsights(context);
         }
+    }
+
+    /**
+     * Fallback insights when AI is unavailable
+     */
+    fallbackGenerateInsights(context) {
+        const { stats = {}, health = {} } = context;
+        return [
+            {
+                id: 'fb-revenue',
+                title: 'Revenue Overview',
+                value: `₹${(stats.totalRevenue || 0).toLocaleString()}`,
+                subtitle: 'Total earnings to date',
+                description: 'Your revenue is stable. Consider analyzing top customers to identify expansion opportunities.',
+                type: 'info'
+            },
+            {
+                id: 'fb-overdue',
+                title: 'Payment Risk',
+                value: `${stats.overdueCount || 0} Overdue`,
+                subtitle: `₹${(stats.pendingPayments || 0).toLocaleString()} pending`,
+                description: 'There are outstanding invoices. We recommend sending automated reminders to improve cash flow.',
+                type: stats.overdueCount > 0 ? 'warning' : 'success'
+            },
+            {
+                id: 'fb-health',
+                title: 'Business Health',
+                value: `${health.score || 0}/100`,
+                subtitle: 'Overall Stability Score',
+                description: 'Based on your revenue, expenses, and collection rate, your business health is being tracked.',
+                type: 'info'
+            }
+        ];
     }
 
     /**

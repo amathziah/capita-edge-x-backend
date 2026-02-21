@@ -78,15 +78,32 @@ export const getInsights = async (req, res) => {
         { data: invoices },
         { data: products },
         { data: customers },
-        stats
+        stats,
+        revenueTrends,
+        productPerformance,
+        customerInsights,
+        healthScore
     ] = await Promise.all([
         supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('products').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('customers').select('*').eq('organization_id', req.user.organizationId),
-        analyticsService.getDashboardStats(req.user.organizationId)
+        analyticsService.getDashboardStats(req.user.organizationId),
+        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly'),
+        analyticsService.getProductPerformance(req.user.organizationId),
+        analyticsService.getCustomerInsights(req.user.organizationId),
+        analyticsService.getBusinessHealthScore(req.user.organizationId)
     ]);
 
-    const context = { invoices, products, customers, stats };
+    const context = {
+        invoices,
+        products,
+        customers,
+        stats,
+        trends: revenueTrends.slice(-6), // Last 6 months
+        topProducts: productPerformance.slice(0, 3),
+        topCustomers: customerInsights.slice(0, 3),
+        health: healthScore
+    };
     const insights = await aiService.generateInsights(context);
 
     // Save to Cache

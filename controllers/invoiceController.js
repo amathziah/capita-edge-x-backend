@@ -312,16 +312,11 @@ export const generatePdf = async (req, res) => {
     if (error || !invoice) throw new APIError('Invoice not found', 404);
 
     // Get settings
-    const { data: settings } = await supabase
-        .from('settings')
+    const { data: settingsObj } = await supabase
+        .from('organization_configs')
         .select('*')
-        .eq('organization_id', req.user.organizationId);
-
-    const settingsObj = settings.reduce((acc, curr) => {
-        let key = curr.key.replace(`${req.user.organizationId}:`, '');
-        acc[key] = curr.value;
-        return acc;
-    }, {});
+        .eq('organization_id', req.user.organizationId)
+        .single();
 
     if (settingsObj.logoFilename) {
         settingsObj.logoPath = fileService.getFilePath(settingsObj.logoFilename);
@@ -348,20 +343,23 @@ export const sendInvoiceEmail = async (req, res) => {
     if (error || !invoice) throw new APIError('Invoice not found', 404);
 
     // Settings
-    const { data: settings } = await supabase
-        .from('settings')
+    const { data: settingsObj } = await supabase
+        .from('organization_configs')
         .select('*')
-        .eq('organization_id', req.user.organizationId);
+        .eq('organization_id', req.user.organizationId)
+        .single();
 
-    // ... parse settings ...
-    const settingsObj = settings.reduce((acc, curr) => {
-        let key = curr.key.replace(`${req.user.organizationId}:`, '');
-        acc[key] = curr.value;
-        return acc;
-    }, {});
+    // Fetch SMTP pass from Vault
+    if (settingsObj?.smtp_user) {
+        const { data: vaultPass } = await supabase.rpc('get_organization_secret', {
+            p_organization_id: req.user.organizationId,
+            p_name: 'smtp_pass'
+        });
+        if (vaultPass) settingsObj.smtp_pass = vaultPass;
+    }
 
     // Email Service Validation
-    if (!settingsObj.smtp_user || !settingsObj.smtp_pass) {
+    if (!settingsObj?.smtp_user || !settingsObj?.smtp_pass) {
         throw new APIError('Email service not configured. Please go to Settings to connect your Gmail account.', 400);
     }
 
@@ -418,17 +416,22 @@ export const bulkReminders = async (req, res) => {
     const results = [];
 
     // Get settings once
-    const { data: settings } = await supabase
-        .from('settings')
+    const { data: settingsObj } = await supabase
+        .from('organization_configs')
         .select('*')
-        .eq('organization_id', req.user.organizationId);
+        .eq('organization_id', req.user.organizationId)
+        .single();
 
-    const settingsObj = settings.reduce((acc, curr) => {
-        let key = curr.key.replace(`${req.user.organizationId}:`, '');
-        acc[key] = curr.value;
-        return acc;
-    }, {});
-    if (settingsObj.logoFilename) settingsObj.logoPath = fileService.getFilePath(settingsObj.logoFilename);
+    // Fetch SMTP pass from Vault
+    if (settingsObj?.smtp_user) {
+        const { data: vaultPass } = await supabase.rpc('get_organization_secret', {
+            p_organization_id: req.user.organizationId,
+            p_name: 'smtp_pass'
+        });
+        if (vaultPass) settingsObj.smtp_pass = vaultPass;
+    }
+
+    if (settingsObj?.logo_filename) settingsObj.logoPath = fileService.getFilePath(settingsObj.logo_filename);
 
     // Generate PDF and send for each invoice
     for (const invoice of overdueInvoices || []) {

@@ -19,11 +19,11 @@ export const uploadLogo = async (req, res) => {
     // I will stick to the exact code from server.js to be safe.
 
     const { error } = await supabase
-        .from('settings')
+        .from('organization_configs')
         .upsert({
-            key: 'logoFilename',
-            value: req.file.filename,
-            organization_id: req.user.organizationId // Ensure org is set
+            organization_id: req.user.organizationId,
+            logo_filename: req.file.filename,
+            updated_at: new Date()
         });
 
     if (error) throw new Error(error.message);

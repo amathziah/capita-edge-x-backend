@@ -83,19 +83,14 @@ export const downloadReceipt = async (req, res) => {
     if (iError || !invoice) throw new APIError('Linked invoice not found', 404);
 
     // Get settings for branding
-    const { data: settings } = await supabase
-        .from('settings')
+    const { data: settingsObj } = await supabase
+        .from('organization_configs')
         .select('*')
-        .eq('organization_id', req.user.organizationId);
-
-    const settingsObj = settings.reduce((acc, curr) => {
-        let key = curr.key.replace(`${req.user.organizationId}:`, '');
-        acc[key] = curr.value;
-        return acc;
-    }, {});
+        .eq('organization_id', req.user.organizationId)
+        .single();
 
     // Add path for logo
-    if (settingsObj.logoFilename) settingsObj.logoPath = fileService.getFilePath(settingsObj.logoFilename);
+    if (settingsObj?.logo_filename) settingsObj.logoPath = fileService.getFilePath(settingsObj.logo_filename);
 
     let tempPath = null;
     try {

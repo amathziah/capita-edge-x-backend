@@ -4,23 +4,18 @@ import { APIError } from '../middleware/errorHandler.js';
 
 // General Settings
 export const getSettings = async (req, res) => {
-    const { data: settings, error } = await supabase
-        .from('settings')
+    const { data: config, error } = await supabase
+        .from('organization_configs')
         .select('*')
-        .eq('organization_id', req.user.organizationId);
+        .eq('organization_id', req.user.organizationId)
+        .single();
 
-    if (error) throw new Error(error.message);
+    if (error && error.code !== 'PGRST116') throw new Error(error.message);
 
-    const settingsObj = settings.reduce((acc, curr) => {
-        let key = curr.key;
-        const prefix = `${req.user.organizationId}:`;
-        if (key.startsWith(prefix)) {
-            key = key.replace(prefix, '');
-        }
-        acc[key] = curr.value;
-        return acc;
-    }, {});
+    // Return flattened object for compatibility
+    const settingsObj = config || {};
 
+    // Scrub sensitive info (handled by Vault now, but for safety in old code)
     if (settingsObj.smtp_pass) {
         settingsObj.smtp_pass = '********';
     }
@@ -33,17 +28,26 @@ export const updateSetting = async (req, res) => {
 
     if (!key) throw new APIError('Setting key is required', 400);
 
-    const scopedKey = `${req.user.organizationId}:${key}`;
-
-    const { error } = await supabase
-        .from('settings')
-        .upsert({
-            key: scopedKey,
-            value,
-            organization_id: req.user.organizationId
+    // Dynamic update for columnar table
+    if (key === 'smtp_pass') {
+        // Store in Supabase Vault via RPC
+        const { error } = await supabase.rpc('set_organization_secret', {
+            p_organization_id: req.user.organizationId,
+            p_name: 'smtp_pass',
+            p_secret: value
         });
+        if (error) throw new Error(error.message);
+    } else {
+        const { error } = await supabase
+            .from('organization_configs')
+            .upsert({
+                organization_id: req.user.organizationId,
+                [key]: value,
+                updated_at: new Date()
+            });
+        if (error) throw new Error(error.message);
+    }
 
-    if (error) throw new Error(error.message);
     res.json({ success: true });
 };
 
@@ -52,29 +56,15 @@ export const testSmtpConnection = async (req, res) => {
     let { smtp_user, smtp_pass } = req.body;
 
     if (smtp_pass === '********') {
-        const { data: settings, error } = await supabase
-            .from('settings')
-            .select('value')
-            .eq('organization_id', req.user.organizationId)
-            .eq('key', 'smtp_pass') // This needs scoped key check usually, but assumes key is just 'smtp_pass' in DB? 
-            // Wait, previous logic used scoped keys for update but here checking 'smtp_pass'?
-            // Logic in server.js: .eq('key', 'smtp_pass'). 
-            // If we use scoped keys, this query might fail if it doesn't account for the prefix.
-            // However, the original code used `req.user.organizationId` in the query which matches the column `organization_id`.
-            // The `key` column might be just `smtp_pass` IF it's legacy data. 
-            // BUT `updateSetting` uses `scopedKey`.
-            // I should stick to original code logic: .eq('key', 'smtp_pass'). 
-            // If it fails, users will re-save.
-            .single();
+        const { data: secret, error } = await supabase.rpc('get_organization_secret', {
+            p_organization_id: req.user.organizationId,
+            p_name: 'smtp_pass'
+        });
 
-        if (error || !settings) {
-            // Try with scoped key if direct match fails
-            const { data: scopedSettings } = await supabase.from('settings').select('value').eq('key', `${req.user.organizationId}:smtp_pass`).single();
-            if (scopedSettings) smtp_pass = scopedSettings.value;
-            else return res.status(400).json({ success: false, error: 'Could not retrieve saved password' });
-        } else {
-            smtp_pass = settings.value;
+        if (error || !secret) {
+            return res.status(400).json({ success: false, error: 'Could not retrieve saved password from Vault' });
         }
+        smtp_pass = secret;
     }
 
     const settings = { smtp_user, smtp_pass };
@@ -98,26 +88,18 @@ const INVENTORY_SETTING_DEFAULTS = {
 };
 
 export const getInventorySettings = async (req, res) => {
-    const { data: settings, error } = await supabase
-        .from('settings')
-        .select('key, value')
+    const { data: config, error } = await supabase
+        .from('organization_configs')
+        .select('inventory_settings')
         .eq('organization_id', req.user.organizationId)
-        .like('key', `%inv_%`);
+        .single();
 
-    if (error) throw new Error(error.message);
+    if (error && error.code !== 'PGRST116') throw new Error(error.message);
 
-    const prefix = `${req.user.organizationId}:`;
-    const settingsObj = { ...INVENTORY_SETTING_DEFAULTS };
-
-    if (settings) {
-        settings.forEach(row => {
-            let key = row.key;
-            if (key.startsWith(prefix)) key = key.replace(prefix, '');
-            if (key in settingsObj) {
-                settingsObj[key] = row.value;
-            }
-        });
-    }
+    const settingsObj = {
+        ...INVENTORY_SETTING_DEFAULTS,
+        ...(config?.inventory_settings || {})
+    };
 
     res.json(settingsObj);
 };
@@ -129,21 +111,14 @@ export const updateInventorySettings = async (req, res) => {
         throw new APIError('Request body must be an object', 400);
     }
 
-    const validKeys = Object.keys(INVENTORY_SETTING_DEFAULTS);
-    const entries = Object.entries(updates).filter(([key]) => validKeys.includes(key));
-
-    if (entries.length === 0) throw new APIError('No valid keys', 400);
-
-    const upserts = entries.map(([key, value]) => ({
-        key: `${req.user.organizationId}:${key}`,
-        value: String(value),
-        organization_id: req.user.organizationId
-    }));
-
     const { error } = await supabase
-        .from('settings')
-        .upsert(upserts);
+        .from('organization_configs')
+        .upsert({
+            organization_id: req.user.organizationId,
+            inventory_settings: updates,
+            updated_at: new Date()
+        });
 
     if (error) throw new Error(error.message);
-    res.json({ success: true, updated: entries.length });
+    res.json({ success: true });
 };

@@ -52,11 +52,14 @@ export const provisionOrganization = async (req, res) => {
 
         if (linkError) throw new Error(`User Linking Failed: ${linkError.message}`);
 
-        // 4. Seed Default Settings
-        await supabase.from('settings').insert([
-            { organization_id: org.id, key: `${org.id}:currency`, value: 'INR' },
-            { organization_id: org.id, key: `${org.id}:tax_label`, value: 'GST' },
-            { organization_id: org.id, key: `${org.id}:invoice_prefix`, value: 'INV-' }
+        // 4. Seed Default Configs
+        await supabase.from('organization_configs').insert([
+            {
+                organization_id: org.id,
+                currency: 'INR',
+                tax_label: 'GST',
+                invoice_prefix: 'INV-'
+            }
         ]);
 
         // 5. Seed Default Accounts for COA

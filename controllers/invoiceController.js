@@ -60,6 +60,8 @@ export const createInvoice = async (req, res) => {
         shipTo,
         taxType,
         discount,
+        discount_amount,
+        amount_paid,
         shipping
     } = req.body;
 
@@ -120,6 +122,8 @@ export const createInvoice = async (req, res) => {
             taxType,
             taxRate: taxRate || 0,
             discount: discount || 0,
+            discount_amount: discount_amount || 0,
+            amount_paid: amount_paid || 0,
             shipping: shipping || 0,
             total: total !== undefined ? total : calculatedTotal,
             status: status || 'draft',

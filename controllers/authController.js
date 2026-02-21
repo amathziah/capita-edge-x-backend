@@ -59,6 +59,14 @@ export const provisionOrganization = async (req, res) => {
             { organization_id: org.id, key: `${org.id}:invoice_prefix`, value: 'INV-' }
         ]);
 
+        // 5. Seed Default Accounts for COA
+        await supabase.from('accounts').insert([
+            { organization_id: org.id, name: 'Accounts Receivable', account_type: 'asset' },
+            { organization_id: org.id, name: 'Sales Revenue', account_type: 'revenue' },
+            { organization_id: org.id, name: 'Bank', account_type: 'asset' },
+            { organization_id: org.id, name: 'Cash on Hand', account_type: 'asset' }
+        ]);
+
         res.status(201).json({
             success: true,
             organization: org

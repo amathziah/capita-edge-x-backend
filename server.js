@@ -13,6 +13,7 @@ import { checkPlanLimits } from './middleware/checkPlan.js';
 
 // Routes
 import aiRoutes from './routes/aiRoutes.js';
+import authRoutes from './routes/authRoutes.js';
 import invoiceRoutes from './routes/invoiceRoutes.js';
 import customerRoutes from './routes/customerRoutes.js';
 import productRoutes from './routes/productRoutes.js';
@@ -63,6 +64,7 @@ app.use('/api/', (req, res, next) => {
 app.use('/api/', checkPlanLimits);
 
 // Mount Routes
+app.use('/api/auth', authRoutes);
 app.use('/api', aiRoutes); // Mount at /api to support /api/ai/* AND /api/negotiate-settlement
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/customers', customerRoutes);

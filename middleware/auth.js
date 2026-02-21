@@ -37,6 +37,12 @@ export const authenticateUser = async (req, res, next) => {
         let organizationId = orgIdHeader;
         if (organizationId === 'null' || organizationId === 'undefined') organizationId = null;
 
+        // Skip organization enforced check ONLY for provisioning
+        if (req.path === '/provision' || req.path === '/api/auth/provision') {
+            req.user = { ...user };
+            return next();
+        }
+
         let role = 'staff'; // Default safest role
 
         if (organizationId) {

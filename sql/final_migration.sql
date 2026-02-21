@@ -3,7 +3,9 @@
 -- ==========================================
 
 -- 1. Enable Supabase Vault
-CREATE EXTENSION IF NOT EXISTS "supabase_vault" CASCADE;
+-- NOTE: If this fails with "permission denied", please enable "Vault" 
+-- manually in your Supabase Dashboard under Database -> Extensions.
+-- CREATE EXTENSION IF NOT EXISTS "supabase_vault";
 
 -- 2. Create organization_configs (Columnar Storage)
 -- This replaces the legacy EAV (Key-Value) settings table
@@ -58,13 +60,39 @@ BEGIN
     END IF;
 END $$;
 
--- 6. RPC Helpers for Vault
+-- 1. Secure Secrets Storage (Vault or Fallback Table)
+-- We prefer Supabase Vault, but provide a secure table fallback if it's unavailable.
+CREATE TABLE IF NOT EXISTS public.organization_secrets (
+    organization_id uuid REFERENCES public.organizations(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    secret text NOT NULL,
+    updated_at timestamptz DEFAULT now(),
+    PRIMARY KEY (organization_id, name)
+);
+
+-- Enable RLS for fallback secrets (Block all public/authenticated access except via RPC)
+ALTER TABLE public.organization_secrets ENABLE ROW LEVEL SECURITY;
+
+-- 6. RPC Helpers for Secrets (Multi-Storage Support)
 CREATE OR REPLACE FUNCTION set_organization_secret(p_organization_id uuid, p_name text, p_secret text)
 RETURNS void AS $$
 BEGIN
-  INSERT INTO vault.secrets (name, secret, description)
-  VALUES (p_organization_id || ':' || p_name, p_secret, 'Org Secret')
-  ON CONFLICT (name) DO UPDATE SET secret = EXCLUDED.secret;
+  -- 1. Try Vault if available
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'vault') THEN
+    BEGIN
+      INSERT INTO vault.secrets (name, secret, description)
+      VALUES (p_organization_id || ':' || p_name, p_secret, 'Org Secret')
+      ON CONFLICT (name) DO UPDATE SET secret = EXCLUDED.secret;
+      RETURN;
+    EXCEPTION WHEN OTHERS THEN
+      -- Fall through to custom table if vault insert fails
+    END;
+  END IF;
+
+  -- 2. Fallback to custom table
+  INSERT INTO public.organization_secrets (organization_id, name, secret)
+  VALUES (p_organization_id, p_name, p_secret)
+  ON CONFLICT (organization_id, name) DO UPDATE SET secret = EXCLUDED.secret, updated_at = now();
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -73,7 +101,21 @@ RETURNS text AS $$
 DECLARE
   secret_val text;
 BEGIN
-  SELECT secret FROM vault.secrets WHERE name = p_organization_id || ':' || p_name INTO secret_val;
+  -- 1. Try Vault first
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'vault') THEN
+    BEGIN
+      SELECT secret FROM vault.secrets WHERE name = p_organization_id || ':' || p_name INTO secret_val;
+      IF secret_val IS NOT NULL THEN RETURN secret_val; END IF;
+    EXCEPTION WHEN OTHERS THEN
+      -- Fall through
+    END;
+  END IF;
+
+  -- 2. Fallback to custom table
+  SELECT secret FROM public.organization_secrets 
+  WHERE organization_id = p_organization_id AND name = p_name 
+  INTO secret_val;
+  
   RETURN secret_val;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

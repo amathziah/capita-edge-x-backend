@@ -291,6 +291,7 @@ class AnalyticsService {
             overdue_invoices: 0,
             total_revenue: 0,
             pending_payments: 0,
+            overdue_revenue: 0,
             total_customers: customerCount || 0,
             total_products: products?.length || 0,
             low_stock_items: 0,
@@ -302,10 +303,11 @@ class AnalyticsService {
                 stats.paid_invoices++;
                 stats.total_revenue += inv.total;
             } else if (['sent', 'overdue'].includes(inv.status)) {
-                stats.pending_invoices++; // 'sent' and 'overdue' count as pending for count
+                stats.pending_invoices++;
                 stats.pending_payments += inv.total;
                 if (inv.status === 'overdue') {
                     stats.overdue_invoices++;
+                    stats.overdue_revenue += inv.total;
                 }
             }
         });

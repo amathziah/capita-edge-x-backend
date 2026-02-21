@@ -6,16 +6,21 @@ import { APIError } from '../middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../utils/configUtils.js';
 
 export const getInvoices = async (req, res) => {
-    const { data: invoices, error } = await supabase
+    let query = supabase
         .from('invoices')
         .select(`
-            *,
             *,
             customers!invoices_customer_id_fkey (id, name, email),
             items: invoice_items (*)
         `)
         .eq('organization_id', req.user.organizationId) // Tenant isolation
         .order('createdAt', { ascending: false });
+
+    if (req.query.limit) {
+        query = query.limit(parseInt(req.query.limit, 10));
+    }
+
+    const { data: invoices, error } = await query;
 
     if (error) throw new APIError(error.message, 500);
     res.json(invoices);

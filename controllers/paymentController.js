@@ -6,11 +6,17 @@ import { APIError } from '../middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../utils/configUtils.js';
 
 export const getPayments = async (req, res) => {
-    const { data: payments, error } = await supabase
+    let query = supabase
         .from('payments')
         .select('*')
         .eq('organization_id', req.user.organizationId)
         .order('createdAt', { ascending: false });
+
+    if (req.query.limit) {
+        query = query.limit(parseInt(req.query.limit, 10));
+    }
+
+    const { data: payments, error } = await query;
 
     if (error) throw new Error(error.message);
     res.json(payments);

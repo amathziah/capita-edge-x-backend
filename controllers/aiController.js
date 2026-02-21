@@ -35,7 +35,6 @@ export const processChat = async (req, res) => {
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         model: 'gemini-pro',
-        "promptDetails": { query, type: 'chat' },
         tokens: 100, // Estimate
         cost: 0
     }]);
@@ -54,7 +53,6 @@ export const magicFill = async (req, res) => {
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         model: 'gemini-pro',
-        "promptDetails": { type: 'magic-fill' },
         tokens: 150,
         cost: 0
     }]);
@@ -117,7 +115,6 @@ export const getInsights = async (req, res) => {
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         model: 'gemini-pro',
-        "promptDetails": { type: 'insights' },
         tokens: 300,
         cost: 0
     }]);
@@ -163,7 +160,6 @@ export const negotiateSettlement = async (req, res) => {
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         model: 'gemini-pro',
-        "promptDetails": { type: 'settlement', invoiceId },
         tokens: 200,
         cost: 0
     }]);
@@ -181,7 +177,6 @@ export const processCommand = async (req, res) => {
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         model: 'gemini-pro',
-        "promptDetails": { type: 'voice_command' },
         tokens: 50,
         cost: 0
     }]);

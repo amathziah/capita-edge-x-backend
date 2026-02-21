@@ -13,7 +13,7 @@ export const checkPlanLimits = async (req, res, next) => {
         // 1. Get Organization Plan
         const { data: org, error } = await supabase
             .from('organizations')
-            .select('plan')
+            .select('plan_tier')
             .eq('id', organizationId)
             .single();
 
@@ -23,7 +23,7 @@ export const checkPlanLimits = async (req, res, next) => {
         }
 
         // 2. If Pro, allow everything
-        if (org.plan === 'pro') {
+        if (org.plan_tier === 'pro') {
             return next();
         }
 

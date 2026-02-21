@@ -326,3 +326,27 @@
 [2026-02-21T10:32:16.131Z] APIError: Could not verify subscription plan
     at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:34:00.854Z] APIError: Org Creation Failed: Could not find the 'plan' column of 'organizations' in the schema cache
+    at provisionOrganization (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/authController.js:81:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:34:00.860Z] APIError: Org Creation Failed: Could not find the 'plan' column of 'organizations' in the schema cache
+    at provisionOrganization (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/authController.js:81:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:34:00.860Z] APIError: Org Creation Failed: Could not find the 'plan' column of 'organizations' in the schema cache
+    at provisionOrganization (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/authController.js:81:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:34:00.978Z] APIError: Org Creation Failed: Could not find the 'plan' column of 'organizations' in the schema cache
+    at provisionOrganization (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/authController.js:81:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:34:01.276Z] APIError: Org Creation Failed: Could not find the 'plan' column of 'organizations' in the schema cache
+    at provisionOrganization (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/authController.js:81:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:34:06.733Z] APIError: Org Creation Failed: Could not find the 'plan' column of 'organizations' in the schema cache
+    at provisionOrganization (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/authController.js:81:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:34:06.765Z] APIError: Org Creation Failed: Could not find the 'plan' column of 'organizations' in the schema cache
+    at provisionOrganization (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/authController.js:81:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:34:11.246Z] APIError: Org Creation Failed: Could not find the 'plan' column of 'organizations' in the schema cache
+    at provisionOrganization (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/authController.js:81:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)

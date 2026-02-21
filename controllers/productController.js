@@ -15,14 +15,15 @@ export const getProducts = async (req, res) => {
         ...p,
         costPrice: p.cost_price,
         taxRate: p.tax_rate,
-        reorderLevel: p.reorder_level
+        reorderLevel: p.reorder_level,
+        status: p.status || 'Active'
     }));
 
     res.json(mappedProducts);
 };
 
 export const createProduct = async (req, res) => {
-    const { id, name, description, price, stock, unit, minStock, sku, category, vendor, costPrice, taxRate, reorderLevel } = req.body;
+    const { id, name, description, price, stock, unit, minStock, sku, category, vendor, costPrice, taxRate, reorderLevel, status } = req.body;
 
     const productData = {
         name, description, price,
@@ -33,11 +34,12 @@ export const createProduct = async (req, res) => {
         cost_price: costPrice || 0,
         tax_rate: taxRate || 0,
         reorder_level: reorderLevel || 10,
+        status: status || 'Active',
         organization_id: req.user.organizationId
     };
 
     if (id) {
-        productData.updatedAt = new Date();
+        productData.updatedAt = new Date().toISOString();
         const { error } = await supabase
             .from('products')
             .update(productData)

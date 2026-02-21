@@ -10,6 +10,7 @@ router.get('/', asyncHandler(invoiceController.getInvoices));
 router.get('/next-number', asyncHandler(invoiceController.getNextInvoiceNumber));
 router.post('/', validateInvoice, asyncHandler(invoiceController.createInvoice));
 router.get('/:id', validateId, asyncHandler(invoiceController.getInvoiceById));
+router.get('/share/:token', asyncHandler(invoiceController.getInvoiceByShareToken));
 router.put('/:id', validateId, asyncHandler(invoiceController.updateInvoice));
 router.delete('/:id', validateId, asyncHandler(invoiceController.deleteInvoice));
 

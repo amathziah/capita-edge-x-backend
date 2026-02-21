@@ -460,3 +460,50 @@ export const bulkReminders = async (req, res) => {
 
     res.json({ success: true, results });
 };
+
+export const getInvoiceByShareToken = async (req, res) => {
+    const { token } = req.params;
+
+    // 1. Get invoice by token
+    const { data: invoice, error } = await supabase
+        .from('invoices')
+        .select(`
+            *,
+            buyer:customers(name, email, phone, address),
+            organization:organizations(name)
+        `)
+        .eq('share_token', token)
+        .single();
+
+    if (error || !invoice) {
+        return res.status(404).send('Invalid or expired share token');
+    }
+
+    // 2. Get organization configs for branding
+    const { data: settingsObj } = await supabase
+        .from('organization_configs')
+        .select('*')
+        .eq('organization_id', invoice.organization_id)
+        .single();
+
+    // 3. Resolve logo path if present
+    const settings = settingsObj || {};
+    if (settings.logo_filename) {
+        settings.logoPath = fileService.getFilePath(settings.logo_filename);
+    }
+
+    // 4. Generate & Stream PDF
+    let tempPath = null;
+    try {
+        tempPath = pdfService.getTempPDFPath(invoice.invoiceNumber);
+        await pdfService.generateInvoicePDF(invoice, settings, tempPath);
+
+        res.download(tempPath, `Invoice_${invoice.invoiceNumber}.pdf`, (err) => {
+            if (err) console.error('Download error:', err);
+            pdfService.cleanupPDF(tempPath);
+        });
+    } catch (err) {
+        if (tempPath) pdfService.cleanupPDF(tempPath);
+        throw new APIError(err.message, 500);
+    }
+};

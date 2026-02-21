@@ -54,9 +54,10 @@ app.use('/api/webhooks', express.json({
 // API ROUTES (Authenticated)
 // ============================================================================
 
-// Authentication Middleware - Protects all /api routes (EXCEPT webhooks)
+// Authentication Middleware - Protects all /api routes (EXCEPT webhooks and shared invoices)
 app.use('/api/', (req, res, next) => {
     if (req.path.startsWith('/webhooks')) return next();
+    if (req.path.includes('/invoices/share/')) return next();
     authenticateUser(req, res, next);
 });
 

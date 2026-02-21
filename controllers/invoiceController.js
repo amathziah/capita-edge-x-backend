@@ -27,15 +27,33 @@ export const getInvoices = async (req, res) => {
 };
 
 export const getNextInvoiceNumber = async (req, res) => {
-    // Find the latest invoice to increment the number
+    const nextNumber = await findNextAvailableNumber(req.user.organizationId);
+    res.json({ nextNumber });
+};
+
+const findNextAvailableNumber = async (organizationId) => {
+    try {
+        // 1. Try atomic database sequence (Massive Concurrency Mode)
+        const { data: rpcNumber, error: rpcError } = await supabase.rpc('generate_next_invoice_number', {
+            p_organization_id: organizationId
+        });
+
+        if (!rpcError && rpcNumber) {
+            return rpcNumber;
+        }
+    } catch (e) {
+        // Fallback to legacy logic
+    }
+
+    // 2. Legacy Logic: Find latest and increment (Subject to collisions under load)
     const { data: latest, error } = await supabase
         .from('invoices')
         .select('invoiceNumber')
-        .eq('organization_id', req.user.organizationId)
-        .order('createdAt', { ascending: false })
+        .eq('organization_id', organizationId)
+        .order('invoiceNumber', { ascending: false })
         .limit(1);
 
-    if (error) throw new APIError(error.message, 500);
+    if (error) return `INV-${Date.now().toString().slice(-6)}`;
 
     let nextNumber = 'INV-0001';
     if (latest && latest.length > 0 && latest[0].invoiceNumber) {
@@ -43,10 +61,26 @@ export const getNextInvoiceNumber = async (req, res) => {
         if (match) {
             const num = parseInt(match[1], 10) + 1;
             nextNumber = `INV-${num.toString().padStart(4, '0')}`;
+        } else {
+            // If existing doesn't match format, try to find the latest with that format
+            const { data: latestPattern } = await supabase
+                .from('invoices')
+                .select('invoiceNumber')
+                .eq('organization_id', organizationId)
+                .like('invoiceNumber', 'INV-%')
+                .order('invoiceNumber', { ascending: false })
+                .limit(1);
+
+            if (latestPattern && latestPattern.length > 0) {
+                const match2 = latestPattern[0].invoiceNumber.match(/INV-(\d+)/);
+                if (match2) {
+                    const num = parseInt(match2[1], 10) + 1;
+                    nextNumber = `INV-${num.toString().padStart(4, '0')}`;
+                }
+            }
         }
     }
-
-    res.json({ nextNumber });
+    return nextNumber;
 };
 
 export const createInvoice = async (req, res) => {
@@ -112,34 +146,77 @@ export const createInvoice = async (req, res) => {
     const calculatedTax = calculatedSubtotal * ((taxRate || 0) / 100);
     const calculatedTotal = calculatedSubtotal + calculatedTax;
 
-    // Create Invoice
-    const { data: invoice, error } = await supabase
-        .from('invoices')
-        .insert([{
-            customer_id,
-            buyer, // Store the buyer JSON object
-            seller,
-            shipTo,
-            date: date || new Date().toISOString(),
-            dueDate,
-            notes,
-            subtotal: subtotal !== undefined ? subtotal : calculatedSubtotal,
-            taxAmount: taxAmount !== undefined ? taxAmount : calculatedTax,
-            taxType,
-            taxRate: taxRate || 0,
-            discount: discount || 0,
-            discount_amount: discount_amount || 0,
-            amount_paid: amount_paid || 0,
-            shipping: shipping || 0,
-            total: total !== undefined ? total : calculatedTotal,
-            status: status || 'draft',
-            invoiceNumber: invoiceNumber || `INV-${Date.now()}`,
-            organization_id: req.user.organizationId
-        }])
-        .select()
-        .single();
+    // Create Invoice with Jittered Exponential Backoff for High Concurrency
+    let invoice = null;
+    let insertError = null;
+    let finalInvoiceNumber = invoiceNumber;
+    let attempts = 0;
+    const maxAttempts = 50; // Increased for high concurrency (100+ requests)
 
-    if (error) throw new APIError(error.message, 500);
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // Initial Staggered Start: Random delay to prevent thundering herd on first attempt
+    const initialJitter = Math.random() * 500;
+    await sleep(initialJitter);
+
+    while (attempts < maxAttempts) {
+        // If we don't have a number or this is a retry, get a fresh "next" number
+        if (!finalInvoiceNumber || attempts > 0) {
+            if (attempts > 0) {
+                // Exponential backoff with jitter: wider spread for high concurrency
+                const baseDelay = Math.min(Math.pow(1.5, attempts) * 100, 3000);
+                const jitter = Math.random() * 200;
+                const delay = baseDelay + jitter;
+                console.log(`⚠️ Collision on ${finalInvoiceNumber || 'INV-next'}. Attempt ${attempts}/${maxAttempts}. Retrying in ${Math.round(delay)}ms...`);
+                await sleep(delay);
+            }
+            finalInvoiceNumber = await findNextAvailableNumber(req.user.organizationId);
+        }
+
+        const { data, error } = await supabase
+            .from('invoices')
+            .insert([{
+                customer_id,
+                buyer,
+                seller,
+                shipTo,
+                date: date || new Date().toISOString(),
+                dueDate,
+                notes,
+                subtotal: subtotal !== undefined ? subtotal : calculatedSubtotal,
+                taxAmount: taxAmount !== undefined ? taxAmount : calculatedTax,
+                taxType,
+                taxRate: taxRate || 0,
+                discount: discount || 0,
+                discount_amount: discount_amount || 0,
+                amount_paid: amount_paid || 0,
+                shipping: shipping || 0,
+                total: total !== undefined ? total : calculatedTotal,
+                status: status || 'draft',
+                invoiceNumber: finalInvoiceNumber,
+                organization_id: req.user.organizationId
+            }])
+            .select()
+            .single();
+
+        if (error) {
+            // Check for unique constraint violation (Postgres code 23505)
+            if (error.code === '23505' || error.message?.includes('unique constraint')) {
+                attempts++;
+                insertError = error;
+                finalInvoiceNumber = null; // Force findNextAvailableNumber on next loop
+                continue;
+            }
+            throw new APIError(error.message, 500);
+        }
+
+        invoice = data;
+        break;
+    }
+
+    if (!invoice) {
+        throw new APIError(`Failed to generate a unique invoice number after ${maxAttempts} attempts. Last error: ${insertError?.message}`, 500);
+    }
 
     // 1. Group items by productId for aggregated stock updates
     const productQuantities = items.reduce((acc, item) => {

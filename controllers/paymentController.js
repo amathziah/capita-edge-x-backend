@@ -55,6 +55,10 @@ export const createPayment = async (req, res) => {
             .single();
 
         if (invoice) {
+            if (invoice.status === 'draft') {
+                throw new Error('Cannot record payment for a draft invoice. Please send or view the invoice first.');
+            }
+
             // [LEDGER] Record the transaction
             await ledgerService.recordPayment(payment, invoice);
 
@@ -145,6 +149,10 @@ export const reconcilePayment = async (req, res) => {
         .single();
 
     if (invoice) {
+        if (invoice.status === 'draft') {
+            throw new Error('Cannot reconcile payment for a draft invoice.');
+        }
+
         // [LEDGER] Record the transaction
         await ledgerService.recordPayment(payment, invoice);
 

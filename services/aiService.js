@@ -688,6 +688,61 @@ JSON:`;
         }];
     }
 
+    async generateCollectionDraft(invoice, forceAggressive = false) {
+        if (!this.model) {
+            // Re-use logic for fallback if no AI
+            const overdueDays = Math.floor((Date.now() - new Date(invoice.dueDate).getTime()) / (1000 * 60 * 60 * 24));
+            const customerName = typeof invoice.buyer === 'string' ? JSON.parse(invoice.buyer).name : invoice.buyer?.name;
+            const strategy = forceAggressive ? 'Urgent — Immediate settlement required' : (overdueDays > 14 ? 'Firm — Serious follow-up' : 'Gentle — Polite nudge');
+            const tone = forceAggressive || overdueDays > 14 ? 'urgent' : (overdueDays > 7 ? 'direct' : 'friendly');
+
+            return {
+                subject: `${tone === 'urgent' ? 'URGENT: ' : ''}Payment Reminder: Invoice #${invoice.invoiceNumber}`,
+                body: `Hello ${customerName || 'Customer'},\n\nThis is a ${tone} reminder regarding Invoice #${invoice.invoiceNumber} for ₹${invoice.total?.toLocaleString() ?? 0} which was due on ${new Date(invoice.dueDate).toLocaleDateString()}.\n\nPlease arrange payment at your earliest convenience.\n\nThank you.`,
+                strategy,
+                strategyTone: tone,
+                daysOverdue: Math.max(0, overdueDays)
+            };
+        }
+
+        const overdueDays = Math.floor((Date.now() - new Date(invoice.dueDate).getTime()) / (1000 * 60 * 60 * 24));
+        const customerName = typeof invoice.buyer === 'string' ? JSON.parse(invoice.buyer).name : invoice.buyer?.name;
+
+        const prompt = `You are an AI Collections Specialist. Generate a context-aware payment reminder for an overdue invoice.
+        
+        INVOICE DETAILS:
+        - Customer: ${customerName}
+        - Amount: ₹${invoice.total}
+        - Total Tax: ₹${invoice.tax_amount || 0}
+        - Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}
+        - Days Overdue: ${overdueDays}
+        - Platform Name: Malika AI
+        
+        COLLECTIONS STRATEGY:
+        - Tone: ${forceAggressive ? 'Urgent and serious' : 'Professional and courteous'}
+        - Goal: Encourage immediate payment while maintaining a good relationship.
+        - Strategy context: If overdue > 14 days, be more direct. If > 30 days, escalate urgency.
+        
+        OUTPUT FORMAT (JSON ONLY):
+        {
+            "subject": "email subject line",
+            "body": "email body text",
+            "strategy": "1-sentence summary of why this approach was chosen",
+            "strategyTone": "friendly | direct | urgent",
+            "daysOverdue": ${overdueDays}
+        }`;
+
+        try {
+            const result = await this.model.generateContent(prompt);
+            const response = await result.response;
+            let jsonText = response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            return JSON.parse(jsonText);
+        } catch (error) {
+            console.error('AI Collection Draft Error:', error);
+            return this.generateCollectionDraft(invoice, forceAggressive); // Recursion will hit the fallback if model is missing, or retry
+        }
+    }
+
     /**
      * Generate Settlement Offer Email
      */

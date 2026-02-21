@@ -23,6 +23,10 @@ router.get('/ai/insights', aiLimiter, asyncHandler(aiController.getInsights));
 router.get('/ai/predict-revenue', aiLimiter, asyncHandler(aiController.predictRevenue));
 router.post('/ai/command', aiLimiter, asyncHandler(aiController.processCommand));
 
+// Smart Collections
+router.post('/ai/collections/generate-draft', aiLimiter, asyncHandler(aiController.generateCollectionDraft));
+router.post('/ai/collections/send', aiLimiter, asyncHandler(aiController.sendCollectionReminder));
+
 // Legacy /negotiate-settlement route (called from client/src/services/dataService.ts)
 router.post('/negotiate-settlement', aiLimiter, asyncHandler(aiController.negotiateSettlement));
 

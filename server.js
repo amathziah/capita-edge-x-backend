@@ -59,6 +59,9 @@ app.use('/api/webhooks', express.json({
 app.use('/api/', (req, res, next) => {
     if (req.path.startsWith('/webhooks')) return next();
     if (req.path.includes('/invoices/share/')) return next();
+    if (req.path.includes('/auth/signup')) return next();
+    if (req.path.includes('/auth/resend-confirmation')) return next();
+    if (req.path.includes('/auth/verify-otp')) return next();
     authenticateUser(req, res, next);
 });
 

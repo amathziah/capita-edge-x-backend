@@ -211,6 +211,41 @@ class EmailService {
     }
 
     /**
+     * Send custom email
+     */
+    async sendCustomEmail(recipientEmail, subject, html, settings = {}, attachments = []) {
+        const transporter = this.createTransporter(settings);
+
+        if (!transporter && this.mockMode) {
+            console.log('------ MOCK CUSTOM EMAIL SENT ------');
+            console.log(`To: ${recipientEmail}`);
+            console.log(`Subject: ${subject}`);
+            console.log('------------------------------------');
+            return { success: true, messageId: `mock-custom-${Date.now()}` };
+        }
+
+        const fromAddress = settings.smtp_user
+            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
+            : `"${process.env.EMAIL_FROM_NAME || settings.businessName}" <${process.env.EMAIL_FROM}>`;
+
+        const mailOptions = {
+            from: fromAddress,
+            to: recipientEmail,
+            subject: subject,
+            html: html,
+            attachments: attachments
+        };
+
+        try {
+            const info = await transporter.sendMail(mailOptions);
+            return { success: true, messageId: info.messageId };
+        } catch (error) {
+            console.error('Custom email error:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Send bulk reminders for overdue invoices
      */
     async sendBulkReminders(invoices, settings = {}) {
@@ -471,6 +506,178 @@ class EmailService {
         </div>
         <div class="footer">
             <p>${settings.email || ''} | ${settings.phone || ''}</p>
+        </div>
+    </div>
+</body>
+</html>
+        `;
+    }
+
+    /**
+     * Send account confirmation email
+     */
+    async sendConfirmationEmail(recipientEmail, confirmationLink, settings = {}) {
+        const transporter = this.createTransporter(settings);
+
+        if (!transporter && this.mockMode) {
+            console.log('------ MOCK CONFIRMATION EMAIL SENT ------');
+            console.log(`To: ${recipientEmail}`);
+            console.log(`Link: ${confirmationLink}`);
+            console.log('------------------------------------------');
+            return { success: true, messageId: `mock-auth-${Date.now()}` };
+        }
+
+        const fromAddress = settings.smtp_user
+            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
+            : `"${process.env.EMAIL_FROM_NAME || 'Malika AI'}" <${process.env.EMAIL_FROM}>`;
+
+        const subject = `Confirm your account - ${settings.businessName || 'Malika AI'}`;
+        const html = this.generateConfirmationEmailHTML(confirmationLink, settings);
+
+        const mailOptions = {
+            from: fromAddress,
+            to: recipientEmail,
+            subject: subject,
+            html: html
+        };
+
+        try {
+            const info = await transporter.sendMail(mailOptions);
+            console.log('Confirmation email sent:', info.messageId);
+            return { success: true, messageId: info.messageId };
+        } catch (error) {
+            console.error('Confirmation email error:', error);
+            if (error.responseCode === 535 || error.code === 'EAUTH') {
+                const { APIError } = await import('../middleware/errorHandler.js');
+                throw new APIError('Email authentication failed. Please check your SMTP credentials.', 401);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Send OTP verification email
+     */
+    async sendOtpEmail(recipientEmail, otp, settings = {}) {
+        const transporter = this.createTransporter(settings);
+
+        if (!transporter && this.mockMode) {
+            console.log('------ MOCK OTP EMAIL SENT ------');
+            console.log(`To: ${recipientEmail}`);
+            console.log(`OTP Code: ${otp}`);
+            console.log('---------------------------------');
+            return { success: true, messageId: `mock-otp-${Date.now()}` };
+        }
+
+        const fromAddress = settings.smtp_user
+            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
+            : `"${process.env.EMAIL_FROM_NAME || 'Malika AI'}" <${process.env.EMAIL_FROM}>`;
+
+        const subject = `${otp} is your verification code`;
+        const html = this.generateOtpEmailHTML(otp, settings);
+
+        const mailOptions = {
+            from: fromAddress,
+            to: recipientEmail,
+            subject: subject,
+            html: html
+        };
+
+        try {
+            const info = await transporter.sendMail(mailOptions);
+            console.log('OTP email sent:', info.messageId);
+            return { success: true, messageId: info.messageId };
+        } catch (error) {
+            console.error('OTP email error:', error);
+            if (error.responseCode === 535 || error.code === 'EAUTH') {
+                const { APIError } = await import('../middleware/errorHandler.js');
+                throw new APIError('Email authentication failed. Please check your SMTP credentials.', 401);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Generate confirmation email HTML
+     */
+    generateConfirmationEmailHTML(confirmationLink, settings) {
+        return `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 0 auto; padding: 40px 20px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { color: #4F46E5; margin: 0; font-size: 28px; font-weight: 700; }
+        .content { background: #ffffff; padding: 40px; border-radius: 16px; border: 1px solid #f0f0f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        .button-container { text-align: center; margin: 30px 0; }
+        .button { background-color: #4F46E5; color: #ffffff !important; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; display: inline-block; }
+        .link-fallback { font-size: 12px; color: #666; word-break: break-all; margin-top: 30px; text-align: center; }
+        .footer { padding-top: 30px; margin-top: 30px; font-size: 13px; color: #94a3b8; text-align: center; border-top: 1px solid #f1f5f9; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Malika AI</h1>
+        </div>
+        <div class="content">
+            <h2 style="margin-top: 0; font-size: 20px; color: #1e293b;">Welcome to Malika AI</h2>
+            <p>Thank you for signing up! To get started and set up your business, please verify your email address by clicking the button below:</p>
+            
+            <div class="button-container">
+                <a href="${confirmationLink}" class="button">Confirm Account</a>
+            </div>
+
+            <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
+            <div class="link-fallback">${confirmationLink}</div>
+            
+            <p style="margin-bottom: 0;">This link will expire in 24 hours.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} Malika AI. All rights reserved.</p>
+            <p>If you didn't create an account, you can safely ignore this email.</p>
+        </div>
+    </div>
+</body>
+</html>
+        `;
+    }
+
+    /**
+     * Generate OTP email HTML
+     */
+    generateOtpEmailHTML(otp, settings) {
+        return `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 0 auto; padding: 40px 20px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { color: #4F46E5; margin: 0; font-size: 28px; font-weight: 700; }
+        .content { background: #ffffff; padding: 40px; border-radius: 16px; border: 1px solid #f0f0f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); text-align: center; }
+        .otp-code { font-size: 48px; font-weight: 800; color: #4F46E5; letter-spacing: 12px; margin: 30px 0; font-family: 'Courier New', Courier, monospace; }
+        .footer { padding-top: 30px; margin-top: 30px; font-size: 13px; color: #94a3b8; text-align: center; border-top: 1px solid #f1f5f9; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Malika AI</h1>
+        </div>
+        <div class="content">
+            <h2 style="margin-top: 0; font-size: 20px; color: #1e293b;">Confirm your email address</h2>
+            <p>Use the following code to confirm your Malika AI account. This code will expire in 10 minutes.</p>
+            
+            <div class="otp-code">${otp}</div>
+            
+            <p style="font-size: 14px; color: #64748b;">If you didn't request this code, you can safely ignore this email.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} Malika AI. All rights reserved.</p>
         </div>
     </div>
 </body>

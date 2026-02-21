@@ -1,6 +1,7 @@
 import { supabase } from '../supabase.js';
 import aiService from '../services/aiService.js';
 import analyticsService from '../services/analyticsService.js';
+import emailService from '../services/emailService.js';
 import { APIError } from '../middleware/errorHandler.js';
 
 // Cache for insights
@@ -182,4 +183,62 @@ export const processCommand = async (req, res) => {
     }]);
 
     res.json(action);
+};
+
+export const generateCollectionDraft = async (req, res) => {
+    const { invoiceId, forceAggressive } = req.body;
+
+    const { data: invoice, error } = await supabase
+        .from('invoices')
+        .select(`
+            *,
+            customers (name, email)
+        `)
+        .eq('id', invoiceId)
+        .eq('organization_id', req.user.organizationId)
+        .single();
+
+    if (error || !invoice) throw new APIError('Invoice not found', 404);
+
+    const draft = await aiService.generateCollectionDraft(invoice, forceAggressive);
+    res.json(draft);
+};
+
+export const sendCollectionReminder = async (req, res) => {
+    const { invoiceId, subject, body } = req.body;
+
+    // 1. Get invoice and organization settings
+    const [
+        { data: invoice, error: invError },
+        { data: settings, error: setError }
+    ] = await Promise.all([
+        supabase.from('invoices').select('*, customers(email, name)').eq('id', invoiceId).eq('organization_id', req.user.organizationId).single(),
+        supabase.from('settings').select('*').eq('organization_id', req.user.organizationId).single()
+    ]);
+
+    if (invError || !invoice) throw new APIError('Invoice not found', 404);
+
+    // 2. Determine recipient email
+    const recipientEmail = invoice.customers?.email;
+    if (!recipientEmail) throw new APIError('Customer email not found', 400);
+
+    // 3. Send email via SMTP
+    const htmlBody = body.replace(/\n/g, '<br/>'); // Simple text to HTML
+    const result = await emailService.sendCustomEmail(
+        recipientEmail,
+        subject,
+        `<html><body>${htmlBody}</body></html>`,
+        settings || {}
+    );
+
+    // 4. Log the activity (optional but good)
+    await supabase.from('notifications').insert([{
+        organization_id: req.user.organizationId,
+        user_id: req.user.id,
+        type: 'reminder_sent',
+        message: `AI Collection reminder sent to ${invoice.customers.name} for Invoice #${invoice.invoiceNumber}`,
+        metadata: { invoiceId, subject }
+    }]);
+
+    res.json({ success: true, sentAt: new Date().toISOString() });
 };

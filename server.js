@@ -24,6 +24,7 @@ import complianceRoutes from './routes/complianceRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
+import systemRoutes from './routes/systemRoutes.js';
 import webhookRoutes from './routes/webhooks.js';
 
 // Load environment variables
@@ -74,6 +75,7 @@ app.use('/api/expenses', expenseRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/system', systemRoutes);
 
 // Shared prefixes / General Routes
 app.use('/api', settingRoutes);   // Handles /api/settings, /api/inventory/settings

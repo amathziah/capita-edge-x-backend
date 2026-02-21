@@ -296,3 +296,33 @@
 [2026-02-21T10:15:48.716Z] APIError: Email service not configured. Please go to Settings to connect your Gmail account.
     at sendInvoiceEmail (file:///Users/amathziah/malika/malika-ai-backend-standalone/controllers/invoiceController.js:366:15)
     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:31:51.654Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:31:51.656Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:31:51.657Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:31:51.722Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:31:52.251Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:32:16.112Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:32:16.119Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:32:16.121Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:32:16.123Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+[2026-02-21T10:32:16.131Z] APIError: Could not verify subscription plan
+    at checkPlanLimits (file:///Users/amathziah/malika/malika-ai-backend-standalone/middleware/checkPlan.js:17:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)

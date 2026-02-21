@@ -2,7 +2,12 @@ import { supabase } from '../supabase.js';
 import { APIError } from './errorHandler.js';
 
 export const checkPlanLimits = async (req, res, next) => {
-    const organizationId = req.user.organizationId;
+    const organizationId = req.user?.organizationId;
+
+    // Skip check for provisioning or if user context isn't fully established yet
+    if (req.path.endsWith('/provision') || !organizationId) {
+        return next();
+    }
 
     try {
         // 1. Get Organization Plan

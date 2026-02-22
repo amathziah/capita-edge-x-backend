@@ -16,6 +16,8 @@ export const getProducts = async (req, res) => {
         costPrice: p.cost_price,
         taxRate: p.tax_rate,
         reorderLevel: p.reorder_level,
+        isInventoryTracked: p.is_inventory_tracked,
+        itemType: p.item_type,
         status: p.status || 'Active'
     }));
 
@@ -23,7 +25,7 @@ export const getProducts = async (req, res) => {
 };
 
 export const createProduct = async (req, res) => {
-    const { id, name, description, price, stock, unit, minStock, sku, category, vendor, costPrice, taxRate, reorderLevel, status } = req.body;
+    const { id, name, description, price, stock, unit, minStock, sku, category, vendor, costPrice, taxRate, reorderLevel, status, isInventoryTracked, itemType } = req.body;
 
     const productData = {
         name, description, price,
@@ -34,6 +36,8 @@ export const createProduct = async (req, res) => {
         cost_price: costPrice || 0,
         tax_rate: taxRate || 0,
         reorder_level: reorderLevel || 10,
+        is_inventory_tracked: req.body.isInventoryTracked !== undefined ? req.body.isInventoryTracked : true,
+        item_type: itemType || 'physical',
         status: status || 'Active',
         organization_id: req.user.organizationId
     };

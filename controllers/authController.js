@@ -47,7 +47,7 @@ export const provisionOrganization = async (req, res) => {
             .insert([{
                 name: companyName,
                 slug: companyName.toLowerCase().replace(/ /g, '-').replace(/[^\w-]/g, ''),
-                plan_tier: 'starter'
+                plan_tier: 'free'
             }])
             .select()
             .single();

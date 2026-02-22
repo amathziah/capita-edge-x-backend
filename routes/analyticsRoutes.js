@@ -37,5 +37,6 @@ router.get('/analytics/product-performance', asyncHandler(analyticsController.ge
 router.get('/analytics/cash-flow', asyncHandler(analyticsController.getCashFlow));
 router.get('/analytics/health-score', asyncHandler(analyticsController.getHealthScore));
 router.get('/analytics/export', asyncHandler(analyticsController.exportData));
+router.get('/analytics/persona-stats', asyncHandler(analyticsController.getPersonaStats));
 
 export default router;

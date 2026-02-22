@@ -29,11 +29,13 @@ export const getNotifications = async (req, res) => {
     // 2. Low stock
     const { data: lowStockProducts } = await supabase
         .from('products')
-        .select('id, name, stock, minStock, reorder_level')
+        .select('id, name, stock, minStock, reorder_level, is_inventory_tracked')
         .eq('organization_id', req.user.organizationId);
 
     if (lowStockProducts) {
         lowStockProducts.forEach(product => {
+            if (product.is_inventory_tracked === false) return; // Skip non-tracked items
+
             const threshold = product.minStock || product.reorder_level || 10;
             if (product.stock <= threshold) {
                 notifications.push({

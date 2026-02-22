@@ -281,7 +281,7 @@ class AnalyticsService {
 
         const { data: products, error: prodError } = await supabase
             .from('products')
-            .select('stock, minStock, cost_price')
+            .select('stock, minStock, cost_price, is_inventory_tracked')
             .eq('organization_id', organizationId);
         if (prodError) throw new Error(prodError.message);
 
@@ -313,7 +313,7 @@ class AnalyticsService {
         });
 
         if (products) {
-            stats.low_stock_items = products.filter(p => p.stock <= p.minStock).length;
+            stats.low_stock_items = products.filter(p => p.is_inventory_tracked && p.stock <= (p.minStock || 10)).length;
             stats.inventory_value = products.reduce((sum, p) => sum + (p.stock * (p.cost_price || 0)), 0);
         }
 
@@ -493,6 +493,106 @@ class AnalyticsService {
                 overdueTotal: overdueTotal
             }
         };
+    }
+
+    /**
+     * Get statistics tailored to a specific business persona
+     */
+    async getPersonaStats(organizationId, persona) {
+        if (!organizationId) throw new Error('Organization ID required');
+
+        const now = new Date();
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        const stats = {
+            persona,
+            metrics: {},
+            recentActivity: []
+        };
+
+        // 1. Fetch Recent Activity (Global)
+        const { data: activities } = await supabase
+            .from('invoices')
+            .select('invoiceNumber, buyer, total, status, createdAt')
+            .eq('organization_id', organizationId)
+            .order('createdAt', { ascending: false })
+            .limit(5);
+
+        stats.recentActivity = (activities || []).map(a => ({
+            type: 'invoice',
+            title: `Invoice #${a.invoiceNumber} ${a.status}`,
+            description: `${typeof a.buyer === 'string' ? JSON.parse(a.buyer).name : a.buyer?.name || 'Customer'} - ₹${a.total}`,
+            timestamp: a.createdAt
+        }));
+
+        // 2. Fetch Persona Specific Metrics
+        switch (persona) {
+            case 'solopreneur':
+                const liquidity = await this.getSafeToSpend(organizationId);
+                const cashFlow = await this.getCashFlowAnalysis(organizationId);
+                stats.metrics = {
+                    cashFlow: cashFlow.net_cash_flow,
+                    taxProvision: liquidity.reserves.gst + liquidity.reserves.incomeTax,
+                    openReminders: 0 // Placeholder until reminder service integrated
+                };
+                break;
+
+            case 'saas':
+                const { data: saasInvoices } = await supabase
+                    .from('invoices')
+                    .select('total, status, createdAt')
+                    .eq('organization_id', organizationId)
+                    .gte('createdAt', thirtyDaysAgo.toISOString());
+
+                const paid = saasInvoices?.filter(i => i.status === 'paid') || [];
+                const mrr = paid.reduce((sum, i) => sum + i.total, 0);
+                const churnCount = saasInvoices?.filter(i => i.status === 'canceled').length || 0;
+
+                stats.metrics = {
+                    mrr,
+                    churnRate: (churnCount / Math.max(1, saasInvoices?.length || 0)) * 100,
+                    activeSubs: paid.length // Simplified proxy
+                };
+                break;
+
+            case 'agency':
+                const { data: agencyInvoices } = await supabase
+                    .from('invoices')
+                    .select('status')
+                    .eq('organization_id', organizationId);
+
+                const active = agencyInvoices?.filter(i => ['sent', 'overdue'].includes(i.status)).length || 0;
+
+                stats.metrics = {
+                    activeProjects: active,
+                    projectHealth: 85, // Placeholder
+                    pipelineValue: agencyInvoices?.reduce((sum, i) => sum + (i.status === 'draft' ? i.total : 0), 0) || 0
+                };
+                break;
+
+            case 'ecommerce':
+                const { data: ecoProducts } = await supabase
+                    .from('products')
+                    .select('stock, minStock, is_inventory_tracked')
+                    .eq('organization_id', organizationId);
+
+                const lowStock = ecoProducts?.filter(p => p.is_inventory_tracked && p.stock <= (p.minStock || 10)).length || 0;
+                const { count: dailyOrders } = await supabase
+                    .from('invoices')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('organization_id', organizationId)
+                    .gte('createdAt', new Date(now.setHours(0, 0, 0, 0)).toISOString());
+
+                stats.metrics = {
+                    lowStockItems: lowStock,
+                    dailyOrders: dailyOrders || 0,
+                    netMargins: 18 // Placeholder
+                };
+                break;
+        }
+
+        return stats;
     }
 }
 

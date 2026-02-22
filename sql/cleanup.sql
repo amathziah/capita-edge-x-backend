@@ -9,6 +9,7 @@ SET session_replication_role = 'replica';
 -- 2. Truncate all business tables in the correct order
 -- We use CASCADE to handle foreign key dependencies automatically
 TRUNCATE TABLE 
+    public.profiles,
     public.ledger_entries,
     public.payments,
     public.invoices,

@@ -26,6 +26,7 @@ import uploadRoutes from './routes/uploadRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
 import systemRoutes from './routes/systemRoutes.js';
 import webhookRoutes from './routes/webhooks.js';
+import planRoutes from './routes/planRoutes.js';
 
 // Load environment variables
 dotenv.config();
@@ -79,6 +80,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/system', systemRoutes);
+app.use('/api/plans', planRoutes);
 
 // Shared prefixes / General Routes
 app.use('/api', settingRoutes);   // Handles /api/settings, /api/inventory/settings

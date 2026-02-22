@@ -40,3 +40,9 @@ export const exportData = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename=${type}-export.csv`);
     res.send(csv);
 };
+export const getPersonaStats = async (req, res) => {
+    const persona = req.query.persona;
+    if (!persona) throw new Error('Persona is required');
+    const stats = await analyticsService.getPersonaStats(req.user.organizationId, persona);
+    res.json(stats);
+};

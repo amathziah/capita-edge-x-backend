@@ -232,17 +232,20 @@ export const createInvoice = async (req, res) => {
     if (productIdsToUpdate.length > 0) {
         const { data: currentProducts, error: fetchError } = await supabase
             .from('products')
-            .select('id, name, stock')
+            .select('id, name, stock, is_inventory_tracked')
             .in('id', productIdsToUpdate)
             .eq('organization_id', req.user.organizationId);
 
         if (fetchError) throw new APIError('Failed to verify inventory stock', 500);
 
         for (const p of currentProducts) {
-            const requestedQty = productQuantities[p.id];
-            // "Never less than 1" - User requested stock to not drop below 1
-            if ((p.stock || 0) - requestedQty < 0) {
-                throw new APIError(`Insufficient stock for ${p.name}. Available: ${p.stock}, Requested: ${requestedQty}`, 400);
+            // Only validate if inventory is tracked
+            if (p.is_inventory_tracked) {
+                const requestedQty = productQuantities[p.id];
+                // "Never less than 1" - User requested stock to not drop below 1
+                if ((p.stock || 0) - requestedQty < 0) {
+                    throw new APIError(`Insufficient stock for ${p.name}. Available: ${p.stock}, Requested: ${requestedQty}`, 400);
+                }
             }
         }
     }
@@ -273,15 +276,22 @@ export const createInvoice = async (req, res) => {
             const requestedQty = productQuantities[productId];
 
             // Atomic decrement using raw SQL would be better, but via JS for now:
-            const { data: p } = await supabase.from('products').select('stock').eq('id', productId).single();
-            const newStock = Math.max(0, (p.stock || 0) - requestedQty);
-
-            await supabase
+            const { data: p } = await supabase
                 .from('products')
-                .update({ stock: newStock, updatedAt: new Date() })
-                .eq('id', productId);
+                .select('stock, is_inventory_tracked')
+                .eq('id', productId)
+                .single();
 
-            console.log(`Aggregated stock update: Product ${productId} reduced by ${requestedQty} to ${newStock}`);
+            // Only update if inventory is tracked
+            if (p && p.is_inventory_tracked) {
+                const newStock = Math.max(0, (p.stock || 0) - requestedQty);
+                await supabase
+                    .from('products')
+                    .update({ stock: newStock, updatedAt: new Date() })
+                    .eq('id', productId);
+
+                console.log(`Aggregated stock update: Product ${productId} reduced by ${requestedQty} to ${newStock}`);
+            }
         });
 
         // Run updates in background

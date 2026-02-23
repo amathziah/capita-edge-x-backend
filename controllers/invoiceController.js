@@ -102,7 +102,10 @@ export const createInvoice = async (req, res) => {
         discount,
         discount_amount,
         amount_paid,
-        shipping
+        shipping,
+        projectName,
+        shippingAddress,
+        orderNumber
     } = req.body;
 
     if (!items || items.length === 0) {
@@ -194,7 +197,10 @@ export const createInvoice = async (req, res) => {
                 total: total !== undefined ? total : calculatedTotal,
                 status: status || 'draft',
                 invoiceNumber: finalInvoiceNumber,
-                organization_id: req.user.organizationId
+                organization_id: req.user.organizationId,
+                project_name: projectName || null,
+                shipping_address: shippingAddress || null,
+                order_number: orderNumber || null
             }])
             .select()
             .single();
@@ -257,7 +263,10 @@ export const createInvoice = async (req, res) => {
         description: item.description,
         quantity: item.quantity,
         price: item.price,
-        organization_id: req.user.organizationId
+        organization_id: req.user.organizationId,
+        service_start_date: item.serviceStartDate || null,
+        service_end_date: item.serviceEndDate || null,
+        sku: item.sku || null
     }));
 
     const { error: itemsError } = await supabase
@@ -358,7 +367,10 @@ export const updateInvoice = async (req, res) => {
                 description: item.description,
                 quantity: item.quantity,
                 price: item.price,
-                organization_id: req.user.organizationId
+                organization_id: req.user.organizationId,
+                service_start_date: item.serviceStartDate || null,
+                service_end_date: item.serviceEndDate || null,
+                sku: item.sku || null
             }));
 
             const { error: itemsError } = await supabase

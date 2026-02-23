@@ -16,11 +16,12 @@ class AIService {
             this.genAI = null;
             this.model = null;
         } else {
+            console.log('📡 Initializing Gemini AI with model: gemini-1.5-flash');
             this.genAI = new GoogleGenerativeAI(apiKey);
             this.model = this.genAI.getGenerativeModel({
                 model: 'gemini-1.5-flash',
                 generationConfig: {
-                    maxOutputTokens: 800 // Prevent excessively long context windows to reduce costs
+                    maxOutputTokens: 1000
                 }
             });
         }
@@ -79,7 +80,7 @@ class AIService {
         const jsonModel = this.genAI.getGenerativeModel({
             model: 'gemini-1.5-flash',
             generationConfig: {
-                maxOutputTokens: 800,
+                maxOutputTokens: 1000,
                 responseMimeType: "application/json"
             }
         });

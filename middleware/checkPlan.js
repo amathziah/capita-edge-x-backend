@@ -3,6 +3,9 @@ import { APIError } from './errorHandler.js';
 
 export const checkPlanLimits = async (req, res, next) => {
     const organizationId = req.user?.organizationId;
+    const planOrgId = req.user?.isActingAsCA
+        ? req.user.caOrganizationId
+        : organizationId;
 
     // Skip check for provisioning or if user context isn't fully established yet
     if (req.path.endsWith('/provision') || !organizationId) {
@@ -14,7 +17,7 @@ export const checkPlanLimits = async (req, res, next) => {
         const { data: org, error } = await supabase
             .from('organizations')
             .select('plan_tier')
-            .eq('id', organizationId)
+            .eq('id', planOrgId)
             .single();
 
         if (error || !org) {

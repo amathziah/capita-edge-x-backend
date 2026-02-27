@@ -15,12 +15,19 @@ export const authenticateUser = async (req, res, next) => {
     try {
         // --- DEVELOPER BYPASS ---
         if (token === 'mock-token-xyz-developer-bypass') {
+            const activeClientId = req.headers['x-active-client-id'];
+            const mockOrgId = orgIdHeader || 'mock-org-id';
             req.user = {
                 id: '02422ae6-2dcf-4ba0-aab5-9bc88710467d',
                 email: 'admin@zia.ai',
-                // Mock Org Context
-                organizationId: orgIdHeader || 'mock-org-id',
-                role: 'owner'
+                organizationId: (activeClientId && activeClientId !== 'null' && activeClientId !== 'undefined')
+                    ? activeClientId
+                    : mockOrgId,
+                role: 'owner',
+                ...(activeClientId && activeClientId !== 'null' && activeClientId !== 'undefined' && {
+                    isActingAsCA: true,
+                    caOrganizationId: mockOrgId
+                })
             };
             return next();
         }
@@ -84,6 +91,34 @@ export const authenticateUser = async (req, res, next) => {
             organizationId,
             role
         };
+
+        // --- CA CLIENT CONTEXT SWITCHING ---
+        const activeClientId = req.headers['x-active-client-id'];
+        if (activeClientId && activeClientId !== 'null' && activeClientId !== 'undefined') {
+            const caOrganizationId = req.user.organizationId;
+
+            const { data: relationship, error: relError } = await supabase
+                .from('ca_client_relationships')
+                .select('client_organization_id')
+                .eq('ca_organization_id', caOrganizationId)
+                .eq('client_organization_id', activeClientId)
+                .eq('status', 'active')
+                .maybeSingle();
+
+            if (relError) {
+                console.error('[Auth] CA client relationship query failed:', relError);
+                return res.status(500).json({ error: 'Failed to verify client access' });
+            }
+
+            if (!relationship) {
+                return res.status(403).json({ error: 'Unauthorized client access' });
+            }
+
+            req.user.organizationId = activeClientId;
+            req.user.isActingAsCA = true;
+            req.user.caOrganizationId = caOrganizationId;
+        }
+        // ------------------------------------
 
         next();
     } catch (err) {

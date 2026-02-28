@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { supabase } from '../supabase.js';
+import { VARIANT_TO_TIER } from '../config/tierConfig.js';
 
 const router = express.Router();
 
@@ -39,8 +40,8 @@ router.post('/lemon-squeezy', verifyLemonSqueezySignature, async (req, res) => {
             }
 
             // Map status
-            // LS Statuses: active, past_due, unpaid, cancelled, expired, on_trial
             const status = attributes.status;
+            const variantId = attributes.variant_id?.toString();
 
             // Upsert Subscription
             const { error: subError } = await supabase
@@ -48,8 +49,8 @@ router.post('/lemon-squeezy', verifyLemonSqueezySignature, async (req, res) => {
                 .upsert({
                     organization_id: organizationId,
                     lemon_squeezy_customer_id: attributes.customer_id.toString(),
-                    lemon_squeezy_subscription_id: attributes.identifier, // This is the sub ID to store
-                    variant_id: attributes.variant_id.toString(),
+                    lemon_squeezy_subscription_id: attributes.identifier,
+                    variant_id: variantId,
                     status: status,
                     current_period_end: attributes.renews_at || attributes.ends_at,
                     updatedAt: new Date()
@@ -62,13 +63,16 @@ router.post('/lemon-squeezy', verifyLemonSqueezySignature, async (req, res) => {
                 throw subError;
             }
 
-            // Update Organization Plan Tier
-            // If active or on_trial -> 'pro', else 'free'
-            const isPro = ['active', 'on_trial'].includes(status);
+            // Map variant_id to tier, fallback to freelancer for active subs
+            const isActive = ['active', 'on_trial'].includes(status);
+            const tier = isActive
+                ? (VARIANT_TO_TIER[variantId] || 'freelancer')
+                : 'starter';
+
             const { error: orgError } = await supabase
                 .from('organizations')
                 .update({
-                    plan_tier: isPro ? 'pro' : 'free',
+                    plan_tier: tier,
                     updatedAt: new Date()
                 })
                 .eq('id', organizationId);
@@ -78,7 +82,7 @@ router.post('/lemon-squeezy', verifyLemonSqueezySignature, async (req, res) => {
                 throw orgError;
             }
 
-            console.log(`Updated Org ${organizationId} to ${isPro ? 'pro' : 'free'}`);
+            console.log(`Updated Org ${organizationId} to ${tier}`);
         }
 
         res.json({ received: true });

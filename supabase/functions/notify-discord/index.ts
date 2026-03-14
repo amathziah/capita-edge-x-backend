@@ -11,7 +11,7 @@ serve(async (req) => {
 
         // Map platform_reports fields to Discord embed
         const message = {
-            content: "🚀 **Transmission Received: Malika AI Protocol Integrity**",
+            content: "🚀 **Transmission Received: CapitaEdgeX Protocol Integrity**",
             embeds: [{
                 title: record.title || "Mission Report",
                 color: record.priority === 'critical' ? 15158332 : record.priority === 'high' ? 15105570 : 3447003,
@@ -21,7 +21,7 @@ serve(async (req) => {
                     { name: "Priority", value: `\`${record.priority.toUpperCase()}\``, inline: true },
                     { name: "Description", value: record.description || "No description provided." }
                 ],
-                footer: { text: "Malika AI Operational Integrity" },
+                footer: { text: "CapitaEdgeX Operational Integrity" },
                 timestamp: record.created_at || new Date().toISOString()
             }]
         }

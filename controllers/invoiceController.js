@@ -16,6 +16,10 @@ export const getInvoices = async (req, res) => {
         .eq('organization_id', req.user.organizationId) // Tenant isolation
         .order('createdAt', { ascending: false });
 
+    if (req.query.persona) {
+        query = query.eq('persona', req.query.persona);
+    }
+
     if (req.query.limit) {
         query = query.limit(parseInt(req.query.limit, 10));
     }

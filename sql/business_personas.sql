@@ -24,7 +24,7 @@ BEGIN
     -- Add Check Constraint (re-applied in case it was dropped or needs update)
     ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_business_type_check;
     ALTER TABLE public.profiles ADD CONSTRAINT profiles_business_type_check 
-    CHECK (business_type IN ('solopreneur', 'agency', 'saas', 'ecommerce'));
+    CHECK (business_type IN ('solopreneur', 'services_firm', 'subscription', 'ecommerce', 'ca'));
 END $$;
 
 -- 3. Enable Row Level Security (RLS)

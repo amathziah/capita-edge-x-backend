@@ -717,7 +717,7 @@ JSON:`;
         - Total Tax: ₹${invoice.tax_amount || 0}
         - Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}
         - Days Overdue: ${overdueDays}
-        - Platform Name: Malika AI
+        - Platform Name: CapitaEdgeX
         
         COLLECTIONS STRATEGY:
         - Tone: ${forceAggressive ? 'Urgent and serious' : 'Professional and courteous'}

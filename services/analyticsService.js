@@ -538,7 +538,7 @@ class AnalyticsService {
                 };
                 break;
 
-            case 'saas':
+            case 'subscription':
                 const { data: saasInvoices } = await supabase
                     .from('invoices')
                     .select('total, status, createdAt')
@@ -556,7 +556,7 @@ class AnalyticsService {
                 };
                 break;
 
-            case 'agency':
+            case 'services_firm':
                 const { data: agencyInvoices } = await supabase
                     .from('invoices')
                     .select('status')

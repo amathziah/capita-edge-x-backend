@@ -529,9 +529,9 @@ class EmailService {
 
         const fromAddress = settings.smtp_user
             ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
-            : `"${process.env.EMAIL_FROM_NAME || 'Malika AI'}" <${process.env.EMAIL_FROM}>`;
+            : `"${process.env.EMAIL_FROM_NAME || 'CapitaEdgeX'}" <${process.env.EMAIL_FROM}>`;
 
-        const subject = `Confirm your account - ${settings.businessName || 'Malika AI'}`;
+        const subject = `Confirm your account - ${settings.businessName || 'CapitaEdgeX'}`;
         const html = this.generateConfirmationEmailHTML(confirmationLink, settings);
 
         const mailOptions = {
@@ -571,7 +571,7 @@ class EmailService {
 
         const fromAddress = settings.smtp_user
             ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
-            : `"${process.env.EMAIL_FROM_NAME || 'Malika AI'}" <${process.env.EMAIL_FROM}>`;
+            : `"${process.env.EMAIL_FROM_NAME || 'CapitaEdgeX'}" <${process.env.EMAIL_FROM}>`;
 
         const subject = `${otp} is your verification code`;
         const html = this.generateOtpEmailHTML(otp, settings);
@@ -620,10 +620,10 @@ class EmailService {
 <body>
     <div class="container">
         <div class="header">
-            <h1>Malika AI</h1>
+            <h1>CapitaEdgeX</h1>
         </div>
         <div class="content">
-            <h2 style="margin-top: 0; font-size: 20px; color: #1e293b;">Welcome to Malika AI</h2>
+            <h2 style="margin-top: 0; font-size: 20px; color: #1e293b;">Welcome to CapitaEdgeX</h2>
             <p>Thank you for signing up! To get started and set up your business, please verify your email address by clicking the button below:</p>
             
             <div class="button-container">
@@ -636,7 +636,7 @@ class EmailService {
             <p style="margin-bottom: 0;">This link will expire in 24 hours.</p>
         </div>
         <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} Malika AI. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} CapitaEdgeX. All rights reserved.</p>
             <p>If you didn't create an account, you can safely ignore this email.</p>
         </div>
     </div>
@@ -666,18 +666,18 @@ class EmailService {
 <body>
     <div class="container">
         <div class="header">
-            <h1>Malika AI</h1>
+            <h1>CapitaEdgeX</h1>
         </div>
         <div class="content">
             <h2 style="margin-top: 0; font-size: 20px; color: #1e293b;">Confirm your email address</h2>
-            <p>Use the following code to confirm your Malika AI account. This code will expire in 10 minutes.</p>
+            <p>Use the following code to confirm your CapitaEdgeX account. This code will expire in 10 minutes.</p>
             
             <div class="otp-code">${otp}</div>
             
             <p style="font-size: 14px; color: #64748b;">If you didn't request this code, you can safely ignore this email.</p>
         </div>
         <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} Malika AI. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} CapitaEdgeX. All rights reserved.</p>
         </div>
     </div>
 </body>

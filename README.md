@@ -1,6 +1,6 @@
-# Malika AI Backend
+# CapitaEdgeX Backend
 
-Standalone Node.js backend for the Malika AI Invoicing platform.
+Standalone Node.js backend for the CapitaEdgeX Invoicing platform.
 
 ## Features
 - REST API for Invoices, Customers, Products, and Expenses.
@@ -35,6 +35,6 @@ Standalone Node.js backend for the Malika AI Invoicing platform.
 ## Docker
 Build and run:
 ```bash
-docker build -t malika-ai-backend .
-docker run -p 3000:3000 --env-file .env malika-ai-backend
+docker build -t capita-ai-backend .
+docker run -p 3000:3000 --env-file .env capita-ai-backend
 ```

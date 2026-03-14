@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: malika-ai-backend
+    name: capita-ai-backend
     env: node
     plan: free # Change to 'starter' if you need a persistent disk later
     buildCommand: npm install

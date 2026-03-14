@@ -24,14 +24,14 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey, {
 });
 
 const testUsers = [
-    { email: 'solo@malika.test', persona: 'solopreneur', company: 'Solo Ventures' },
-    { email: 'agency@malika.test', persona: 'agency', company: 'Agile Agency' },
-    { email: 'saas@malika.test', persona: 'saas', company: 'Cloud Scale Inc' },
-    { email: 'ecom@malika.test', persona: 'ecommerce', company: 'Global Goods' },
-    { email: 'ca@malika.test', persona: 'ca', company: 'Elite Accounting' }
+    { email: 'solo@capita.test', persona: 'solopreneur', company: 'Solo Ventures' },
+    { email: 'agency@capita.test', persona: 'services_firm', company: 'Agile Agency' },
+    { email: 'saas@capita.test', persona: 'subscription', company: 'Cloud Scale Inc' },
+    { email: 'ecom@capita.test', persona: 'ecommerce', company: 'Global Goods' },
+    { email: 'ca@capita.test', persona: 'ca', company: 'Elite Accounting' }
 ];
 
-const password = 'MalikaTest123!';
+const password = 'CapitaTest123!';
 
 async function createTestUsers() {
     console.log('🚀 Starting Test User Generation...');

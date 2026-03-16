@@ -4,6 +4,8 @@ import emailService from '../services/emailService.js';
 import fileService from '../services/fileService.js';
 import { APIError } from '../middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../utils/configUtils.js';
+import { calculateInvoiceTax } from '../server/services/taxCalculationService.js';
+import { getStateFromGstin } from '../server/lib/gstUtils.js';
 
 export const getInvoices = async (req, res) => {
     let query = supabase
@@ -110,12 +112,35 @@ export const createInvoice = async (req, res) => {
         throw new APIError('Invoice must have at least one item', 400);
     }
 
+    const taxResult = calculateInvoiceTax({
+        items:            req.body.items || [],
+        seller_gstin:     req.body.seller?.taxId || req.body.seller?.gstin || '',
+        buyer_gstin:      req.body.buyer?.gstin  || req.body.buyer?.taxId  || '',
+        persona:          req.body.persona || 'solopreneur',
+        delivery_state:   req.body.deliveryState || req.body.delivery_state || undefined,
+        is_gst_registered: req.body.isGstRegistered !== false,
+        lut_number:       req.body.lutNumber || req.body.lut_number || undefined,
+        reverse_charge:   !!(req.body.reverseCharge || req.body.reverse_charge),
+        tds_enabled:      !!(req.body.tdsApplicable || req.body.tdsEnabled),
+        discount_amount:  Number(req.body.discountAmount || req.body.discount_amount) || 0,
+        shipping_charges: Number(req.body.shipping) || 0,
+    });
+
     if (!buyer || !buyer.name) {
         throw new APIError('Buyer information is required', 400);
     }
 
     // Find or create customer
     let customer_id;
+    let customerData = { state: buyer.state || null };
+
+    const detectedState = getStateFromGstin(
+        req.body.buyer?.gstin || req.body.buyer?.taxId || ''
+    );
+    if (detectedState && !customerData.state) {
+        customerData.state = detectedState;
+    }
+
     const { data: existingCustomer } = await supabase
         .from('customers')
         .select('id')
@@ -136,7 +161,7 @@ export const createInvoice = async (req, res) => {
                 organization_id: req.user.organizationId,
                 gstin: buyer.gstin || null,
                 pan: buyer.pan || null,
-                state: buyer.state || null,
+                state: customerData.state,
                 city: buyer.city || null,
                 pincode: buyer.pincode || null,
                 country: buyer.country || 'India'
@@ -190,15 +215,15 @@ export const createInvoice = async (req, res) => {
                 date: date || new Date().toISOString(),
                 dueDate,
                 notes,
-                subtotal: subtotal !== undefined ? subtotal : calculatedSubtotal,
-                taxAmount: taxAmount !== undefined ? taxAmount : calculatedTax,
-                taxType,
+                subtotal: taxResult.subtotal,
+                taxAmount: taxResult.tax_amount,
+                taxType: 'GST',
                 taxRate: taxRate || 0,
                 discount: discount || 0,
                 discount_amount: discount_amount || 0,
                 amount_paid: amount_paid || 0,
                 shipping: shipping || 0,
-                total: total !== undefined ? total : calculatedTotal,
+                total: taxResult.grand_total,
                 status: status || 'draft',
                 invoiceNumber: finalInvoiceNumber,
                 organization_id: req.user.organizationId,
@@ -211,14 +236,16 @@ export const createInvoice = async (req, res) => {
                 place_of_supply: placeOfSupply || null,
                 reverse_charge: reverseCharge || false,
                 is_gst_registered: isGstRegistered !== false,
-                gst_type: gstType || null,
-                cgst_amount: cgstAmount || 0,
-                sgst_amount: sgstAmount || 0,
-                igst_amount: igstAmount || 0,
-                tds_applicable: tdsApplicable || false,
-                tds_rate: tdsRate || 0,
-                tds_amount: tdsAmount || 0,
-                net_receivable: netReceivable || null,
+                gst_type: taxResult.gst_type,
+                cgst_amount: taxResult.cgst_amount,
+                sgst_amount: taxResult.sgst_amount,
+                igst_amount: taxResult.igst_amount,
+                tds_applicable: !!(req.body.tdsApplicable || req.body.tdsEnabled),
+                tds_rate: taxResult.tds_rate,
+                tds_section: taxResult.tds_section,
+                tds_amount: taxResult.tds_amount,
+                net_receivable: taxResult.net_receivable,
+                round_off: taxResult.round_off,
                 courier_name: courierName || null,
                 courier_tracking: courierTracking || null,
                 dispatch_date: dispatchDate || null,
@@ -280,30 +307,34 @@ export const createInvoice = async (req, res) => {
     }
 
     // Insert Items
-    const invoiceItems = items.map(item => ({
-        invoiceId: invoice.id,
-        productId: item.productId || null,
-        description: item.description,
-        quantity: item.quantity,
-        price: item.price,
-        organization_id: req.user.organizationId,
-        service_start_date: item.serviceStartDate || null,
-        service_end_date: item.serviceEndDate || null,
-        sku: item.sku || null,
-        hsn_code: item.hsnCode || null,
-        sac_code: item.sacCode || null,
-        tax_rate: item.taxRate || 0,
-        cgst_rate: item.cgstRate || 0,
-        sgst_rate: item.sgstRate || 0,
-        igst_rate: item.igstRate || 0,
-        cgst_amount: item.cgstAmount || 0,
-        sgst_amount: item.sgstAmount || 0,
-        igst_amount: item.igstAmount || 0,
-        taxable_value: item.taxableValue || null,
-        discount_percent: item.discountPercent || 0,
-        sort_order: item.sortOrder || 0,
-        unit: item.unit || 'pcs'
-    }));
+    const invoiceItems = (req.body.items || []).map((item, i) => {
+        const lineTax = taxResult.line_tax_results[i] || {};
+        return {
+            invoiceId: invoice.id,
+            productId: item.productId || null,
+            description: item.description,
+            quantity: Number(item.quantity),
+            price: Number(item.price),
+            unit: item.unit || 'Qty',
+            organization_id: req.user.organizationId,
+            service_start_date: item.serviceStartDate || null,
+            service_end_date: item.serviceEndDate || null,
+            sku: item.sku || null,
+            sac_code: item.sac_code || null,
+            hsn_code: item.hsn_code || null,
+            tax_rate: lineTax.tax_rate ?? 18,
+            taxable_value: lineTax.taxable_value ?? 0,
+            cgst_rate: lineTax.cgst_rate ?? 0,
+            sgst_rate: lineTax.sgst_rate ?? 0,
+            igst_rate: lineTax.igst_rate ?? 0,
+            cgst_amount: lineTax.cgst_amount ?? 0,
+            sgst_amount: lineTax.sgst_amount ?? 0,
+            igst_amount: lineTax.igst_amount ?? 0,
+            is_exempt: lineTax.is_exempt ?? false,
+            discount_percent: Number(item.discount_percent || item.discount) || 0,
+            sort_order: i
+        };
+    });
 
     const { error: itemsError } = await supabase
         .from('invoice_items')
@@ -378,10 +409,50 @@ export const updateInvoice = async (req, res) => {
     // Check ownership
     const { data: existing } = await supabase
         .from('invoices')
-        .select('id')
+        .select(`*, customers!invoices_customer_id_fkey (*)`)
         .eq('id', id)
         .eq('organization_id', req.user.organizationId)
         .single();
+
+    if (!existing) throw new APIError('Invoice not found', 404);
+
+    let taxResult = null;
+    
+    // Recalculate tax if items or core tax fields are present in the request
+    if (items) {
+        // We use existing values as fallbacks for the tax calculator if not provided in updates
+        taxResult = calculateInvoiceTax({
+            items:            items || [],
+            seller_gstin:     updates.seller?.taxId || updates.seller?.gstin || existing.seller?.taxId || existing.seller?.gstin || '',
+            buyer_gstin:      updates.buyer?.gstin  || updates.buyer?.taxId  || existing.buyer?.gstin  || existing.buyer?.taxId || existing.customers?.gstin || '',
+            persona:          updates.persona || existing.persona || 'solopreneur',
+            delivery_state:   updates.deliveryState || updates.delivery_state || existing.delivery_state || undefined,
+            is_gst_registered: updates.isGstRegistered !== undefined ? updates.isGstRegistered !== false : existing.is_gst_registered !== false,
+            lut_number:       updates.lutNumber || updates.lut_number || existing.lut_number || undefined,
+            reverse_charge:   !!(updates.reverseCharge || updates.reverse_charge || existing.reverse_charge),
+            tds_enabled:      !!(updates.tdsApplicable || updates.tdsEnabled || existing.tds_applicable),
+            discount_amount:  Number(updates.discountAmount || updates.discount_amount) || Number(existing.discount_amount) || 0,
+            shipping_charges: Number(updates.shipping) || Number(existing.shipping) || 0,
+        });
+        
+        // Merge computed tax values into the updates payload
+        Object.assign(updates, {
+            subtotal:        taxResult.subtotal,
+            taxAmount:       taxResult.tax_amount,
+            taxType:         'GST',
+            total:           taxResult.grand_total,
+            cgst_amount:     taxResult.cgst_amount,
+            sgst_amount:     taxResult.sgst_amount,
+            igst_amount:     taxResult.igst_amount,
+            gst_type:        taxResult.gst_type,
+            tds_applicable:  !!(updates.tdsApplicable || updates.tdsEnabled || existing.tds_applicable),
+            tds_rate:        taxResult.tds_rate,
+            tds_section:     taxResult.tds_section,
+            tds_amount:      taxResult.tds_amount,
+            net_receivable:  taxResult.net_receivable,
+            round_off:       taxResult.round_off,
+        });
+    }
 
     if (!existing) throw new APIError('Invoice not found', 404);
 
@@ -405,18 +476,35 @@ export const updateInvoice = async (req, res) => {
             .eq('organization_id', req.user.organizationId);
 
         // Insert new items
-        if (items.length > 0) {
-            const invoiceItems = items.map(item => ({
-                invoiceId: id,
-                productId: item.productId || null,
-                description: item.description,
-                quantity: item.quantity,
-                price: item.price,
-                organization_id: req.user.organizationId,
-                service_start_date: item.serviceStartDate || null,
-                service_end_date: item.serviceEndDate || null,
-                sku: item.sku || null
-            }));
+        if (items.length > 0 && taxResult) {
+            const invoiceItems = items.map((item, i) => {
+                const lineTax = taxResult.line_tax_results[i] || {};
+                return {
+                    invoiceId: id,
+                    productId: item.productId || null,
+                    description: item.description,
+                    quantity: Number(item.quantity),
+                    price: Number(item.price),
+                    unit: item.unit || 'Qty',
+                    organization_id: req.user.organizationId,
+                    service_start_date: item.serviceStartDate || null,
+                    service_end_date: item.serviceEndDate || null,
+                    sku: item.sku || null,
+                    sac_code: item.sac_code || null,
+                    hsn_code: item.hsn_code || null,
+                    tax_rate: lineTax.tax_rate ?? 18,
+                    taxable_value: lineTax.taxable_value ?? 0,
+                    cgst_rate: lineTax.cgst_rate ?? 0,
+                    sgst_rate: lineTax.sgst_rate ?? 0,
+                    igst_rate: lineTax.igst_rate ?? 0,
+                    cgst_amount: lineTax.cgst_amount ?? 0,
+                    sgst_amount: lineTax.sgst_amount ?? 0,
+                    igst_amount: lineTax.igst_amount ?? 0,
+                    is_exempt: lineTax.is_exempt ?? false,
+                    discount_percent: Number(item.discount_percent || item.discount) || 0,
+                    sort_order: i
+                };
+            });
 
             const { error: itemsError } = await supabase
                 .from('invoice_items')

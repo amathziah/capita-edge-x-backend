@@ -49,8 +49,8 @@ export const errorHandler = (err, req, res, next) => {
         message = 'Database constraint violation';
     }
 
-    // Don't expose internal errors in production
-    if (process.env.NODE_ENV === 'production' && statusCode === 500) {
+    // Don't expose generic internal errors in production, but allow explicit APIError messages
+    if (process.env.NODE_ENV === 'production' && statusCode === 500 && err.name !== 'APIError') {
         message = 'Something went wrong. Please try again later.';
     }
 

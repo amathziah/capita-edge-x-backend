@@ -52,11 +52,20 @@ app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) === -1) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            return callback(new Error(msg), false);
+        
+        // Exact match from configured origins
+        const isAllowed = allowedOrigins.some(allowed => origin === allowed);
+        
+        // Flexible match for Vercel preview/deployment URLs
+        const isVercel = origin.endsWith('.vercel.app');
+
+        if (isAllowed || isVercel) {
+            return callback(null, true);
         }
-        return callback(null, true);
+        
+        console.warn(`Blocked by CORS: ${origin}`);
+        const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+        return callback(new Error(msg), false);
     },
     credentials: true
 }));

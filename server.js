@@ -40,9 +40,38 @@ const PORT = process.env.PORT || 3000;
 
 // Security middleware
 app.use(helmet());
-app.use(cors());
+
+// Hardened CORS Configuration
+const allowedOrigins = [
+    process.env.APP_URL, // Production Frontend
+    'http://localhost:5173', // Local Dev
+    'http://localhost:5174'  // Local Dev Alternative
+].filter(Boolean);
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
+    credentials: true
+}));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(sanitizeInput);
+
+// Health Check Endpoint (For Render/Platform Monitoring)
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        status: 'UP',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development'
+    });
+});
 
 // ============================================================================
 // WEBHOOKS

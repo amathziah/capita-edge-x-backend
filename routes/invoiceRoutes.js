@@ -2,6 +2,7 @@ import express from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateId, validateInvoice, validateEmail } from '../middleware/validation.js';
 import * as invoiceController from '../controllers/invoiceController.js';
+import { checkAndSendFollowUps } from '../services/followUpService.js';
 
 const router = express.Router();
 
@@ -22,5 +23,11 @@ router.post('/:id/reminder', validateId, validateEmail, asyncHandler(invoiceCont
 // Note: /api/email/send-bulk-reminders was logically part of email/invoices. 
 // Can be moved here or to a separate emailRoutes.
 // router.post('/reminders/bulk', asyncHandler(invoiceController.bulkReminders));
+
+// Cron: Automated Follow-Ups
+router.post('/cron/follow-ups', asyncHandler(async (req, res) => {
+    await checkAndSendFollowUps();
+    res.json({ success: true });
+}));
 
 export default router;

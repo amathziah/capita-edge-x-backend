@@ -29,9 +29,16 @@ export const createPayment = async (req, res) => {
     const { data: payment, error } = await supabase
         .from('payments')
         .insert([{
-            invoiceId, amount, date: date || new Date().toISOString(),
-            method, notes, status: status || 'completed',
-            organization_id: req.user.organizationId
+            invoiceId,
+            amount,
+            date: date || new Date().toISOString(),
+            method,
+            notes,
+            status: status || 'completed',
+            organization_id: req.user.organizationId,
+            payment_mode: req.body.paymentMode || req.body.method || null,
+            reference_number: req.body.referenceNumber || null,
+            upi_transaction_id: req.body.upiTransactionId || null
         }])
         .select()
         .single();
@@ -67,6 +74,15 @@ export const createPayment = async (req, res) => {
                     .from('invoices')
                     .update({ status: 'paid' })
                     .eq('id', invoiceId);
+            }
+
+            // Trigger Capita client intelligence update
+            if (invoice.customer_id) {
+                supabase.rpc('update_customer_intelligence', {
+                    p_customer_id: invoice.customer_id
+                }).catch(err =>
+                    console.error('Intelligence update failed:', err)
+                );
             }
         }
     }

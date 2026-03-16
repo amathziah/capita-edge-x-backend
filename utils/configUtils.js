@@ -15,7 +15,28 @@ const KEY_MAPPING = {
     invoice_prefix: 'invoice_prefix',
     logoFilename: 'logo_filename',
     logo_filename: 'logo_filename',
-    smtp_user: 'smtp_user'
+    smtp_user: 'smtp_user',
+    gstin: 'gstin',
+    pan: 'pan',
+    frn: 'frn',
+    state: 'state',
+    city: 'city',
+    pincode: 'pincode',
+    msmeNumber: 'msme_number',
+    lutNumber: 'lut_number',
+    bankName: 'bank_name',
+    bankAccountNumber: 'bank_account_number',
+    bankIfsc: 'bank_ifsc',
+    businessType: 'business_type',
+    defaultDueDays: 'default_due_days',
+    autoFollowUp: 'auto_follow_up',
+    followUpDay1: 'follow_up_day_1',
+    followUpDay2: 'follow_up_day_2',
+    followUpDay3: 'follow_up_day_3',
+    deadStockThresholdDays: 'dead_stock_threshold_days',
+    reorderAlertsEnabled: 'reorder_alerts_enabled',
+    mrrAlertsEnabled: 'mrr_alerts_enabled',
+    weeklySummaryEnabled: 'weekly_summary_enabled'
 };
 
 const REVERSE_MAPPING = Object.fromEntries(

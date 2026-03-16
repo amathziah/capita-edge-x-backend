@@ -68,6 +68,7 @@ async function createTestUsers() {
             }
 
             // 2. Create Profile
+            console.log(`Setting persona: ${userDef.persona}`);
             const { error: profileError } = await supabase
                 .from('profiles')
                 .upsert({
@@ -76,51 +77,90 @@ async function createTestUsers() {
                 });
 
             if (profileError) {
-                console.warn(`Profile upsert error for ${userDef.email}:`, profileError.message);
+                console.error(`❌ Profile upsert error for ${userDef.email} (Persona: ${userDef.persona}):`, profileError.message);
+                console.error('Check constraint "profiles_business_type_check" might be rejecting this value.');
             } else {
-                console.log('Profile created/updated.');
+                console.log('✅ Profile created/updated.');
             }
 
-            // 3. Check for existing organization
-            const { data: existingOrgUsers } = await supabase
+            // 3. Find or Create Organization
+            const slug = userDef.company.toLowerCase().replace(/ /g, '-').replace(/[^\w-]/g, '');
+            
+            // Check if user is already linked to ANY org
+            const { data: existingLinks } = await supabase
                 .from('organization_users')
                 .select('organization_id')
                 .eq('user_id', userId)
                 .limit(1);
 
-            if (existingOrgUsers && existingOrgUsers.length > 0) {
-                console.log(`Organization already linked (ID: ${existingOrgUsers[0].organization_id}). Skipping creation.`);
+            let orgId;
+
+            if (existingLinks && existingLinks.length > 0) {
+                orgId = existingLinks[0].organization_id;
+                console.log(`User already linked to Org ID: ${orgId}.`);
             } else {
-                // 4. Create Organization
-                const { data: org, error: orgError } = await supabase
+                // Check if org with this slug exists
+                const { data: existingOrg } = await supabase
                     .from('organizations')
-                    .insert([{
-                        name: userDef.company,
-                        slug: userDef.company.toLowerCase().replace(/ /g, '-').replace(/[^\w-]/g, ''),
-                        plan_tier: 'free'
-                    }])
-                    .select()
-                    .single();
+                    .select('id')
+                    .eq('slug', slug)
+                    .maybeSingle();
 
-                if (orgError) throw orgError;
-                console.log(`Organization created: ${org.name}`);
+                if (existingOrg) {
+                    orgId = existingOrg.id;
+                    console.log(`Organization with slug "${slug}" already exists (ID: ${orgId}).`);
+                } else {
+                    // Create Organization
+                    const { data: org, error: orgError } = await supabase
+                        .from('organizations')
+                        .insert([{
+                            name: userDef.company,
+                            slug: slug,
+                            plan_tier: 'free'
+                        }])
+                        .select()
+                        .single();
 
-                // 5. Link User as Owner
+                    if (orgError) {
+                        console.error(`❌ Org creation failed for ${userDef.email}:`, orgError.message);
+                        throw orgError;
+                    }
+                    orgId = org.id;
+                    console.log(`Organization created: ${org.name} (ID: ${orgId})`);
+                }
+
+                // Link User as Owner
                 const { error: linkError } = await supabase
                     .from('organization_users')
                     .insert([{
-                        organization_id: org.id,
+                        organization_id: orgId,
                         user_id: userId,
                         role: 'owner'
                     }]);
 
-                if (linkError) throw linkError;
-                console.log('User linked as owner.');
+                if (linkError) {
+                    if (linkError.message.includes('duplicate key')) {
+                        console.log('User already linked to this organization.');
+                    } else {
+                        console.error('❌ Link error:', linkError.message);
+                        throw linkError;
+                    }
+                } else {
+                    console.log('User linked as owner.');
+                }
+            }
 
-                // 6. Seed Default Configs
+            // 4. Seed Default Configs (Idempotent)
+            const { data: existingConfig } = await supabase
+                .from('organization_configs')
+                .select('organization_id')
+                .eq('organization_id', orgId)
+                .maybeSingle();
+
+            if (!existingConfig) {
                 await supabase.from('organization_configs').insert([
                     {
-                        organization_id: org.id,
+                        organization_id: orgId,
                         business_name: userDef.company,
                         currency: 'INR',
                         tax_label: 'GST',

@@ -89,27 +89,21 @@ const findNextAvailableNumber = async (organizationId) => {
 
 export const createInvoice = async (req, res) => {
     let {
-        buyer,
-        items,
-        dueDate,
-        notes,
-        taxRate,
-        taxAmount,
-        subtotal,
-        total,
-        invoiceNumber,
-        status,
-        date,
-        seller,
-        shipTo,
-        taxType,
-        discount,
-        discount_amount,
-        amount_paid,
-        shipping,
-        projectName,
-        shippingAddress,
-        orderNumber
+        buyer, items, dueDate, notes, taxRate, taxAmount,
+        subtotal, total, invoiceNumber, status, date,
+        seller, shipTo, taxType, discount, discount_amount,
+        amount_paid, shipping,
+        // Persona fields
+        projectName, shippingAddress, orderNumber,
+        persona, frn, lutNumber, placeOfSupply,
+        reverseCharge, isGstRegistered, gstType,
+        // GST split
+        cgstAmount, sgstAmount, igstAmount,
+        // TDS
+        tdsApplicable, tdsRate, tdsAmount, netReceivable,
+        // Ecommerce
+        courierName, courierTracking, dispatchDate,
+        orderRef
     } = req.body;
 
     if (!items || items.length === 0) {
@@ -139,7 +133,13 @@ export const createInvoice = async (req, res) => {
                 email: buyer.email || null,
                 phone: buyer.phone || null,
                 address: buyer.address || null,
-                organization_id: req.user.organizationId
+                organization_id: req.user.organizationId,
+                gstin: buyer.gstin || null,
+                pan: buyer.pan || null,
+                state: buyer.state || null,
+                city: buyer.city || null,
+                pincode: buyer.pincode || null,
+                country: buyer.country || 'India'
             }])
             .select()
             .single();
@@ -204,7 +204,26 @@ export const createInvoice = async (req, res) => {
                 organization_id: req.user.organizationId,
                 project_name: projectName || null,
                 shipping_address: shippingAddress || null,
-                order_number: orderNumber || null
+                order_number: orderNumber || null,
+                persona: persona || null,
+                frn: frn || null,
+                lut_number: lutNumber || null,
+                place_of_supply: placeOfSupply || null,
+                reverse_charge: reverseCharge || false,
+                is_gst_registered: isGstRegistered !== false,
+                gst_type: gstType || null,
+                cgst_amount: cgstAmount || 0,
+                sgst_amount: sgstAmount || 0,
+                igst_amount: igstAmount || 0,
+                tds_applicable: tdsApplicable || false,
+                tds_rate: tdsRate || 0,
+                tds_amount: tdsAmount || 0,
+                net_receivable: netReceivable || null,
+                courier_name: courierName || null,
+                courier_tracking: courierTracking || null,
+                dispatch_date: dispatchDate || null,
+                order_ref: orderRef || null,
+                follow_up_count: 0
             }])
             .select()
             .single();
@@ -270,7 +289,20 @@ export const createInvoice = async (req, res) => {
         organization_id: req.user.organizationId,
         service_start_date: item.serviceStartDate || null,
         service_end_date: item.serviceEndDate || null,
-        sku: item.sku || null
+        sku: item.sku || null,
+        hsn_code: item.hsnCode || null,
+        sac_code: item.sacCode || null,
+        tax_rate: item.taxRate || 0,
+        cgst_rate: item.cgstRate || 0,
+        sgst_rate: item.sgstRate || 0,
+        igst_rate: item.igstRate || 0,
+        cgst_amount: item.cgstAmount || 0,
+        sgst_amount: item.sgstAmount || 0,
+        igst_amount: item.igstAmount || 0,
+        taxable_value: item.taxableValue || null,
+        discount_percent: item.discountPercent || 0,
+        sort_order: item.sortOrder || 0,
+        unit: item.unit || 'pcs'
     }));
 
     const { error: itemsError } = await supabase
@@ -312,6 +344,15 @@ export const createInvoice = async (req, res) => {
     }
 
     res.status(201).json(invoice);
+
+    // Update Capita client intelligence
+    if (customer_id) {
+        supabase.rpc('update_customer_intelligence', {
+            p_customer_id: customer_id
+        }).catch(err =>
+            console.error('Intelligence update failed:', err)
+        );
+    }
 };
 
 export const getInvoiceById = async (req, res) => {

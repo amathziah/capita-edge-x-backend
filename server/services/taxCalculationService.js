@@ -40,7 +40,7 @@ export function calculateInvoiceTax(input) {
       discount: (Number(item.discount_percent) > 0)
         ? { type: 'percentage', value: item.discount_percent }
         : undefined,
-      tax_rate:     item.is_exempt ? 0 : (Number(item.tax_rate) ?? 18),
+      tax_rate:     item.is_exempt ? 0 : (Number(item.tax_rate ?? 18) || 0),
       is_interstate: isInterState,
     })),
     document_discount: (Number(input.discount_amount) > 0)
@@ -57,14 +57,14 @@ export function calculateInvoiceTax(input) {
     const effectiveRate = item.is_exempt ? 0 : (Number(item.tax_rate) ?? 18);
     const sacInfo = getSacInfo(item.sac_code || '');
     return {
-      taxable_value: parseFloat(lineResult.line_total || '0'),
+      taxable_value: parseFloat(lineResult.line_total) || 0,
       tax_rate:      effectiveRate,
       cgst_rate:     isInterState ? 0 : effectiveRate / 2,
       sgst_rate:     isInterState ? 0 : effectiveRate / 2,
       igst_rate:     isInterState ? effectiveRate : 0,
-      cgst_amount:   breakdown.cgst ?? 0,
-      sgst_amount:   breakdown.sgst ?? 0,
-      igst_amount:   breakdown.igst ?? 0,
+      cgst_amount:   breakdown.cgst || 0,
+      sgst_amount:   breakdown.sgst || 0,
+      igst_amount:   breakdown.igst || 0,
       is_exempt:     !!(sacInfo.isExempt || item.is_exempt),
     };
   });
@@ -80,20 +80,20 @@ export function calculateInvoiceTax(input) {
     ? calcResult.line_totals.reduce((s, l) => s + (l.tax_breakdown?.igst ?? 0), 0)
     : 0;
 
-  // Step 6 — Return verified result
+  // Step 6 — Return verified result with NaN protection
   return {
     gst_type,
     tds_section,
     tds_rate,
-    subtotal:       parseFloat(calcResult.subtotal),
-    tax_amount:     parseFloat(calcResult.total_tax),
-    cgst_amount,
-    sgst_amount,
-    igst_amount,
-    tds_amount:     parseFloat(calcResult.tds_amount),
-    net_receivable: parseFloat(calcResult.payable_amount),
-    round_off:      parseFloat(calcResult.round_off),
-    grand_total:    parseFloat(calcResult.grand_total),
+    subtotal:       parseFloat(calcResult.subtotal) || 0,
+    tax_amount:     parseFloat(calcResult.total_tax) || 0,
+    cgst_amount:    cgst_amount || 0,
+    sgst_amount:    sgst_amount || 0,
+    igst_amount:    igst_amount || 0,
+    tds_amount:     parseFloat(calcResult.tds_amount) || 0,
+    net_receivable: parseFloat(calcResult.payable_amount) || 0,
+    round_off:      parseFloat(calcResult.round_off) || 0,
+    grand_total:    parseFloat(calcResult.grand_total) || 0,
     line_tax_results,
   };
 }

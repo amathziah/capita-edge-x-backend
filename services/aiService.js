@@ -63,7 +63,8 @@ class AIService {
                 data: action ? action.data : null
             };
         } catch (error) {
-            console.error('AI Query Error:', error);
+            console.error('AI Query Error:', error.message);
+            // If it's a 403/404 on the API key, it will hit here
             return this.fallbackProcessQuery(query, context);
         }
     }
@@ -241,8 +242,12 @@ User Query: "${query}"`;
      * Build chatbot prompt with business context
      */
     buildChatbotPrompt(query, context) {
-        const { invoices = [], customers = [], products = [], stats = {}, agentId } = context;
+        const { invoices = [], customers = [], products = [], expenses = [], stats = {}, agentId } = context;
         const lowerQuery = query.toLowerCase();
+
+        // Summarize expenses for context
+        const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+        const recentExpensesSummary = expenses.slice(0, 5).map(e => `- ${e.description || 'Expense'}: ₹${e.amount} (${new Date(e.date).toLocaleDateString()})`).join('\n');
 
         // --------------------------------------------------
         // SPECIFIC AGENT PERSONAS (From Control Room Map)
@@ -259,10 +264,13 @@ User Query: "${query}"`;
                 return `${persona}
 
 Business Context:
-- Total Revenue: ₹${stats.totalRevenue || 0}
+- Total Revenue: ₹${stats.total_revenue || 0}
+- Total Expenses: ₹${totalExpenses}
 - Total Invoices: ${invoices.length}
-- Overdue Invoices: ${stats.overdueCount || 0}
-- Pending Payments: ₹${stats.pendingPayments || 0}
+- Overdue Invoices: ${stats.overdue_invoices || 0}
+- Pending Payments: ₹${stats.pending_payments || 0}
+- Recent Expenses:
+${recentExpensesSummary || 'None recorded'}
 
 User Query: "${query}"
 
@@ -310,6 +318,7 @@ Business Context:
 - Low Stock Items: ${stats.lowStockCount || 0}
 - Total Products: ${products.length}
 - Inventory Value: ₹${stats.inventoryValue || 0}
+- Total Expenses (to date): ₹${totalExpenses}
 - Persona: ${context.businessType || 'Not set'}
 
 User Query: "${query}"
@@ -317,7 +326,32 @@ User Query: "${query}"
 Be specific. Use numbers. One clear action.`;
         }
 
-        // ... existing payment/general personas ...
+        // Detect Expense Context
+        const isExpenseContext = [
+            'expense', 'spend', 'spent', 'cost', 'buy', 'bought', 'purchase', 'burn', 'outflow'
+        ].some(keyword => lowerQuery.includes(keyword));
+
+        if (isExpenseContext) {
+            return `You are Capita — the AI Cash Flow & Expense Specialist.
+Your job is to help the user understand where their money is going.
+
+EXPENSE ANALYSIS RULES:
+- Always lead with the total spend for the period requested.
+- Categorize large expenses if possible.
+- Flag any unusual spending or high burn rates.
+- Compare expenses to revenue to show "Net Cash Flow".
+
+Business Context:
+- Total Revenue: ₹${stats.total_revenue || 0}
+- Total Expenses (Loaded): ₹${totalExpenses}
+- Net Cash Flow: ₹${(stats.total_revenue || 0) - totalExpenses}
+- Recent Expenses List:
+${recentExpensesSummary || 'None recorded'}
+
+User Query: "${query}"
+
+Respond with specific numbers. Be direct about the business's spending health.`;
+        }
 
         // Detect Payment Context
         const isPaymentContext = [
@@ -338,9 +372,10 @@ Your goals are:
 - Optimize for local-first storage + low cloud cost
 
 Business Context:
-- Total Revenue: ₹${stats.totalRevenue || 0}
-- Overdue Invoices: ${stats.overdueCount || 0}
-- Pending Payments: ₹${stats.pendingPayments || 0}
+- Total Revenue: ₹${stats.total_revenue || 0}
+- Total Expenses: ₹${totalExpenses}
+- Overdue Invoices: ${stats.overdue_invoices || 0}
+- Pending Payments: ₹${stats.pending_payments || 0}
 - Recent Activity: ${stats.recentActivity ? JSON.stringify(stats.recentActivity) : 'None'}
 
 User Query: "${query}"
@@ -446,10 +481,14 @@ Business Context:
 - Total Invoices: ${invoices.length}
 - Total Customers: ${customers.length}  
 - Total Products: ${products.length}
-- Total Revenue: ₹${stats.totalRevenue || 0}
-- Overdue Invoices: ${stats.overdueCount || 0}
-- Pending Payments: ₹${stats.pendingPayments || 0}
+- Total Revenue: ₹${stats.total_revenue || 0}
+- Total Expenses: ₹${totalExpenses}
+- Net Cash Flow: ₹${(stats.total_revenue || 0) - totalExpenses}
+- Overdue Invoices: ${stats.overdue_invoices || 0}
+- Pending Payments: ₹${stats.pending_payments || 0}
 - Persona: ${context.businessType || 'Not set'}
+- Recent Expenses:
+${recentExpensesSummary || 'None recorded'}
 
 User Query: "${query}"
 
@@ -812,15 +851,18 @@ JSON:`;
 
     fallbackProcessQuery(query, context) {
         const q = query.toLowerCase().trim();
-        const { invoices = [], customers = [], products = [], stats = {} } = context;
+        const { invoices = [], customers = [], products = [], expenses = [], stats = {} } = context;
+
+        const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
         // ─── GREETINGS ───
         if (/^(hi|hello|hey|sup|yo|good morning|good evening|good afternoon|what's up|howdy)\b/.test(q)) {
-            const totalRev = stats.totalRevenue || 0;
-            const overdueCount = stats.overdueCount || 0;
-            const lowStock = stats.lowStockCount || 0;
+            const totalRev = stats.total_revenue || 0;
+            const overdueCount = stats.overdue_invoices || 0;
+            const lowStock = stats.low_stock_items || 0;
             let greeting = "👋 Hey, I'm Capita — your AI CFO inside CapitaEdgeX. Here's your business right now:\n\n";
             greeting += `💰 **Revenue**: ₹${totalRev.toLocaleString()}\n`;
+            greeting += `💸 **Expenses**: ₹${totalExpenses.toLocaleString()}\n`;
             greeting += `📄 **Invoices**: ${invoices.length} total`;
             if (overdueCount > 0) greeting += ` (⚠️ ${overdueCount} overdue)`;
             greeting += `\n👥 **Customers**: ${customers.length}\n`;
@@ -846,7 +888,7 @@ JSON:`;
 
         // ─── REVENUE / SALES ───
         if (q.includes('revenue') || q.includes('sales') || q.includes('earning') || q.includes('income')) {
-            const totalRev = stats.totalRevenue || 0;
+            const totalRev = stats.total_revenue || 0;
             const paidInvoices = invoices.filter(i => i.status === 'paid');
             const thisMonth = new Date().getMonth();
             const thisMonthRev = paidInvoices
@@ -865,11 +907,10 @@ JSON:`;
 
         // ─── EXPENSES ───
         if (q.includes('expense') || q.includes('spending') || q.includes('cost') || q.includes('spent')) {
-            const totalExp = stats.totalExpenses || 0;
             return {
                 text: `💸 **Expense Summary**\n\n` +
-                    `• **Total Expenses**: ₹${totalExp.toLocaleString()}\n` +
-                    `• **Net Profit**: ₹${((stats.totalRevenue || 0) - totalExp).toLocaleString()}\n\n` +
+                    `• **Total Expenses**: ₹${totalExpenses.toLocaleString()}\n` +
+                    `• **Net Profit**: ₹${((stats.total_revenue || 0) - totalExpenses).toLocaleString()}\n\n` +
                     `View detailed breakdown on the Expenses page.`,
                 action: { type: 'navigate', data: { to: '/expenses' } }
             };
@@ -877,8 +918,8 @@ JSON:`;
 
         // ─── PROFIT / MARGIN ───
         if (q.includes('profit') || q.includes('margin') || q.includes('net') || q.includes('bottom line')) {
-            const rev = stats.totalRevenue || 0;
-            const exp = stats.totalExpenses || 0;
+            const rev = stats.total_revenue || 0;
+            const exp = totalExpenses;
             const profit = rev - exp;
             const margin = rev > 0 ? Math.round((profit / rev) * 100) : 0;
             return {

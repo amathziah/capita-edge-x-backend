@@ -20,15 +20,18 @@ export const processChat = async (req, res) => {
         { data: invoices },
         { data: customers },
         { data: products },
+        { data: expenses },
         stats
     ] = await Promise.all([
         supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('customers').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('products').select('*').eq('organization_id', req.user.organizationId),
+        supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(20),
         analyticsService.getDashboardStats(req.user.organizationId) // Pass orgId to stats
     ]);
 
-    const context = { invoices, customers, products, stats, agentId };
+    const context = { invoices, customers, products, expenses, stats, agentId };
+
     const response = await aiService.processQuery(query, context);
 
     // [AUDIT] Log AI Request

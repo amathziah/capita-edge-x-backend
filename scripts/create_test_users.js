@@ -28,7 +28,7 @@ const testUsers = [
     { email: 'agency@capita.test', persona: 'services_firm', company: 'Agile Agency' },
     { email: 'saas@capita.test', persona: 'subscription', company: 'Cloud Scale Inc' },
     { email: 'ecom@capita.test', persona: 'ecommerce', company: 'Global Goods' },
-    { email: 'ca@capita.test', persona: 'ca', company: 'Elite Accounting' }
+    { email: 'ca@capita.test', persona: 'ca_firm', company: 'Elite Accounting' }
 ];
 
 const password = 'CapitaTest123!';

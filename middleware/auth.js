@@ -14,7 +14,7 @@ export const authenticateUser = async (req, res, next) => {
 
     try {
         // --- DEVELOPER BYPASS ---
-        if (token === 'mock-token-xyz-developer-bypass') {
+        if (process.env.NODE_ENV !== 'production' && token === 'mock-token-xyz-developer-bypass') {
             const activeClientId = req.headers['x-active-client-id'];
             const mockOrgId = orgIdHeader || 'mock-org-id';
             req.user = {

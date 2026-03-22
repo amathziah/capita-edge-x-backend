@@ -1,32 +1,35 @@
+import crypto from 'crypto';
 import { supabase } from '../supabase.js';
 import { APIError } from '../middleware/errorHandler.js';
 import emailService from '../services/emailService.js';
 
-// Helper to ensure URL has protocol
-const ensureProtocol = (url) => {
-    if (!url) return null;
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
-    return `https://${url}`;
+/**
+ * Helper to hash OTP for secure storage
+ */
+const hashOTP = (otp) => {
+    return crypto.createHash('sha256').update(otp).digest('hex');
 };
 
-// Helper to generate 6-digit OTP
+/**
+ * Helper to generate 6-digit OTP
+ */
 const generateOTP = () => {
     return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
 /**
  * Provision a new organization for a user
- * This is called AFTER Supabase Auth signup
  */
 export const provisionOrganization = async (req, res) => {
-    const { companyName } = req.body;
+    const { companyName, businessType } = req.body;
     const userId = req.user.id;
+    const email = req.user.email;
 
     if (!companyName) {
         throw new APIError('Company name is required', 400);
     }
 
-    // 1. Check if user already has an organization
+    // 1. Check if user already has an organization (Fix Bug 1: 200 on existing)
     const { data: existingOrg } = await supabase
         .from('organization_users')
         .select('organization_id')
@@ -34,13 +37,26 @@ export const provisionOrganization = async (req, res) => {
         .limit(1);
 
     if (existingOrg && existingOrg.length > 0) {
-        return res.status(400).json({
-            error: 'User already belongs to an organization',
-            organizationId: existingOrg[0].organization_id
+        const orgId = existingOrg[0].organization_id;
+        
+        // Ensure profile has this organizationId and businessType (Self-healing)
+        const profileUpdate = { organization_id: orgId };
+        if (businessType) {
+            profileUpdate.business_type = businessType;
+        }
+        await supabase.from('profiles').update(profileUpdate).eq('id', userId);
+
+        return res.status(200).json({
+            success: true,
+            alreadyProvisioned: true,
+            organizationId: orgId
         });
     }
 
     try {
+        // Use businessType from body, fallback to metadata (Fix Bug 2 & 8)
+        const selectedPersona = businessType || req.user.user_metadata?.business_type || 'solopreneur';
+
         // 2. Create the Organization
         const { data: org, error: orgError } = await supabase
             .from('organizations')
@@ -65,24 +81,127 @@ export const provisionOrganization = async (req, res) => {
 
         if (linkError) throw new Error(`User Linking Failed: ${linkError.message}`);
 
-        // 4. Seed Default Configs
+        // 4. Create User Profile (Fix Bug 3 & Redirect Loop)
+        const { error: profileError } = await supabase
+            .from('profiles')
+            .upsert({
+                id: userId,
+                organization_id: org.id,
+                business_type: selectedPersona,
+                role: 'member'
+            });
+
+        if (profileError) throw new Error(`Profile creation failed: ${profileError.message}`);
+
+        // 5. Seed Default Configs
         await supabase.from('organization_configs').insert([
             {
                 organization_id: org.id,
                 business_name: companyName,
                 currency: 'INR',
                 tax_label: 'GST',
-                invoice_prefix: 'INV-'
+                invoice_prefix: 'INV-',
+                business_type: selectedPersona
             }
         ]);
 
-        // 5. Seed Default Accounts for COA
+        // 6. Seed Invoice Sequences (Fix Bug 4)
+        await supabase.from('invoice_sequences').insert([
+            {
+                organization_id: org.id,
+                last_number: 0,
+                prefix: 'INV-',
+                current_year: new Date().getFullYear(),
+                reset_annually: true
+            }
+        ]);
+
+        // 7. Seed Default Accounts
         await supabase.from('accounts').insert([
             { organization_id: org.id, name: 'Accounts Receivable', account_type: 'asset' },
             { organization_id: org.id, name: 'Sales Revenue', account_type: 'revenue' },
             { organization_id: org.id, name: 'Bank', account_type: 'asset' },
             { organization_id: org.id, name: 'Cash on Hand', account_type: 'asset' }
         ]);
+        
+        // Step 8: Seed compliance tasks for freelancer and service firm
+        if (selectedPersona === 'solopreneur' || selectedPersona === 'services_firm') {
+            const now = new Date();
+            const currentYear = now.getFullYear();
+            
+            // Next month for GST filing dates
+            const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+            const nextYear = nextMonthDate.getFullYear();
+            const nextMonth = String(nextMonthDate.getMonth() + 1).padStart(2, '0');
+
+            const complianceTasks = [
+                {
+                    organization_id: org.id,
+                    type: 'GST Filing',
+                    description: 'File GSTR-1 — outward supplies return for previous month',
+                    due_date: `${nextYear}-${nextMonth}-11`,
+                    status: 'pending',
+                    priority: 'high',
+                    notes: 'File by 11th of every month on GST portal'
+                },
+                {
+                    organization_id: org.id,
+                    type: 'GST Filing',
+                    description: 'File GSTR-3B — monthly tax payment return',
+                    due_date: `${nextYear}-${nextMonth}-20`,
+                    status: 'pending',
+                    priority: 'high',
+                    notes: 'Pay net GST liability and file by 20th of every month'
+                },
+                {
+                    organization_id: org.id,
+                    type: 'Advance Tax',
+                    description: 'Q1 Advance Tax — pay 15% of estimated annual tax liability',
+                    due_date: `${currentYear}-06-15`,
+                    status: 'pending',
+                    priority: 'medium',
+                    notes: 'Section 208 — mandatory if tax liability > ₹10,000/year'
+                },
+                {
+                    organization_id: org.id,
+                    type: 'Advance Tax',
+                    description: 'Q2 Advance Tax — cumulative 45% of annual liability',
+                    due_date: `${currentYear}-09-15`,
+                    status: 'pending',
+                    priority: 'medium',
+                    notes: 'Pay on NSDL portal using Challan 280'
+                },
+                {
+                    organization_id: org.id,
+                    type: 'Advance Tax',
+                    description: 'Q3 Advance Tax — cumulative 75% of annual liability',
+                    due_date: `${currentYear}-12-15`,
+                    status: 'pending',
+                    priority: 'medium',
+                    notes: 'Pay on NSDL portal using Challan 280'
+                },
+                {
+                    organization_id: org.id,
+                    type: 'Advance Tax',
+                    description: 'Q4 Final Advance Tax — 100% of annual liability',
+                    due_date: `${currentYear + 1}-03-15`,
+                    status: 'pending',
+                    priority: 'high',
+                    notes: 'Final payment — shortfall attracts interest under Section 234B/234C'
+                },
+                {
+                    organization_id: org.id,
+                    type: 'TDS',
+                    description: 'Request Form 16A from all clients who deducted TDS this year',
+                    due_date: `${currentYear}-06-15`,
+                    status: 'pending',
+                    priority: 'medium',
+                    notes: 'Form 16A needed to claim TDS credit in your ITR. Client must issue by 15 June.'
+                },
+            ];
+
+            await supabase.from('compliance_tasks').insert(complianceTasks);
+        }
 
         res.status(201).json({
             success: true,
@@ -96,45 +215,30 @@ export const provisionOrganization = async (req, res) => {
 };
 
 /**
- * Resend confirmation email using backend SMTP as fallback
+ * Resend confirmation email
  */
 export const resendConfirmation = async (req, res) => {
-    const { email } = req.body;
-
-    if (!email) {
-        throw new APIError('Email is required', 400);
-    }
+    const email = req.user.email; // From authenticateUser middleware
+    const userId = req.user.id;
 
     try {
         const otp = generateOTP();
+        const otpHash = hashOTP(otp);
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
 
-        // 1. Update user metadata with new OTP
-        const { error: updateError } = await supabase.auth.admin.updateUserById(
-            // We need to find the user first to get their ID, or use email if supported by admin.updateUser
-            // Supabase admin.updateUser requires ID. Let's get user by email.
-            null, // This is a bit tricky if we don't have ID.
-            { user_metadata: { otp: otp, otp_sent_at: new Date().toISOString() } }
-        );
-        // Wait, admin.updateUserById is the correct one but needs id.
-        // Let's find user by email first.
-        const { data: { users }, error: findError } = await supabase.auth.admin.listUsers();
-        const user = users.find(u => u.email === email);
+        // 1. Store in otp_verifications (Fix Bugs 5, 6, 7)
+        const { error: otpError } = await supabase
+            .from('otp_verifications')
+            .insert([{
+                user_id: userId,
+                email: email,
+                otp_hash: otpHash,
+                expires_at: expiresAt
+            }]);
 
-        if (findError || !user) {
-            throw new APIError('User not found', 404);
-        }
+        if (otpError) throw new Error(`Failed to store verification code: ${otpError.message}`);
 
-        const { error: otpUpdateError } = await supabase.auth.admin.updateUserById(
-            user.id,
-            { user_metadata: { ...user.user_metadata, otp: otp, otp_sent_at: new Date().toISOString() } }
-        );
-
-        if (otpUpdateError) {
-            console.error('[OTP Update Error]:', otpUpdateError);
-            throw new APIError(otpUpdateError.message, 400);
-        }
-
-        // 2. Send via our EmailService
+        // 2. Send via EmailService
         await emailService.sendOtpEmail(email, otp);
 
         res.status(200).json({
@@ -159,44 +263,37 @@ export const verifyOtp = async (req, res) => {
     }
 
     try {
-        // 1. Find user by email
-        const { data: { users }, error: findError } = await supabase.auth.admin.listUsers();
-        const user = users.find(u => u.email === email);
+        const otpHash = hashOTP(otp);
 
-        if (findError || !user) {
-            throw new APIError('User not found', 404);
+        // 1. Find valid OTP (Fix Bug 5: bypass pagination)
+        const { data: verification, error: otpError } = await supabase
+            .from('otp_verifications')
+            .select('*')
+            .eq('email', email)
+            .eq('otp_hash', otpHash)
+            .is('used_at', null)
+            .gt('expires_at', new Date().toISOString())
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+        if (otpError || !verification) {
+            throw new APIError('Invalid or expired verification code', 400);
         }
 
-        // 2. Validate OTP
-        const storedOtp = user.user_metadata?.otp;
-        const otpSentAt = user.user_metadata?.otp_sent_at;
+        // 2. Mark OTP as used
+        await supabase
+            .from('otp_verifications')
+            .update({ used_at: new Date().toISOString() })
+            .eq('id', verification.id);
 
-        if (!storedOtp || storedOtp !== otp) {
-            throw new APIError('Invalid verification code', 400);
-        }
-
-        // Optional: Check expiration (e.g., 10 minutes)
-        if (otpSentAt) {
-            const sentTime = new Date(otpSentAt).getTime();
-            const now = new Date().getTime();
-            if (now - sentTime > 10 * 60 * 1000) {
-                throw new APIError('Verification code has expired. Please request a new one.', 400);
-            }
-        }
-
-        // 3. Confirm User
+        // 3. Confirm User via Admin API
         const { error: confirmError } = await supabase.auth.admin.updateUserById(
-            user.id,
-            {
-                email_confirm: true,
-                user_metadata: { ...user.user_metadata, otp: null, otp_sent_at: null } // Clear OTP
-            }
+            verification.user_id,
+            { email_confirm: true }
         );
 
-        if (confirmError) {
-            console.error('[OTP Confirmation Error]:', confirmError);
-            throw new APIError(confirmError.message, 400);
-        }
+        if (confirmError) throw confirmError;
 
         res.status(200).json({
             success: true,
@@ -210,36 +307,44 @@ export const verifyOtp = async (req, res) => {
 };
 
 /**
- * Sign up a new user via Backend to ensure SMTP emails
+ * Sign up a new user
  */
 export const signUp = async (req, res) => {
-    const { email, password, companyName } = req.body;
+    const { email, password, companyName, businessType } = req.body;
 
     if (!email || !password || !companyName) {
         throw new APIError('Email, password, and company name are required', 400);
     }
 
     try {
-        const otp = generateOTP();
-
-        // 1. Create User in Supabase (Admin API)
+        // 1. Create User in Supabase (Confirm Bug 8: businessType saved in metadata)
         const { data: userData, error: userError } = await supabase.auth.admin.createUser({
             email,
             password,
             user_metadata: {
                 company_name: companyName,
-                otp: otp,
-                otp_sent_at: new Date().toISOString()
+                business_type: businessType || 'solopreneur'
             },
             email_confirm: false
         });
 
-        if (userError) {
-            console.error('[Signup User Creation Error]:', userError);
-            throw new APIError(userError.message, 400);
-        }
+        if (userError) throw new APIError(userError.message, 400);
 
-        // 2. Send via SMTP
+        // 2. Generate and store OTP (Fix Bug 6: Secure Hashing)
+        const otp = generateOTP();
+        const otpHash = hashOTP(otp);
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+        await supabase
+            .from('otp_verifications')
+            .insert([{
+                user_id: userData.user.id,
+                email: email,
+                otp_hash: otpHash,
+                expires_at: expiresAt
+            }]);
+
+        // 3. Send via SMTP
         await emailService.sendOtpEmail(email, otp);
 
         res.status(201).json({

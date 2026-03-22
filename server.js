@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { authenticateUser } from './middleware/auth.js';
 import { sanitizeInput } from './middleware/validation.js';
-import { checkPlanLimits } from './middleware/checkPlan.js';
+
 
 // Routes
 import aiRoutes from './routes/aiRoutes.js';
@@ -25,8 +25,6 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
 import systemRoutes from './routes/systemRoutes.js';
-import webhookRoutes from './routes/webhooks.js';
-import planRoutes from './routes/planRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 
 // Load environment variables
@@ -82,14 +80,7 @@ app.get('/health', (req, res) => {
     });
 });
 
-// ============================================================================
-// WEBHOOKS
-// ============================================================================
-app.use('/api/webhooks', express.json({
-    verify: (req, res, buf) => {
-        req.rawBody = buf;
-    }
-}), webhookRoutes);
+
 
 // ============================================================================
 // API ROUTES (Authenticated)
@@ -97,7 +88,6 @@ app.use('/api/webhooks', express.json({
 
 // Authentication Middleware - Protects all /api routes (EXCEPT webhooks and shared invoices)
 app.use('/api/', (req, res, next) => {
-    if (req.path.startsWith('/webhooks')) return next();
     if (req.path.includes('/invoices/share/')) return next();
     if (req.path.includes('/auth/signup')) return next();
     if (req.path.includes('/auth/resend-confirmation')) return next();
@@ -105,8 +95,7 @@ app.use('/api/', (req, res, next) => {
     authenticateUser(req, res, next);
 });
 
-// Plan Liimits
-app.use('/api/', checkPlanLimits);
+
 
 // Mount Routes
 app.use('/api/auth', authRoutes);
@@ -119,7 +108,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/system', systemRoutes);
-app.use('/api/plans', planRoutes);
+
 app.use('/api/reports', reportRoutes);
 
 // Shared prefixes / General Routes

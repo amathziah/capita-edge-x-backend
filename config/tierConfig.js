@@ -151,16 +151,7 @@ export const hasTierFeature = (tier, feature) => {
     return val === true || val === 'full' || val === 'custom' || val === 'basic';
 };
 
-/**
- * Map Lemon Squeezy variant IDs to tiers.
- * Update these when you create products in Lemon Squeezy.
- */
-export const VARIANT_TO_TIER = {
-    [process.env.LS_VARIANT_FREELANCER || 'freelancer_variant']: 'freelancer',
-    [process.env.LS_VARIANT_SMB || 'smb_variant']: 'smb',
-    [process.env.LS_VARIANT_CA_PRO || 'ca_pro_variant']: 'ca_pro',
-    // Enterprise is handled via contact sales, not checkout
-};
+
 
 /**
  * All valid tier slugs.

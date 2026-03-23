@@ -22,6 +22,7 @@ router.post('/ai/magic-fill', aiLimiter, asyncHandler(aiController.magicFill));
 router.get('/ai/insights', aiLimiter, asyncHandler(aiController.getInsights));
 router.get('/ai/predict-revenue', aiLimiter, asyncHandler(aiController.predictRevenue));
 router.post('/ai/command', aiLimiter, asyncHandler(aiController.processCommand));
+router.get('/ai/config', aiLimiter, asyncHandler(aiController.getConfig));
 
 // Smart Collections
 router.post('/ai/collections/generate-draft', aiLimiter, asyncHandler(aiController.generateCollectionDraft));

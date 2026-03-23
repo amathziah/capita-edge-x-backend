@@ -178,6 +178,40 @@ export const createInvoice = async (req, res) => {
     const calculatedTax = calculatedSubtotal * ((taxRate || 0) / 100);
     const calculatedTotal = calculatedSubtotal + calculatedTax;
 
+    // --- MOVE STOCK VALIDATION HERE ---
+    // 1. Group items by productId for aggregated stock updates
+    const productQuantities = items.reduce((acc, item) => {
+        if (item.productId) {
+            acc[item.productId] = (acc[item.productId] || 0) + (item.quantity || 0);
+        }
+        return acc;
+    }, {});
+
+    const productIdsToUpdate = Object.keys(productQuantities);
+
+    // 2. Validate stock levels before insertion (Transactional logic simulation)
+    if (productIdsToUpdate.length > 0) {
+        const { data: currentProducts, error: fetchError } = await supabase
+            .from('products')
+            .select('id, name, stock, is_inventory_tracked')
+            .in('id', productIdsToUpdate)
+            .eq('organization_id', req.user.organizationId);
+
+        if (fetchError) throw new APIError('Failed to verify inventory stock', 500);
+
+        for (const p of currentProducts) {
+            // Only validate if inventory is tracked
+            if (p.is_inventory_tracked) {
+                const requestedQty = productQuantities[p.id];
+                // Check if stock would drop below zero
+                if ((p.stock || 0) - requestedQty < 0) {
+                    throw new APIError(`Insufficient stock for ${p.name}. Available: ${p.stock}, Requested: ${requestedQty}`, 400);
+                }
+            }
+        }
+    }
+    // --- END STOCK VALIDATION ---
+
     // Create Invoice with Jittered Exponential Backoff for High Concurrency
     let invoice = null;
     let insertError = null;
@@ -274,37 +308,6 @@ export const createInvoice = async (req, res) => {
         throw new APIError(`Failed to generate a unique invoice number after ${maxAttempts} attempts. Last error: ${insertError?.message}`, 500);
     }
 
-    // 1. Group items by productId for aggregated stock updates
-    const productQuantities = items.reduce((acc, item) => {
-        if (item.productId) {
-            acc[item.productId] = (acc[item.productId] || 0) + (item.quantity || 0);
-        }
-        return acc;
-    }, {});
-
-    const productIdsToUpdate = Object.keys(productQuantities);
-
-    // 2. Validate stock levels before proceeding (Transactional logic simulation)
-    if (productIdsToUpdate.length > 0) {
-        const { data: currentProducts, error: fetchError } = await supabase
-            .from('products')
-            .select('id, name, stock, is_inventory_tracked')
-            .in('id', productIdsToUpdate)
-            .eq('organization_id', req.user.organizationId);
-
-        if (fetchError) throw new APIError('Failed to verify inventory stock', 500);
-
-        for (const p of currentProducts) {
-            // Only validate if inventory is tracked
-            if (p.is_inventory_tracked) {
-                const requestedQty = productQuantities[p.id];
-                // "Never less than 1" - User requested stock to not drop below 1
-                if ((p.stock || 0) - requestedQty < 0) {
-                    throw new APIError(`Insufficient stock for ${p.name}. Available: ${p.stock}, Requested: ${requestedQty}`, 400);
-                }
-            }
-        }
-    }
 
     // Insert Items
     const invoiceItems = (req.body.items || []).map((item, i) => {
@@ -406,23 +409,62 @@ export const updateInvoice = async (req, res) => {
     const id = req.params.id;
     const { items, ...updates } = req.body;
 
-    // Check ownership
-    const { data: existing } = await supabase
+    // 1. Check ownership and fetch existing data
+    const { data: existing, error: findError } = await supabase
         .from('invoices')
         .select(`*, customers!invoices_customer_id_fkey (*)`)
         .eq('id', id)
         .eq('organization_id', req.user.organizationId)
         .single();
 
-    if (!existing) throw new APIError('Invoice not found', 404);
+    if (findError || !existing) throw new APIError('Invoice not found', 404);
 
-    let taxResult = null;
-    
-    // Recalculate tax if items or core tax fields are present in the request
-    if (items) {
-        // We use existing values as fallbacks for the tax calculator if not provided in updates
-        taxResult = calculateInvoiceTax({
-            items:            items || [],
+    // 2. Handle Customer Update/Sync if buyer is provided
+    let customer_id = existing.customer_id;
+    if (updates.buyer && updates.buyer.name) {
+        const { data: customerMatch } = await supabase
+            .from('customers')
+            .select('id')
+            .eq('name', updates.buyer.name)
+            .eq('organization_id', req.user.organizationId)
+            .single();
+
+        if (customerMatch) {
+            customer_id = customerMatch.id;
+            // Update existing customer info
+            await supabase
+                .from('customers')
+                .update({
+                    email: updates.buyer.email || null,
+                    phone: updates.buyer.phone || null,
+                    address: updates.buyer.address || null,
+                    gstin: updates.buyer.gstin || null,
+                    state: updates.buyer.state || getStateFromGstin(updates.buyer.gstin || '') || null
+                })
+                .eq('id', customer_id);
+        } else {
+            // Create new customer if name changed to something non-existent
+            const { data: newCustomer } = await supabase
+                .from('customers')
+                .insert([{
+                    name: updates.buyer.name,
+                    email: updates.buyer.email || null,
+                    organization_id: req.user.organizationId,
+                    state: updates.buyer.state || getStateFromGstin(updates.buyer.gstin || '') || null
+                }])
+                .select()
+                .single();
+            if (newCustomer) customer_id = newCustomer.id;
+        }
+    }
+
+    // 3. Recalculate tax if items or tax-related fields are updated
+    const taxRelevantFields = ['taxRate', 'tax_rate', 'discount', 'discountAmount', 'discount_amount', 'shipping', 'isGstRegistered', 'lutNumber', 'reverseCharge', 'tdsApplicable'];
+    const isTaxAffected = items || taxRelevantFields.some(field => updates[field] !== undefined);
+
+    if (isTaxAffected) {
+        const taxResult = calculateInvoiceTax({
+            items:            items || existing.items || [], // Items are required for recalc
             seller_gstin:     updates.seller?.taxId || updates.seller?.gstin || existing.seller?.taxId || existing.seller?.gstin || '',
             buyer_gstin:      updates.buyer?.gstin  || updates.buyer?.taxId  || existing.buyer?.gstin  || existing.buyer?.taxId || existing.customers?.gstin || '',
             persona:          updates.persona || existing.persona || 'solopreneur',
@@ -452,21 +494,71 @@ export const updateInvoice = async (req, res) => {
             net_receivable:  taxResult.net_receivable,
             round_off:       taxResult.round_off,
         });
+
+        // Store taxResult for items update below
+        req.taxResult = taxResult;
     }
 
-    if (!existing) throw new APIError('Invoice not found', 404);
+    // 4. Map ALL possible camelCase fields from frontend to snake_case for Supabase
+    const supabaseUpdates = { 
+        ...updates,
+        customer_id // Ensure synced customer ID is included
+    };
+    
+    const mapping = {
+        dueDate: 'dueDate',
+        taxRate: 'taxRate',
+        taxAmount: 'taxAmount',
+        subtotal: 'subtotal',
+        total: 'total',
+        taxType: 'taxType',
+        discountAmount: 'discount_amount',
+        discount: 'discount',
+        amountPaid: 'amount_paid',
+        shipping: 'shipping',
+        projectName: 'project_name',
+        shippingAddress: 'shipping_address',
+        orderNumber: 'order_number',
+        lutNumber: 'lut_number',
+        reverseCharge: 'reverse_charge',
+        isGstRegistered: 'is_gst_registered',
+        gstType: 'gst_type',
+        cgstAmount: 'cgst_amount',
+        sgstAmount: 'sgst_amount',
+        igstAmount: 'igst_amount',
+        tdsApplicable: 'tds_applicable',
+        tdsRate: 'tds_rate',
+        tdsSection: 'tds_section',
+        tdsAmount: 'tds_amount',
+        netReceivable: 'net_receivable',
+        roundOff: 'round_off',
+        courierName: 'courier_name',
+        courierTracking: 'courier_tracking',
+        dispatchDate: 'dispatch_date',
+        orderRef: 'order_ref'
+    };
 
-    // Update main invoice data
-    const { data: updated, error } = await supabase
+    for (const [camel, snake] of Object.entries(mapping)) {
+        if (supabaseUpdates[camel] !== undefined) {
+             // Only update if mapping targets a different field name
+            if (camel !== snake) {
+                supabaseUpdates[snake] = supabaseUpdates[camel];
+                delete supabaseUpdates[camel];
+            }
+        }
+    }
+
+    // 5. Perform the update in Supabase
+    const { data: updated, error: updateError } = await supabase
         .from('invoices')
-        .update(updates)
+        .update(supabaseUpdates)
         .eq('id', id)
         .select()
         .single();
 
-    if (error) throw new APIError(error.message, 500);
+    if (updateError) throw new APIError(updateError.message, 500);
 
-    // Handle items if provided
+    // 6. Handle items update if provided
     if (items) {
         // Delete existing items
         await supabase
@@ -475,10 +567,18 @@ export const updateInvoice = async (req, res) => {
             .eq('invoiceId', id)
             .eq('organization_id', req.user.organizationId);
 
-        // Insert new items
-        if (items.length > 0 && taxResult) {
+        // Calculate tax for items if not already done
+        const finalTaxResult = req.taxResult || calculateInvoiceTax({
+            items,
+            seller_gstin: updates.seller?.taxId || updates.seller?.gstin || existing.seller?.taxId || existing.seller?.gstin || '',
+            buyer_gstin: updates.buyer?.gstin || updates.buyer?.taxId || existing.buyer?.gstin || existing.buyer?.taxId || existing.customers?.gstin || '',
+            persona: updates.persona || existing.persona || 'solopreneur',
+            is_gst_registered: updates.isGstRegistered !== undefined ? updates.isGstRegistered !== false : existing.is_gst_registered !== false,
+        });
+
+        if (items.length > 0) {
             const invoiceItems = items.map((item, i) => {
-                const lineTax = taxResult.line_tax_results[i] || {};
+                const lineTax = finalTaxResult.line_tax_results[i] || {};
                 return {
                     invoiceId: id,
                     productId: item.productId || null,
@@ -514,7 +614,7 @@ export const updateInvoice = async (req, res) => {
         }
     }
 
-    // Fetch the fully updated invoice to return
+    // 7. Fetch the fully updated invoice to return
     const { data: fullInvoice } = await supabase
         .from('invoices')
         .select(`

@@ -29,6 +29,7 @@
         "uuid": "^13.0.0"
     },
     "devDependencies": {
-        "autocannon": "^8.0.0"
+        "autocannon": "^8.0.0",
+        "supabase": "^2.83.0"
     }
 }

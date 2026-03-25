@@ -33,6 +33,3 @@ BEGIN
         ALTER TABLE public.invoice_items ADD COLUMN sku TEXT;
     END IF;
 END $$;
-
--- 3. Update RLS policies if necessary (usually not needed if already enabled for the tables)
--- Policies for invoices and invoice_items usually use organization_id, which we already handle.

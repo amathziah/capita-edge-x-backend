@@ -4,7 +4,7 @@ import emailService from '../services/emailService.js';
 import fileService from '../services/fileService.js';
 import { APIError } from '../middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../utils/configUtils.js';
-import { calculateInvoiceTax } from '../server/services/taxCalculationService.js';
+import { calculateInvoiceTax } from '../services/taxCalculationService.js';
 import { getStateFromGstin } from '../server/lib/gstUtils.js';
 
 export const getInvoices = async (req, res) => {
@@ -113,16 +113,16 @@ export const createInvoice = async (req, res) => {
     }
 
     const taxResult = calculateInvoiceTax({
-        items:            req.body.items || [],
-        seller_gstin:     req.body.seller?.taxId || req.body.seller?.gstin || '',
-        buyer_gstin:      req.body.buyer?.gstin  || req.body.buyer?.taxId  || '',
-        persona:          req.body.persona || 'solopreneur',
-        delivery_state:   req.body.deliveryState || req.body.delivery_state || undefined,
+        items: req.body.items || [],
+        seller_gstin: req.body.seller?.taxId || req.body.seller?.gstin || '',
+        buyer_gstin: req.body.buyer?.gstin || req.body.buyer?.taxId || '',
+        persona: req.body.persona || 'solopreneur',
+        delivery_state: req.body.deliveryState || req.body.delivery_state || undefined,
         is_gst_registered: req.body.isGstRegistered !== false,
-        lut_number:       req.body.lutNumber || req.body.lut_number || undefined,
-        reverse_charge:   !!(req.body.reverseCharge || req.body.reverse_charge),
-        tds_enabled:      !!(req.body.tdsApplicable || req.body.tdsEnabled),
-        discount_amount:  Number(req.body.discountAmount || req.body.discount_amount) || 0,
+        lut_number: req.body.lutNumber || req.body.lut_number || undefined,
+        reverse_charge: !!(req.body.reverseCharge || req.body.reverse_charge),
+        tds_enabled: !!(req.body.tdsApplicable || req.body.tdsEnabled),
+        discount_amount: Number(req.body.discountAmount || req.body.discount_amount) || 0,
         shipping_charges: Number(req.body.shipping) || 0,
     });
 
@@ -464,35 +464,35 @@ export const updateInvoice = async (req, res) => {
 
     if (isTaxAffected) {
         const taxResult = calculateInvoiceTax({
-            items:            items || existing.items || [], // Items are required for recalc
-            seller_gstin:     updates.seller?.taxId || updates.seller?.gstin || existing.seller?.taxId || existing.seller?.gstin || '',
-            buyer_gstin:      updates.buyer?.gstin  || updates.buyer?.taxId  || existing.buyer?.gstin  || existing.buyer?.taxId || existing.customers?.gstin || '',
-            persona:          updates.persona || existing.persona || 'solopreneur',
-            delivery_state:   updates.deliveryState || updates.delivery_state || existing.delivery_state || undefined,
+            items: items || existing.items || [], // Items are required for recalc
+            seller_gstin: updates.seller?.taxId || updates.seller?.gstin || existing.seller?.taxId || existing.seller?.gstin || '',
+            buyer_gstin: updates.buyer?.gstin || updates.buyer?.taxId || existing.buyer?.gstin || existing.buyer?.taxId || existing.customers?.gstin || '',
+            persona: updates.persona || existing.persona || 'solopreneur',
+            delivery_state: updates.deliveryState || updates.delivery_state || existing.delivery_state || undefined,
             is_gst_registered: updates.isGstRegistered !== undefined ? updates.isGstRegistered !== false : existing.is_gst_registered !== false,
-            lut_number:       updates.lutNumber || updates.lut_number || existing.lut_number || undefined,
-            reverse_charge:   !!(updates.reverseCharge || updates.reverse_charge || existing.reverse_charge),
-            tds_enabled:      !!(updates.tdsApplicable || updates.tdsEnabled || existing.tds_applicable),
-            discount_amount:  Number(updates.discountAmount || updates.discount_amount) || Number(existing.discount_amount) || 0,
+            lut_number: updates.lutNumber || updates.lut_number || existing.lut_number || undefined,
+            reverse_charge: !!(updates.reverseCharge || updates.reverse_charge || existing.reverse_charge),
+            tds_enabled: !!(updates.tdsApplicable || updates.tdsEnabled || existing.tds_applicable),
+            discount_amount: Number(updates.discountAmount || updates.discount_amount) || Number(existing.discount_amount) || 0,
             shipping_charges: Number(updates.shipping) || Number(existing.shipping) || 0,
         });
-        
+
         // Merge computed tax values into the updates payload
         Object.assign(updates, {
-            subtotal:        taxResult.subtotal,
-            taxAmount:       taxResult.tax_amount,
-            taxType:         'GST',
-            total:           taxResult.grand_total,
-            cgst_amount:     taxResult.cgst_amount,
-            sgst_amount:     taxResult.sgst_amount,
-            igst_amount:     taxResult.igst_amount,
-            gst_type:        taxResult.gst_type,
-            tds_applicable:  !!(updates.tdsApplicable || updates.tdsEnabled || existing.tds_applicable),
-            tds_rate:        taxResult.tds_rate,
-            tds_section:     taxResult.tds_section,
-            tds_amount:      taxResult.tds_amount,
-            net_receivable:  taxResult.net_receivable,
-            round_off:       taxResult.round_off,
+            subtotal: taxResult.subtotal,
+            taxAmount: taxResult.tax_amount,
+            taxType: 'GST',
+            total: taxResult.grand_total,
+            cgst_amount: taxResult.cgst_amount,
+            sgst_amount: taxResult.sgst_amount,
+            igst_amount: taxResult.igst_amount,
+            gst_type: taxResult.gst_type,
+            tds_applicable: !!(updates.tdsApplicable || updates.tdsEnabled || existing.tds_applicable),
+            tds_rate: taxResult.tds_rate,
+            tds_section: taxResult.tds_section,
+            tds_amount: taxResult.tds_amount,
+            net_receivable: taxResult.net_receivable,
+            round_off: taxResult.round_off,
         });
 
         // Store taxResult for items update below
@@ -500,11 +500,11 @@ export const updateInvoice = async (req, res) => {
     }
 
     // 4. Map ALL possible camelCase fields from frontend to snake_case for Supabase
-    const supabaseUpdates = { 
+    const supabaseUpdates = {
         ...updates,
         customer_id // Ensure synced customer ID is included
     };
-    
+
     const mapping = {
         dueDate: 'dueDate',
         taxRate: 'taxRate',
@@ -540,7 +540,7 @@ export const updateInvoice = async (req, res) => {
 
     for (const [camel, snake] of Object.entries(mapping)) {
         if (supabaseUpdates[camel] !== undefined) {
-             // Only update if mapping targets a different field name
+            // Only update if mapping targets a different field name
             if (camel !== snake) {
                 supabaseUpdates[snake] = supabaseUpdates[camel];
                 delete supabaseUpdates[camel];

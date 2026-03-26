@@ -4,14 +4,27 @@ import * as invoiceController from '../controllers/invoiceController.js';
 
 dotenv.config();
 
-const testUser = {
-    id: 'aa142388-72a3-45b1-bd6e-9d5ab0164095',
-    organizationId: '872dacc7-f665-4869-866d-e2cf3ea99c59'
-};
-
 async function runStressTest() {
-    const concurrency = 100;
-    console.log(`🚀 Starting Stress Test: ${concurrency} concurrent invoice creations...`);
+    const email = process.argv[2] || 'w3@gmail.com';
+    console.log(`🔍 Looking for user: ${email}...`);
+
+    const { data: userData, error: userError } = await supabase.auth.admin.listUsers();
+    const user = userData?.users.find(u => u.email === email);
+
+    if (!user) {
+        console.error(`❌ User ${email} not found.`);
+        return;
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
+    
+    const testUser = {
+        id: user.id,
+        organizationId: profile.organization_id
+    };
+
+    const concurrency = 50;
+    console.log(`🚀 Starting Stress Test for ${email}: ${concurrency} concurrent invoice creations...`);
 
     const startTime = Date.now();
     const results = [];

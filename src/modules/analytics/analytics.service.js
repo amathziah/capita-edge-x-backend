@@ -107,7 +107,7 @@ class AnalyticsService {
 
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('id, customerId, status, total, createdAt')
+            .select('id, customer_id, status, total, createdAt')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -129,8 +129,8 @@ class AnalyticsService {
         });
 
         invoices.forEach(inv => {
-            if (customerStats[inv.customerId]) {
-                const stats = customerStats[inv.customerId];
+            if (customerStats[inv.customer_id]) {
+                const stats = customerStats[inv.customer_id];
                 stats.total_invoices++;
                 stats._total_value_for_avg += inv.total;
 

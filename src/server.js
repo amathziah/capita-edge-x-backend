@@ -41,9 +41,9 @@ app.use(helmet());
 
 // Hardened CORS Configuration
 const allowedOrigins = [
-    process.env.APP_URL, // Production Frontend
-    'http://localhost:5173', // Local Dev
-    'http://localhost:5174'  // Local Dev Alternative
+    process.env.APP_URL?.replace(/\/$/, ''), // Production Frontend (trim trailing slash)
+    'http://localhost:5173', 
+    'http://localhost:5174'
 ].filter(Boolean);
 
 app.use(cors({
@@ -62,8 +62,9 @@ app.use(cors({
         }
         
         console.warn(`Blocked by CORS: ${origin}`);
-        const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-        return callback(new Error(msg), false);
+        const err = new Error('CORS Policy Violation');
+        err.statusCode = 403;
+        return callback(err, false);
     },
     credentials: true
 }));

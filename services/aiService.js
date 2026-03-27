@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
+import { formatCurrency, getCurrencySymbol } from '../utils/formatting.js';
 
 dotenv.config();
 
@@ -86,7 +87,8 @@ class AIService {
             }
         });
 
-        const { invoices = [], customers = [], products = [], stats = {} } = contextData;
+    const { invoices = [], customers = [], products = [], stats = {}, currency } = contextData;
+    const curSymbol = getCurrencySymbol(currency);
 
         let systemPrompt = "";
 
@@ -97,7 +99,7 @@ Your task is to analyze overdue invoices and draft a polite reminder email if re
 
 CONTEXT:
 - Total Overdue Invoices: ${stats.overdueCount || 0}
-- Revenue Pending: ₹${stats.pendingPayments || 0}
+- Revenue Pending: ${formatCurrency(stats.pendingPayments, currency)}
 - Invoice Data: ${JSON.stringify(invoices.filter(i => i.status === 'overdue').slice(0, 3))}
 
 CRITICAL INSTRUCTION: You MUST return a raw JSON object matching EXACTLY this schema:
@@ -207,7 +209,7 @@ User Query: "${query}"`;
                 return {
                     text: JSON.stringify({
                         action_type: "text_only",
-                        message: `The generative AI node is offline. Executing standard data fetch instead.\n\n[SYSTEM STATS]\nTotal Revenue: ₹${stats.totalRevenue || 0}\nOverdue: ${stats.overdueCount || 0}\nPending Recovery: ₹${stats.pendingPayments || 0}\n\nRouting to detailed reports...`,
+                        message: `The generative AI node is offline. Executing standard data fetch instead.\n\n[SYSTEM STATS]\nTotal Revenue: ${formatCurrency(stats.totalRevenue, contextData.currency)}\nOverdue: ${stats.overdueCount || 0}\nPending Recovery: ${formatCurrency(stats.pendingPayments, contextData.currency)}\n\nRouting to detailed reports...`,
                         ui_data: {}
                     }),
                     action: { type: 'navigate', data: { to: '/reports' } },
@@ -242,12 +244,13 @@ User Query: "${query}"`;
      * Build chatbot prompt with business context
      */
     buildChatbotPrompt(query, context) {
-        const { invoices = [], customers = [], products = [], expenses = [], stats = {}, agentId } = context;
+        const { invoices = [], customers = [], products = [], expenses = [], stats = {}, agentId, currency } = context;
+        const curSymbol = getCurrencySymbol(currency);
         const lowerQuery = query.toLowerCase();
 
         // Summarize expenses for context
         const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-        const recentExpensesSummary = expenses.slice(0, 5).map(e => `- ${e.description || 'Expense'}: ₹${e.amount} (${new Date(e.date).toLocaleDateString()})`).join('\n');
+        const recentExpensesSummary = expenses.slice(0, 5).map(e => `- ${e.description || 'Expense'}: ${formatCurrency(e.amount, currency)} (${new Date(e.date).toLocaleDateString()})`).join('\n');
 
         // --------------------------------------------------
         // SPECIFIC AGENT PERSONAS (From Control Room Map)
@@ -264,11 +267,11 @@ User Query: "${query}"`;
                 return `${persona}
 
 Business Context:
-- Total Revenue: ₹${stats.total_revenue || 0}
-- Total Expenses: ₹${totalExpenses}
+- Total Revenue: ${formatCurrency(stats.total_revenue, currency)}
+- Total Expenses: ${formatCurrency(totalExpenses, currency)}
 - Total Invoices: ${invoices.length}
 - Overdue Invoices: ${stats.overdue_invoices || 0}
-- Pending Payments: ₹${stats.pending_payments || 0}
+- Pending Payments: ${formatCurrency(stats.pending_payments, currency)}
 - Recent Expenses:
 ${recentExpensesSummary || 'None recorded'}
 
@@ -278,7 +281,7 @@ You MUST think and respond in the following format:
 1. **Identify**: Provide a short, sharp observation based on the query.
 2. **Evaluate**: Discuss numbers and risk factors succinctly.
 3. **Action**: Suggest the Next Best Action without overwhelming the user.
-Quote currency in Indian Rupees (₹).
+Quote currency appropriately in the user's localized format using the symbol (${curSymbol}).
 `;
             }
         }
@@ -310,15 +313,15 @@ STOCK HEALTH RULES:
    capital trapped
 
 ALWAYS SHOW:
-- Exact ₹ value of dead/overstocked items
+- Exact currency value of dead/overstocked items
 - Days of stock remaining at current velocity
 - Specific reorder recommendation with quantity
 
 Business Context:
 - Low Stock Items: ${stats.lowStockCount || 0}
 - Total Products: ${products.length}
-- Inventory Value: ₹${stats.inventoryValue || 0}
-- Total Expenses (to date): ₹${totalExpenses}
+- Inventory Value: ${formatCurrency(stats.inventoryValue, currency)}
+- Total Expenses (to date): ${formatCurrency(totalExpenses, currency)}
 - Persona: ${context.businessType || 'Not set'}
 
 User Query: "${query}"
@@ -342,9 +345,9 @@ EXPENSE ANALYSIS RULES:
 - Compare expenses to revenue to show "Net Cash Flow".
 
 Business Context:
-- Total Revenue: ₹${stats.total_revenue || 0}
-- Total Expenses (Loaded): ₹${totalExpenses}
-- Net Cash Flow: ₹${(stats.total_revenue || 0) - totalExpenses}
+- Total Revenue: ${formatCurrency(stats.total_revenue, currency)}
+- Total Expenses (Loaded): ${formatCurrency(totalExpenses, currency)}
+- Net Cash Flow: ${formatCurrency((stats.total_revenue || 0) - totalExpenses, currency)}
 - Recent Expenses List:
 ${recentExpensesSummary || 'None recorded'}
 
@@ -372,10 +375,10 @@ Your goals are:
 - Optimize for local-first storage + low cloud cost
 
 Business Context:
-- Total Revenue: ₹${stats.total_revenue || 0}
-- Total Expenses: ₹${totalExpenses}
+- Total Revenue: ${formatCurrency(stats.total_revenue, currency)}
+- Total Expenses: ${formatCurrency(totalExpenses, currency)}
 - Overdue Invoices: ${stats.overdue_invoices || 0}
-- Pending Payments: ₹${stats.pending_payments || 0}
+- Pending Payments: ${formatCurrency(stats.pending_payments, currency)}
 - Recent Activity: ${stats.recentActivity ? JSON.stringify(stats.recentActivity) : 'None'}
 
 User Query: "${query}"
@@ -439,7 +442,7 @@ BUSINESS RULES
 - Be polite but effective in reminders
 - Optimize for cash flow
 - Never overwhelm the user
-- Quote currency in Indian Rupees (₹)
+- Quote currency appropriately using the user's localized configuration
 `;
         }
 
@@ -497,8 +500,8 @@ YOUR PERSONALITY:
 - You speak like a sharp finance friend.
 - You tell the truth even when uncomfortable.
 - You proactively flag problems before asked.
-- You always quote Indian Rupees (₹).
-- You understand Indian GST, TDS, compliance, etc.
+- You always quote currency explicitly (use ${curSymbol} where applicable).
+- You understand business accounting rules and compliance.
 
 YOUR CORE JOBS:
 1. Tell the user what is happening to their money.
@@ -509,11 +512,11 @@ Business Context:
 - Total Invoices: ${invoices.length}
 - Total Customers: ${customers.length}  
 - Total Products: ${products.length}
-- Total Revenue: ₹${stats.total_revenue || 0}
-- Total Expenses: ₹${totalExpenses}
-- Net Cash Flow: ₹${(stats.total_revenue || 0) - totalExpenses}
+- Total Revenue: ${formatCurrency(stats.total_revenue, currency)}
+- Total Expenses: ${formatCurrency(totalExpenses, currency)}
+- Net Cash Flow: ${formatCurrency((stats.total_revenue || 0) - totalExpenses, currency)}
 - Overdue Invoices: ${stats.overdue_invoices || 0}
-- Pending Payments: ₹${stats.pending_payments || 0}
+- Pending Payments: ${formatCurrency(stats.pending_payments, currency)}
 - Persona: ${businessType}
 - Recent Expenses:
 ${recentExpensesSummary || 'None recorded'}
@@ -625,13 +628,13 @@ Analyze the following business data and provide 3-4 highly specific, actionable,
 Avoid generic advice like "reduce expenses". Instead, use the data to provide deep intelligence.
 
 BUSINESS CONTEXT:
-- Revenue (Total): ₹${stats.totalRevenue || 0}
+- Revenue (Total): ${formatCurrency(stats.totalRevenue, context.currency)}
 - Revenue Trends (Past 6 Months): ${JSON.stringify(trends)}
 - Top Products: ${JSON.stringify(topProducts)}
 - Top Customers: ${JSON.stringify(topCustomers)}
 - Health Score: ${health.score || 0}/100
-- Overdue Invoices: ${stats.overdueCount || 0} (₹${stats.pendingPayments || 0} pending)
-- Inventory Value: ₹${stats.inventoryValue || 0}
+- Overdue Invoices: ${stats.overdueCount || 0} (${formatCurrency(stats.pendingPayments, context.currency)} pending)
+- Inventory Value: ${formatCurrency(stats.inventoryValue, context.currency)}
 
 OUTPUT INSTRUCTIONS:
 Return ONLY a valid JSON array of objects. Each object MUST follow this EXACT structure:
@@ -677,12 +680,12 @@ JSON:`;
      * Fallback insights when AI is unavailable
      */
     fallbackGenerateInsights(context) {
-        const { stats = {}, health = {} } = context;
+        const { stats = {}, health = {}, currency } = context;
         return [
             {
                 id: 'fb-revenue',
                 title: 'Revenue Overview',
-                value: `₹${(stats.totalRevenue || 0).toLocaleString()}`,
+                value: formatCurrency(stats.totalRevenue, currency),
                 subtitle: 'Total earnings to date',
                 description: 'Your revenue is stable. Consider analyzing top customers to identify expansion opportunities.',
                 type: 'info'
@@ -691,7 +694,7 @@ JSON:`;
                 id: 'fb-overdue',
                 title: 'Payment Risk',
                 value: `${stats.overdueCount || 0} Overdue`,
-                subtitle: `₹${(stats.pendingPayments || 0).toLocaleString()} pending`,
+                subtitle: `${formatCurrency(stats.pendingPayments, currency)} pending`,
                 description: 'There are outstanding invoices. We recommend sending automated reminders to improve cash flow.',
                 type: stats.overdueCount > 0 ? 'warning' : 'success'
             },
@@ -735,7 +738,7 @@ JSON:`;
         }];
     }
 
-    async generateCollectionDraft(invoice, forceAggressive = false) {
+    async generateCollectionDraft(invoice, currency, forceAggressive = false) {
         if (!this.model) {
             // Re-use logic for fallback if no AI
             const overdueDays = Math.floor((Date.now() - new Date(invoice.dueDate).getTime()) / (1000 * 60 * 60 * 24));
@@ -745,7 +748,7 @@ JSON:`;
 
             return {
                 subject: `${tone === 'urgent' ? 'URGENT: ' : ''}Payment Reminder: Invoice #${invoice.invoiceNumber}`,
-                body: `Hello ${customerName || 'Customer'},\n\nThis is a ${tone} reminder regarding Invoice #${invoice.invoiceNumber} for ₹${invoice.total?.toLocaleString() ?? 0} which was due on ${new Date(invoice.dueDate).toLocaleDateString()}.\n\nPlease arrange payment at your earliest convenience.\n\nThank you.`,
+                body: `Hello ${customerName || 'Customer'},\n\nThis is a ${tone} reminder regarding Invoice #${invoice.invoiceNumber} for ${formatCurrency(invoice.total, currency)} which was due on ${new Date(invoice.dueDate).toLocaleDateString()}.\n\nPlease arrange payment at your earliest convenience.\n\nThank you.`,
                 strategy,
                 strategyTone: tone,
                 daysOverdue: Math.max(0, overdueDays)
@@ -759,8 +762,8 @@ JSON:`;
         
         INVOICE DETAILS:
         - Customer: ${customerName}
-        - Amount: ₹${invoice.total}
-        - Total Tax: ₹${invoice.tax_amount || 0}
+        - Amount: ${formatCurrency(invoice.total, currency)}
+        - Total Tax: ${formatCurrency(invoice.tax_amount, currency)}
         - Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}
         - Days Overdue: ${overdueDays}
         - Platform Name: CapitaEdgeX
@@ -793,7 +796,7 @@ JSON:`;
     /**
      * Generate Settlement Offer Email
      */
-    async generateSettlementOffer(invoice) {
+    async generateSettlementOffer(invoice, currency) {
         if (!this.model) return null;
 
         const overdueDays = Math.floor((Date.now() - new Date(invoice.dueDate).getTime()) / (1000 * 60 * 60 * 24));
@@ -803,7 +806,7 @@ JSON:`;
     
         Context:
         - Customer: ${customerName}
-        - Invoice Amount: ₹${invoice.total}
+        - Invoice Amount: ${formatCurrency(invoice.total, currency)}
         - Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}
         - Days Overdue: ${overdueDays}
         
@@ -890,8 +893,8 @@ JSON:`;
             const overdueCount = stats.overdue_invoices || 0;
             const lowStock = stats.low_stock_items || 0;
             let greeting = "👋 Hey, I'm Capita — your AI CFO inside CapitaEdgeX. Here's your business right now:\n\n";
-            greeting += `💰 **Revenue**: ₹${totalRev.toLocaleString()}\n`;
-            greeting += `💸 **Expenses**: ₹${totalExpenses.toLocaleString()}\n`;
+            greeting += `💰 **Revenue**: ${formatCurrency(totalRev, context.currency)}\n`;
+            greeting += `💸 **Expenses**: ${formatCurrency(totalExpenses, context.currency)}\n`;
             greeting += `📄 **Invoices**: ${invoices.length} total`;
             if (overdueCount > 0) greeting += ` (⚠️ ${overdueCount} overdue)`;
             greeting += `\n👥 **Customers**: ${customers.length}\n`;
@@ -938,8 +941,8 @@ JSON:`;
         if (q.includes('expense') || q.includes('spending') || q.includes('cost') || q.includes('spent')) {
             return {
                 text: `💸 **Expense Summary**\n\n` +
-                    `• **Total Expenses**: ₹${totalExpenses.toLocaleString()}\n` +
-                    `• **Net Profit**: ₹${((stats.total_revenue || 0) - totalExpenses).toLocaleString()}\n\n` +
+                    `• **Total Expenses**: ${formatCurrency(totalExpenses, context.currency)}\n` +
+                    `• **Net Profit**: ${formatCurrency((stats.total_revenue || 0) - totalExpenses, context.currency)}\n\n` +
                     `View detailed breakdown on the Expenses page.`,
                 action: { type: 'navigate', data: { to: '/expenses' } }
             };
@@ -971,10 +974,10 @@ JSON:`;
                 return { text: '🎉 **No overdue invoices!** All payments are on track.' };
             }
 
-            let text = `⚠️ **${overdueList.length} Overdue Invoice${overdueList.length > 1 ? 's' : ''}** — ₹${overdueTotal.toLocaleString()} outstanding\n\n`;
+            let text = `⚠️ **${overdueList.length} Overdue Invoice${overdueList.length > 1 ? 's' : ''}** — ${formatCurrency(overdueTotal, context.currency)} outstanding\n\n`;
             overdueList.slice(0, 5).forEach(inv => {
                 const buyerName = typeof inv.buyer === 'string' ? (JSON.parse(inv.buyer)?.name || 'Unknown') : (inv.buyer?.name || 'Unknown');
-                text += `• **${inv.invoice_number}** — ${buyerName} — ₹${(inv.total || 0).toLocaleString()}\n`;
+                text += `• **${inv.invoice_number}** — ${buyerName} — ${formatCurrency(inv.total, context.currency)}\n`;
             });
             if (overdueList.length > 5) text += `\n...and ${overdueList.length - 5} more`;
 
@@ -992,7 +995,7 @@ JSON:`;
             return {
                 text: `💳 **Pending Payments**\n\n` +
                     `• **Count**: ${pending.length} invoice${pending.length !== 1 ? 's' : ''}\n` +
-                    `• **Total Outstanding**: ₹${pendingTotal.toLocaleString()}\n` +
+                    `• **Total Outstanding**: ${formatCurrency(pendingTotal, context.currency)}\n` +
                     `• **Sent**: ${pending.filter(i => i.status === 'sent').length}\n` +
                     `• **Overdue**: ${pending.filter(i => i.status === 'overdue').length}`,
                 action: { type: 'navigate', data: { to: '/payments' } }
@@ -1051,14 +1054,14 @@ JSON:`;
                 }
                 let text = `🚨 **${outOfStock.length} Out of Stock**\n\n`;
                 outOfStock.slice(0, 5).forEach(p => {
-                    text += `• **${p.name}** — ₹${p.price?.toLocaleString()} (selling price)\n`;
+                    text += `• **${p.name}** — ${formatCurrency(p.price, context.currency)} (selling price)\n`;
                 });
                 return { text, action: { type: 'navigate', data: { to: '/inventory' } } };
             }
 
             if (q.includes('value') || q.includes('worth')) {
                 return {
-                    text: `📦 **Inventory Value**: ₹${totalValue.toLocaleString()}\n\n` +
+                    text: `📦 **Inventory Value**: ${formatCurrency(totalValue, context.currency)}\n\n` +
                         `• **Products**: ${products.length}\n` +
                         `• **Low Stock**: ${lowStock.length}\n` +
                         `• **Out of Stock**: ${outOfStock.length}`,
@@ -1069,7 +1072,7 @@ JSON:`;
             return {
                 text: `📦 **Inventory Overview**\n\n` +
                     `• **Total Products**: ${products.length}\n` +
-                    `• **Inventory Value**: ₹${totalValue.toLocaleString()}\n` +
+                    `• **Inventory Value**: ${formatCurrency(totalValue, context.currency)}\n` +
                     `• **Low Stock**: ${lowStock.length}\n` +
                     `• **Out of Stock**: ${outOfStock.length}\n\n` +
                     `Ask "low stock items" or "inventory value" for details.`,
@@ -1095,9 +1098,9 @@ JSON:`;
 
             return {
                 text: `${emoji} **Business Health Score: ${score}/100**\n\n` +
-                    `💰 Revenue: ₹${rev.toLocaleString()}\n` +
-                    `💸 Expenses: ₹${exp.toLocaleString()}\n` +
-                    `📈 Net Profit: ₹${profit.toLocaleString()}\n` +
+                    `💰 Revenue: ${formatCurrency(rev, context.currency)}\n` +
+                    `💸 Expenses: ${formatCurrency(exp, context.currency)}\n` +
+                    `📈 Net Profit: ${formatCurrency(profit, context.currency)}\n` +
                     `📄 Invoices: ${invoices.length} (${overdueCount} overdue)\n` +
                     `👥 Customers: ${customers.length}\n` +
                     `📦 Products: ${products.length} (${lowStock} low stock)\n\n` +
@@ -1114,11 +1117,11 @@ JSON:`;
 
             return {
                 text: `💧 **Cash Flow Summary**\n\n` +
-                    `• **Inflow (Collected)**: ₹${rev.toLocaleString()}\n` +
-                    `• **Outflow (Expenses)**: ₹${exp.toLocaleString()}\n` +
-                    `• **Awaiting Collection**: ₹${pending.toLocaleString()}\n` +
-                    `• **Net Position**: ₹${(rev - exp).toLocaleString()}\n\n` +
-                    `${pending > 0 ? `⚡ Collecting ₹${pending.toLocaleString()} in pending payments would improve your position.` : ''}`,
+                    `• **Inflow (Collected)**: ${formatCurrency(rev, context.currency)}\n` +
+                    `• **Outflow (Expenses)**: ${formatCurrency(exp, context.currency)}\n` +
+                    `• **Awaiting Collection**: ${formatCurrency(pending, context.currency)}\n` +
+                    `• **Net Position**: ${formatCurrency(rev - exp, context.currency)}\n\n` +
+                    `${pending > 0 ? `⚡ Collecting ${formatCurrency(pending, context.currency)} in pending payments would improve your position.` : ''}`,
                 action: { type: 'navigate', data: { to: '/reports' } }
             };
         }
@@ -1127,8 +1130,8 @@ JSON:`;
         if (q.includes('gst') || q.includes('tax') || q.includes('compliance') || q.includes('itc')) {
             const totalTax = invoices.reduce((sum, i) => sum + (i.tax_amount || 0), 0);
             return {
-                text: `🧾 **GST Summary**\n\n` +
-                    `• **Total GST Collected**: ₹${totalTax.toLocaleString()}\n` +
+                text: `🧾 **Tax & Compliance Summary**\n\n` +
+                    `• **Total Tax Collected**: ${formatCurrency(totalTax, context.currency)}\n` +
                     `• **Invoices with Tax**: ${invoices.filter(i => i.tax_amount > 0).length}\n\n` +
                     `Visit Compliance page for detailed filing status.`,
                 action: { type: 'navigate', data: { to: '/compliance' } }
@@ -1149,7 +1152,7 @@ JSON:`;
             recent.forEach(inv => {
                 const buyerName = typeof inv.buyer === 'string' ? (JSON.parse(inv.buyer)?.name || 'Unknown') : (inv.buyer?.name || 'Unknown');
                 const statusEmoji = { paid: '✅', sent: '📤', draft: '📝', overdue: '⚠️' }[inv.status] || '📄';
-                text += `${statusEmoji} **${inv.invoice_number}** — ${buyerName} — ₹${(inv.total || 0).toLocaleString()} (${inv.status})\n`;
+                text += `${statusEmoji} **${inv.invoice_number}** — ${buyerName} — ${formatCurrency(inv.total, context.currency)} (${inv.status})\n`;
             });
 
             return { text };
@@ -1181,7 +1184,7 @@ JSON:`;
             const match = query.match(/^bill\s+(.+?)\s+(\d+)/i);
             if (match) {
                 return {
-                    text: `📝 Drafting invoice for **${match[1]}** — ₹${parseInt(match[2]).toLocaleString()}...`,
+                    text: `📝 Drafting invoice for **${match[1]}** — ${formatCurrency(parseInt(match[2]), context.currency)}...`,
                     action: {
                         type: 'EXECUTE_ACTION',
                         data: { customer: match[1], amount: parseInt(match[2]), description: 'Service' }
@@ -1302,7 +1305,7 @@ JSON:`;
             insights.push({
                 id: 'revenue-suggest',
                 type: 'suggest',
-                message: `Great work! You've earned ₹${stats.totalRevenue.toLocaleString()} so far.`,
+                message: `Great work! You've earned ${formatCurrency(stats.totalRevenue, context.currency)} so far.`,
                 priority: 3
             });
         }

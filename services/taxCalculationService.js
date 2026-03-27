@@ -1,6 +1,7 @@
 import { InvoiceCalculator } from '../server/lib/financialMath.js';
 import { detectGstType, getStateFromGstin } from '../server/lib/gstUtils.js';
 import { getSacInfo, getDefaultTdsSection, TDS_RATES } from '../server/lib/sacDatabase.js';
+import { DEFAULTS } from '../config/constants.js';
 
 export function calculateInvoiceTax(input) {
 
@@ -40,7 +41,7 @@ export function calculateInvoiceTax(input) {
       discount: (Number(item.discount_percent) > 0)
         ? { type: 'percentage', value: item.discount_percent }
         : undefined,
-      tax_rate: item.is_exempt ? 0 : (Number(item.tax_rate ?? 18) || 0),
+      tax_rate: item.is_exempt ? 0 : (Number(item.tax_rate ?? DEFAULTS.DEFAULT_TAX_RATE) || 0),
       is_interstate: isInterState,
     })),
     document_discount: (Number(input.discount_amount) > 0)

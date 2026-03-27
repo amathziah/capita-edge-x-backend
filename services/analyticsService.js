@@ -1,4 +1,5 @@
 import { supabase } from '../supabase.js';
+import { DEFAULTS, HEALTH_SCORE, TAX_RESERVES, PLACEHOLDERS } from '../config/constants.js';
 
 /**
  * Analytics Service
@@ -421,31 +422,31 @@ class AnalyticsService {
         // Calculate score based on multiple factors
         let score = 100;
 
-        // Revenue factor (0-40 points)
-        const revenueScore = Math.min(40, (stats.total_revenue / 100000) * 40);
+        // Revenue factor
+        const revenueScore = Math.min(HEALTH_SCORE.REVENUE_MAX_POINTS, (stats.total_revenue / HEALTH_SCORE.REVENUE_BENCHMARK) * HEALTH_SCORE.REVENUE_MAX_POINTS);
         score = revenueScore;
 
-        // Overdue factor (-30 points max)
+        // Overdue factor
         const overdueRatio = stats.overdue_invoices / Math.max(1, stats.paid_invoices + stats.pending_invoices);
-        score -= overdueRatio * 30;
+        score -= overdueRatio * HEALTH_SCORE.OVERDUE_MAX_PENALTY;
 
-        // Cash flow factor (0-30 points)
+        // Cash flow factor
         if (cashFlow.net_cash_flow > 0) {
-            score += 30;
+            score += HEALTH_SCORE.CASH_FLOW_MAX_BONUS;
         } else {
-            score += Math.max(0, 30 + (cashFlow.net_cash_flow / 10000) * 30);
+            score += Math.max(0, HEALTH_SCORE.CASH_FLOW_MAX_BONUS + (cashFlow.net_cash_flow / HEALTH_SCORE.CASH_FLOW_SCALING) * HEALTH_SCORE.CASH_FLOW_MAX_BONUS);
         }
 
-        // Stock management factor (0-30 points)
-        const stockScore = stats.low_stock_items > 0 ? 20 : 30;
+        // Stock management factor
+        const stockScore = stats.low_stock_items > 0 ? HEALTH_SCORE.STOCK_PARTIAL_BONUS : HEALTH_SCORE.STOCK_FULL_BONUS;
         score += stockScore;
 
         return {
             score: Math.max(0, Math.min(100, Math.round(score))),
             factors: {
                 revenue: Math.round(revenueScore),
-                overdue: Math.round(-overdueRatio * 30),
-                cashFlow: cashFlow.cash_flow_health === 'positive' ? 30 : 15,
+                overdue: Math.round(-overdueRatio * HEALTH_SCORE.OVERDUE_MAX_PENALTY),
+                cashFlow: cashFlow.cash_flow_health === 'positive' ? HEALTH_SCORE.CASH_FLOW_MAX_BONUS : (HEALTH_SCORE.CASH_FLOW_MAX_BONUS / 2),
                 inventory: stockScore
             }
         };
@@ -466,10 +467,10 @@ class AnalyticsService {
         const bankBalance = payments.reduce((sum, p) => sum + p.amount, 0);
 
         // 2. Tax Reserves (Estimates)
-        const gstReserve = bankBalance * 0.18;      // 18% GST on collected
-        const incomeTaxReserve = bankBalance * 0.10; // 10% Income Tax estimate
+        const gstReserve = bankBalance * TAX_RESERVES.GST_RATE;
+        const incomeTaxReserve = bankBalance * TAX_RESERVES.INCOME_TAX_RATE;
 
-        // 3. Risk Factor: 50% of 'Overdue' invoices
+        // 3. Risk Factor
         const { data: overdueInvoices } = await supabase
             .from('invoices')
             .select('total')
@@ -477,7 +478,7 @@ class AnalyticsService {
             .eq('status', 'overdue');
 
         const overdueTotal = overdueInvoices?.reduce((sum, inv) => sum + inv.total, 0) || 0;
-        const atRiskAmount = overdueTotal * 0.50; // We might need to spend this to recover it (legal/collections)
+        const atRiskAmount = overdueTotal * TAX_RESERVES.OVERDUE_RISK_FACTOR;
 
         // 4. Calculate Safe Liquidity
         // Safe = Cash - Taxes - Risk
@@ -566,7 +567,7 @@ class AnalyticsService {
 
                 stats.metrics = {
                     activeProjects: active,
-                    projectHealth: 85, // Placeholder
+                    projectHealth: PLACEHOLDERS.SERVICES_PROJECT_HEALTH, // Placeholder
                     pipelineValue: agencyInvoices?.reduce((sum, i) => sum + (i.status === 'draft' ? i.total : 0), 0) || 0
                 };
                 break;
@@ -577,7 +578,7 @@ class AnalyticsService {
                     .select('stock, minStock, is_inventory_tracked')
                     .eq('organization_id', organizationId);
 
-                const lowStock = ecoProducts?.filter(p => p.is_inventory_tracked && p.stock <= (p.minStock || 10)).length || 0;
+                const lowStock = ecoProducts?.filter(p => p.is_inventory_tracked && p.stock <= (p.minStock || DEFAULTS.DEFAULT_REORDER_LEVEL)).length || 0;
                 const { count: dailyOrders } = await supabase
                     .from('invoices')
                     .select('*', { count: 'exact', head: true })
@@ -587,7 +588,7 @@ class AnalyticsService {
                 stats.metrics = {
                     lowStockItems: lowStock,
                     dailyOrders: dailyOrders || 0,
-                    netMargins: 18 // Placeholder
+                    netMargins: PLACEHOLDERS.ECOMMERCE_NET_MARGINS // Placeholder
                 };
                 break;
         }

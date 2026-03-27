@@ -7,7 +7,7 @@ import { APIError } from '../middleware/errorHandler.js';
 export const createReport = async (req, res) => {
     const { type, title, description, priority, metadata } = req.body;
     const userId = req.user.id;
-    const organizationId = req.headers['x-organization-id'];
+    const organizationId = req.user.organizationId;
 
     if (!type || !title) {
         throw new APIError('Type and title are required', 400);

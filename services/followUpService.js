@@ -1,11 +1,9 @@
 import { supabase } from '../supabase.js';
 import emailService from './emailService.js';
+import { DEFAULTS } from '../config/constants.js';
 
 export const checkAndSendFollowUps = async () => {
   const now = new Date();
-  const day7 = new Date(now - 7 * 86400000);
-  const day14 = new Date(now - 14 * 86400000);
-  const day30 = new Date(now - 30 * 86400000);
 
   // Find invoices needing follow-up
   const { data: invoices, error } = await supabase
@@ -23,22 +21,37 @@ export const checkAndSendFollowUps = async () => {
   if (error || !invoices) return;
 
   for (const invoice of invoices) {
+    // Try to fetch org config for custom days
+    const { data: config } = await supabase
+      .from('organization_configs')
+      .select('follow_up_day_1, follow_up_day_2, follow_up_day_3')
+      .eq('organization_id', invoice.organization_id)
+      .single();
+
+    const d1 = config?.follow_up_day_1 || DEFAULTS.FOLLOW_UP_DAY_1;
+    const d2 = config?.follow_up_day_2 || DEFAULTS.FOLLOW_UP_DAY_2;
+    const d3 = config?.follow_up_day_3 || DEFAULTS.FOLLOW_UP_DAY_3;
+
+    const day1Target = new Date(now - d1 * 86400000);
+    const day2Target = new Date(now - d2 * 86400000);
+    const day3Target = new Date(now - d3 * 86400000);
+
     const invoiceDate = new Date(invoice.date);
     const count = invoice.follow_up_count || 0;
     let shouldSend = false;
 
-    if (count === 0 && invoiceDate <= day7) {
+    if (count === 0 && invoiceDate <= day1Target) {
       shouldSend = true;
     } else if (
       count === 1 &&
       invoice.follow_up_1_sent_at &&
-      new Date(invoice.follow_up_1_sent_at) <= day14
+      new Date(invoice.follow_up_1_sent_at) <= day2Target
     ) {
       shouldSend = true;
     } else if (
       count === 2 &&
       invoice.follow_up_2_sent_at &&
-      new Date(invoice.follow_up_2_sent_at) <= day30
+      new Date(invoice.follow_up_2_sent_at) <= day3Target
     ) {
       shouldSend = true;
     }

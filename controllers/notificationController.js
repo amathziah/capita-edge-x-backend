@@ -1,4 +1,5 @@
 import { supabase } from '../supabase.js';
+import { LIMITS } from '../config/constants.js';
 
 export const getNotifications = async (req, res) => {
     const notifications = [];
@@ -82,7 +83,7 @@ export const getNotifications = async (req, res) => {
         .eq('status', 'pending')
         .lte('due_date', weekFromNow)
         .order('due_date', { ascending: true })
-        .limit(3);
+        .limit(LIMITS.MAX_COMPLIANCE_NOTIFICATIONS);
 
     if (upcomingCompliance) {
         upcomingCompliance.forEach(task => {
@@ -107,5 +108,5 @@ export const getNotifications = async (req, res) => {
         return new Date(b.time) - new Date(a.time);
     });
 
-    res.json(notifications.slice(0, 10));
+    res.json(notifications.slice(0, LIMITS.MAX_NOTIFICATIONS));
 };

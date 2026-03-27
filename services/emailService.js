@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import fs from 'fs';
+import { DEFAULTS } from '../config/constants.js';
 
 dotenv.config();
 
@@ -670,7 +671,7 @@ class EmailService {
         </div>
         <div class="content">
             <h2 style="margin-top: 0; font-size: 20px; color: #1e293b;">Confirm your email address</h2>
-            <p>Use the following code to confirm your CapitaEdgeX account. This code will expire in 10 minutes.</p>
+            <p>Use the following code to confirm your CapitaEdgeX account. This code will expire in ${DEFAULTS.OTP_EXPIRY_DISPLAY}.</p>
             
             <div class="otp-code">${otp}</div>
             

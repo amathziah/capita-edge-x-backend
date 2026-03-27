@@ -1,14 +1,20 @@
 import { supabase } from '../supabase.js';
 import { APIError } from '../middleware/errorHandler.js';
+import { parsePagination } from '../utils/pagination.js';
 
 export const getExpenses = async (req, res) => {
-    const { data: expenses, error } = await supabase
+    const { page, limit, offset } = parsePagination(req.query);
+
+    const { data: expenses, error, count } = await supabase
         .from('expenses')
-        .select('*')
+        .select('*', { count: 'exact' })
         .eq('organization_id', req.user.organizationId)
-        .order('date', { ascending: false });
+        .order('date', { ascending: false })
+        .range(offset, offset + limit - 1);
 
     if (error) throw new Error(error.message);
+    
+    res.setHeader('X-Total-Count', count || 0);
     res.json(expenses);
 };
 

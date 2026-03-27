@@ -71,7 +71,7 @@ class LedgerService {
         };
 
         const { error } = await supabase.from('ledger_entries').insert([drEntry, crEntry]);
-        if (error) console.error('Ledger Error (Invoice):', error);
+        if (error) throw new Error(`Ledger Error (Invoice): ${error.message}`);
     }
 
     /**
@@ -118,7 +118,7 @@ class LedgerService {
         };
 
         const { error } = await supabase.from('ledger_entries').insert([drEntry, crEntry]);
-        if (error) console.error('Ledger Error (Payment):', error);
+        if (error) throw new Error(`Ledger Error (Payment): ${error.message}`);
     }
 }
 

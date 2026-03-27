@@ -4,21 +4,23 @@ import fileService from '../services/fileService.js';
 import pdfService from '../services/pdfService.js';
 import { APIError } from '../middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../utils/configUtils.js';
+import { parsePagination } from '../utils/pagination.js';
 
 export const getPayments = async (req, res) => {
     let query = supabase
         .from('payments')
-        .select('*')
+        .select('*', { count: 'exact' })
         .eq('organization_id', req.user.organizationId)
         .order('createdAt', { ascending: false });
 
-    if (req.query.limit) {
-        query = query.limit(parseInt(req.query.limit, 10));
-    }
+    const { page, limit, offset } = parsePagination(req.query);
+    query = query.range(offset, offset + limit - 1);
 
-    const { data: payments, error } = await query;
+    const { data: payments, error, count } = await query;
 
     if (error) throw new Error(error.message);
+    
+    res.setHeader('X-Total-Count', count || 0);
     res.json(payments);
 };
 

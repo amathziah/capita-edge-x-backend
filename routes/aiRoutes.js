@@ -2,13 +2,14 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import * as aiController from '../controllers/aiController.js';
+import { LIMITS } from '../config/constants.js';
 
 const router = express.Router();
 
 // AI Rate Limiter (Strict)
 const aiLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
-    max: 10, // limit each IP to 10 requests per windowMs
+    windowMs: LIMITS.AI_RATE_WINDOW_MS,
+    max: LIMITS.AI_RATE_LIMIT,
     message: { error: 'Too many AI requests, please try again later.' }
 });
 

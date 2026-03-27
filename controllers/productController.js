@@ -1,12 +1,16 @@
 import { supabase } from '../supabase.js';
 import { APIError } from '../middleware/errorHandler.js';
+import { parsePagination } from '../utils/pagination.js';
 
 export const getProducts = async (req, res) => {
-    const { data: products, error } = await supabase
+    const { page, limit, offset } = parsePagination(req.query);
+
+    const { data: products, error, count } = await supabase
         .from('products')
-        .select('*')
+        .select('*', { count: 'exact' })
         .eq('organization_id', req.user.organizationId)
-        .order('name', { ascending: true });
+        .order('name', { ascending: true })
+        .range(offset, offset + limit - 1);
 
     if (error) throw new Error(error.message);
 
@@ -21,6 +25,7 @@ export const getProducts = async (req, res) => {
         status: p.status || 'Active'
     }));
 
+    res.setHeader('X-Total-Count', count || 0);
     res.json(mappedProducts);
 };
 

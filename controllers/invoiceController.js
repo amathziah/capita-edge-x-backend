@@ -6,6 +6,7 @@ import { APIError } from '../middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../utils/configUtils.js';
 import { calculateInvoiceTax } from '../services/taxCalculationService.js';
 import { getStateFromGstin } from '../server/lib/gstUtils.js';
+import { parsePagination } from '../utils/pagination.js';
 
 export const getInvoices = async (req, res) => {
     let query = supabase
@@ -14,7 +15,7 @@ export const getInvoices = async (req, res) => {
             *,
             customers!invoices_customer_id_fkey (id, name, email),
             items: invoice_items (*)
-        `)
+        `, { count: 'exact' })
         .eq('organization_id', req.user.organizationId) // Tenant isolation
         .order('createdAt', { ascending: false });
 
@@ -22,13 +23,14 @@ export const getInvoices = async (req, res) => {
         query = query.eq('persona', req.query.persona);
     }
 
-    if (req.query.limit) {
-        query = query.limit(parseInt(req.query.limit, 10));
-    }
+    const { page, limit, offset } = parsePagination(req.query);
+    query = query.range(offset, offset + limit - 1);
 
-    const { data: invoices, error } = await query;
+    const { data: invoices, error, count } = await query;
 
     if (error) throw new APIError(error.message, 500);
+
+    res.setHeader('X-Total-Count', count || 0);
     res.json(invoices);
 };
 
@@ -351,30 +353,36 @@ export const createInvoice = async (req, res) => {
 
     // Update Inventory Stock (Decrements)
     if (productIdsToUpdate.length > 0) {
-        const stockUpdatePromises = productIdsToUpdate.map(async (productId) => {
-            const requestedQty = productQuantities[productId];
+        try {
+            const stockUpdatePromises = productIdsToUpdate.map(async (productId) => {
+                const requestedQty = productQuantities[productId];
 
-            // Atomic decrement using raw SQL would be better, but via JS for now:
-            const { data: p } = await supabase
-                .from('products')
-                .select('stock, is_inventory_tracked')
-                .eq('id', productId)
-                .single();
-
-            // Only update if inventory is tracked
-            if (p && p.is_inventory_tracked) {
-                const newStock = Math.max(0, (p.stock || 0) - requestedQty);
-                await supabase
+                // Atomic decrement using raw SQL would be better, but via JS for now:
+                const { data: p } = await supabase
                     .from('products')
-                    .update({ stock: newStock, updatedAt: new Date() })
-                    .eq('id', productId);
+                    .select('stock, is_inventory_tracked')
+                    .eq('id', productId)
+                    .single();
 
-                console.log(`Aggregated stock update: Product ${productId} reduced by ${requestedQty} to ${newStock}`);
-            }
-        });
+                // Only update if inventory is tracked
+                if (p && p.is_inventory_tracked) {
+                    const newStock = Math.max(0, (p.stock || 0) - requestedQty);
+                    await supabase
+                        .from('products')
+                        .update({ stock: newStock, updatedAt: new Date() })
+                        .eq('id', productId);
 
-        // Run updates in background
-        Promise.all(stockUpdatePromises).catch(err => console.error("Aggregated inventory update error:", err));
+                    console.log(`Aggregated stock update: Product ${productId} reduced by ${requestedQty} to ${newStock}`);
+                }
+            });
+
+            // AWAIT the updates to ensure they succeed before returning 201
+            await Promise.all(stockUpdatePromises);
+        } catch (err) {
+            // Rollback invoice and items if stock update fails
+            await supabase.from('invoices').delete().eq('id', invoice.id);
+            throw new APIError('Failed to update inventory stock', 500);
+        }
     }
 
     res.status(201).json(invoice);
@@ -629,6 +637,14 @@ export const updateInvoice = async (req, res) => {
 };
 
 export const deleteInvoice = async (req, res) => {
+    // 1. Get invoice items to restore stock
+    const { data: items } = await supabase
+        .from('invoice_items')
+        .select('productId, quantity')
+        .eq('invoiceId', req.params.id)
+        .eq('organization_id', req.user.organizationId);
+
+    // 2. Delete invoice (cascade should handle items)
     const { error } = await supabase
         .from('invoices')
         .delete()
@@ -636,6 +652,28 @@ export const deleteInvoice = async (req, res) => {
         .eq('organization_id', req.user.organizationId);
 
     if (error) throw new APIError(error.message, 500);
+
+    // 3. Restore stock for tracked products
+    if (items && items.length > 0) {
+        for (const item of items) {
+            if (!item.productId) continue;
+            
+            const { data: p } = await supabase
+                .from('products')
+                .select('stock, is_inventory_tracked')
+                .eq('id', item.productId)
+                .single();
+                
+            if (p && p.is_inventory_tracked) {
+                const newStock = (p.stock || 0) + item.quantity;
+                await supabase
+                    .from('products')
+                    .update({ stock: newStock, updatedAt: new Date() })
+                    .eq('id', item.productId);
+            }
+        }
+    }
+
     res.json({ success: true });
 };
 

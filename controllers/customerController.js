@@ -2,13 +2,18 @@ import { supabase } from '../supabase.js';
 import { APIError } from '../middleware/errorHandler.js';
 
 export const getCustomers = async (req, res) => {
-    const { data: customers, error } = await supabase
+    const { page, limit, offset } = parsePagination(req.query);
+
+    const { data: customers, error, count } = await supabase
         .from('customers')
-        .select('*')
+        .select('*', { count: 'exact' })
         .eq('organization_id', req.user.organizationId) // Tenant isolation
-        .order('name', { ascending: true });
+        .order('name', { ascending: true })
+        .range(offset, offset + limit - 1);
 
     if (error) throw new Error(error.message);
+    
+    res.setHeader('X-Total-Count', count || 0);
     res.json(customers);
 };
 
@@ -132,15 +137,15 @@ export const getCustomerInsights = async (req, res) => {
     };
 
     // Simple Health Score Logic
-    let healthScore = 70; // Baseline
-    if (totalInvoices > 5) healthScore += 10;
-    if (totalRevenue > 50000) healthScore += 10;
-    if (breakdown.overdue > 0) healthScore -= 20;
+    let healthScore = CUSTOMER_HEALTH.BASELINE;
+    if (totalInvoices > CUSTOMER_HEALTH.INVOICE_BONUS_THRESHOLD) healthScore += CUSTOMER_HEALTH.INVOICE_BONUS;
+    if (totalRevenue > CUSTOMER_HEALTH.REVENUE_BONUS_THRESHOLD) healthScore += CUSTOMER_HEALTH.REVENUE_BONUS;
+    if (breakdown.overdue > 0) healthScore -= CUSTOMER_HEALTH.OVERDUE_PENALTY;
 
     let healthLabel = 'Regular';
-    if (healthScore >= 90) healthLabel = 'VIP';
-    else if (healthScore >= 80) healthLabel = 'Active';
-    else if (healthScore < 50) healthLabel = 'At Risk';
+    if (healthScore >= CUSTOMER_HEALTH.VIP_THRESHOLD) healthLabel = 'VIP';
+    else if (healthScore >= CUSTOMER_HEALTH.ACTIVE_THRESHOLD) healthLabel = 'Active';
+    else if (healthScore < CUSTOMER_HEALTH.AT_RISK_THRESHOLD) healthLabel = 'At Risk';
 
     if (totalInvoices === 0) healthLabel = 'New';
 

@@ -126,7 +126,10 @@ export const validateId = [
 export const sanitizeInput = (req, res, next) => {
     const sanitize = (obj) => {
         if (typeof obj === 'string') {
-            return obj.replace(/[<>]/g, '');
+            // Basic XSS sanitization (strips HTML tags, javascript: URIs, and inline event handlers)
+            return obj.replace(/<[^>]*>?/gm, '')
+                      .replace(/javascript\s*:/gi, '')
+                      .replace(/on\w+\s*=/gi, '');
         }
         if (typeof obj === 'object' && obj !== null) {
             Object.keys(obj).forEach(key => {

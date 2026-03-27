@@ -17,8 +17,8 @@ export const getSettings = async (req, res) => {
     const settingsObj = mapConfigToFrontend(config);
 
     // Scrub sensitive info (handled by Vault now, but for safety in old code)
-    if (settingsObj.smtp_pass) {
-        settingsObj.smtp_pass = '********';
+    if ('smtp_pass' in settingsObj) {
+        delete settingsObj.smtp_pass;
     }
 
     res.json(settingsObj);

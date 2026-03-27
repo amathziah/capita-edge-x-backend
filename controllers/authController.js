@@ -38,7 +38,7 @@ export const provisionOrganization = async (req, res) => {
 
     if (existingOrg && existingOrg.length > 0) {
         const orgId = existingOrg[0].organization_id;
-        
+
         // Ensure profile has this organizationId and businessType (Self-healing)
         const profileUpdate = { organization_id: orgId };
         if (businessType) {
@@ -55,7 +55,7 @@ export const provisionOrganization = async (req, res) => {
 
     try {
         // Use businessType from body, fallback to metadata (Fix Bug 2 & 8)
-        const selectedPersona = businessType || req.user.user_metadata?.business_type || 'solopreneur';
+        const selectedPersona = businessType || req.user.user_metadata?.business_type || DEFAULTS.DEFAULT_PERSONA;
 
         // 2. Create the Organization
         const { data: org, error: orgError } = await supabase
@@ -63,7 +63,7 @@ export const provisionOrganization = async (req, res) => {
             .insert([{
                 name: companyName,
                 slug: companyName.toLowerCase().replace(/ /g, '-').replace(/[^\w-]/g, ''),
-                plan_tier: 'free'
+                plan_tier: DEFAULTS.PLAN_TIER
             }])
             .select()
             .single();
@@ -98,9 +98,9 @@ export const provisionOrganization = async (req, res) => {
             {
                 organization_id: org.id,
                 business_name: companyName,
-                currency: 'INR',
-                tax_label: 'GST',
-                invoice_prefix: 'INV-',
+                currency: DEFAULTS.CURRENCY,
+                tax_label: DEFAULTS.TAX_LABEL,
+                invoice_prefix: DEFAULTS.INVOICE_PREFIX,
                 business_type: selectedPersona
             }
         ]);
@@ -110,99 +110,11 @@ export const provisionOrganization = async (req, res) => {
             {
                 organization_id: org.id,
                 last_number: 0,
-                prefix: 'INV-',
+                prefix: DEFAULTS.INVOICE_PREFIX,
                 current_year: new Date().getFullYear(),
                 reset_annually: true
             }
         ]);
-
-        // 7. Seed Default Accounts
-        await supabase.from('accounts').insert([
-            { organization_id: org.id, name: 'Accounts Receivable', account_type: 'asset' },
-            { organization_id: org.id, name: 'Sales Revenue', account_type: 'revenue' },
-            { organization_id: org.id, name: 'Bank', account_type: 'asset' },
-            { organization_id: org.id, name: 'Cash on Hand', account_type: 'asset' }
-        ]);
-        
-        // Step 8: Seed compliance tasks for freelancer and service firm
-        if (selectedPersona === 'solopreneur' || selectedPersona === 'services_firm') {
-            const now = new Date();
-            const currentYear = now.getFullYear();
-            
-            // Next month for GST filing dates
-            const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-            const nextYear = nextMonthDate.getFullYear();
-            const nextMonth = String(nextMonthDate.getMonth() + 1).padStart(2, '0');
-
-            const complianceTasks = [
-                {
-                    organization_id: org.id,
-                    type: 'GST Filing',
-                    description: 'File GSTR-1 — outward supplies return for previous month',
-                    due_date: `${nextYear}-${nextMonth}-11`,
-                    status: 'pending',
-                    priority: 'high',
-                    notes: 'File by 11th of every month on GST portal'
-                },
-                {
-                    organization_id: org.id,
-                    type: 'GST Filing',
-                    description: 'File GSTR-3B — monthly tax payment return',
-                    due_date: `${nextYear}-${nextMonth}-20`,
-                    status: 'pending',
-                    priority: 'high',
-                    notes: 'Pay net GST liability and file by 20th of every month'
-                },
-                {
-                    organization_id: org.id,
-                    type: 'Advance Tax',
-                    description: 'Q1 Advance Tax — pay 15% of estimated annual tax liability',
-                    due_date: `${currentYear}-06-15`,
-                    status: 'pending',
-                    priority: 'medium',
-                    notes: 'Section 208 — mandatory if tax liability > ₹10,000/year'
-                },
-                {
-                    organization_id: org.id,
-                    type: 'Advance Tax',
-                    description: 'Q2 Advance Tax — cumulative 45% of annual liability',
-                    due_date: `${currentYear}-09-15`,
-                    status: 'pending',
-                    priority: 'medium',
-                    notes: 'Pay on NSDL portal using Challan 280'
-                },
-                {
-                    organization_id: org.id,
-                    type: 'Advance Tax',
-                    description: 'Q3 Advance Tax — cumulative 75% of annual liability',
-                    due_date: `${currentYear}-12-15`,
-                    status: 'pending',
-                    priority: 'medium',
-                    notes: 'Pay on NSDL portal using Challan 280'
-                },
-                {
-                    organization_id: org.id,
-                    type: 'Advance Tax',
-                    description: 'Q4 Final Advance Tax — 100% of annual liability',
-                    due_date: `${currentYear + 1}-03-15`,
-                    status: 'pending',
-                    priority: 'high',
-                    notes: 'Final payment — shortfall attracts interest under Section 234B/234C'
-                },
-                {
-                    organization_id: org.id,
-                    type: 'TDS',
-                    description: 'Request Form 16A from all clients who deducted TDS this year',
-                    due_date: `${currentYear}-06-15`,
-                    status: 'pending',
-                    priority: 'medium',
-                    notes: 'Form 16A needed to claim TDS credit in your ITR. Client must issue by 15 June.'
-                },
-            ];
-
-            await supabase.from('compliance_tasks').insert(complianceTasks);
-        }
-
         res.status(201).json({
             success: true,
             organization: org
@@ -224,7 +136,7 @@ export const resendConfirmation = async (req, res) => {
     try {
         const otp = generateOTP();
         const otpHash = hashOTP(otp);
-        const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+        const expiresAt = new Date(Date.now() + DEFAULTS.OTP_EXPIRY_MS).toISOString();
 
         // 1. Store in otp_verifications (Fix Bugs 5, 6, 7)
         const { error: otpError } = await supabase

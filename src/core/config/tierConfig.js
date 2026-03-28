@@ -25,7 +25,6 @@ export const PLAN_TIERS = {
             white_label: false,
             multi_client: false,
             priority_support: false,
-            inventory: false,
         },
     },
 
@@ -49,7 +48,6 @@ export const PLAN_TIERS = {
             white_label: false,
             multi_client: false,
             priority_support: false,
-            inventory: 'basic',
         },
     },
 
@@ -73,7 +71,6 @@ export const PLAN_TIERS = {
             white_label: false,
             multi_client: false,
             priority_support: true,
-            inventory: 'full',
         },
     },
 
@@ -98,7 +95,6 @@ export const PLAN_TIERS = {
             white_label: true,
             multi_client: true,
             priority_support: true,
-            inventory: false,
         },
     },
 
@@ -122,7 +118,6 @@ export const PLAN_TIERS = {
             white_label: true,
             multi_client: true,
             priority_support: true,
-            inventory: 'full',
         },
     },
 };

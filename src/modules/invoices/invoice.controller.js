@@ -1,7 +1,7 @@
 import { supabase } from '../../core/database/supabase.js';
 import pdfService from './pdf.service.js';
-import emailService from '../settings/email.service.js';
-import fileService from '../upload/file.service.js';
+import emailService from '../../core/services/email.service.js';
+import fileService from '../../core/services/file.service.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../../core/utils/configUtils.js';
 import { calculateInvoiceTax } from './tax.service.js';
@@ -180,40 +180,6 @@ export const createInvoice = async (req, res) => {
     const calculatedTax = calculatedSubtotal * ((taxRate || 0) / 100);
     const calculatedTotal = calculatedSubtotal + calculatedTax;
 
-    // --- MOVE STOCK VALIDATION HERE ---
-    // 1. Group items by productId for aggregated stock updates
-    const productQuantities = items.reduce((acc, item) => {
-        if (item.productId) {
-            acc[item.productId] = (acc[item.productId] || 0) + (item.quantity || 0);
-        }
-        return acc;
-    }, {});
-
-    const productIdsToUpdate = Object.keys(productQuantities);
-
-    // 2. Validate stock levels before insertion (Transactional logic simulation)
-    if (productIdsToUpdate.length > 0) {
-        const { data: currentProducts, error: fetchError } = await supabase
-            .from('products')
-            .select('id, name, stock, is_inventory_tracked')
-            .in('id', productIdsToUpdate)
-            .eq('organization_id', req.user.organizationId);
-
-        if (fetchError) throw new APIError('Failed to verify inventory stock', 500);
-
-        for (const p of currentProducts) {
-            // Only validate if inventory is tracked
-            if (p.is_inventory_tracked) {
-                const requestedQty = productQuantities[p.id];
-                // Check if stock would drop below zero
-                if ((p.stock || 0) - requestedQty < 0) {
-                    throw new APIError(`Insufficient stock for ${p.name}. Available: ${p.stock}, Requested: ${requestedQty}`, 400);
-                }
-            }
-        }
-    }
-    // --- END STOCK VALIDATION ---
-
     // Create Invoice with Jittered Exponential Backoff for High Concurrency
     let invoice = null;
     let insertError = null;
@@ -351,39 +317,6 @@ export const createInvoice = async (req, res) => {
         throw new APIError('Failed to create invoice items', 500);
     }
 
-    // Update Inventory Stock (Decrements)
-    if (productIdsToUpdate.length > 0) {
-        try {
-            const stockUpdatePromises = productIdsToUpdate.map(async (productId) => {
-                const requestedQty = productQuantities[productId];
-
-                // Atomic decrement using raw SQL would be better, but via JS for now:
-                const { data: p } = await supabase
-                    .from('products')
-                    .select('stock, is_inventory_tracked')
-                    .eq('id', productId)
-                    .single();
-
-                // Only update if inventory is tracked
-                if (p && p.is_inventory_tracked) {
-                    const newStock = Math.max(0, (p.stock || 0) - requestedQty);
-                    await supabase
-                        .from('products')
-                        .update({ stock: newStock, updatedAt: new Date() })
-                        .eq('id', productId);
-
-                    console.log(`Aggregated stock update: Product ${productId} reduced by ${requestedQty} to ${newStock}`);
-                }
-            });
-
-            // AWAIT the updates to ensure they succeed before returning 201
-            await Promise.all(stockUpdatePromises);
-        } catch (err) {
-            // Rollback invoice and items if stock update fails
-            await supabase.from('invoices').delete().eq('id', invoice.id);
-            throw new APIError('Failed to update inventory stock', 500);
-        }
-    }
 
     res.status(201).json(invoice);
 
@@ -632,19 +565,10 @@ export const updateInvoice = async (req, res) => {
         `)
         .eq('id', id)
         .single();
-
     res.json(fullInvoice || updated);
 };
 
 export const deleteInvoice = async (req, res) => {
-    // 1. Get invoice items to restore stock
-    const { data: items } = await supabase
-        .from('invoice_items')
-        .select('productId, quantity')
-        .eq('invoiceId', req.params.id)
-        .eq('organization_id', req.user.organizationId);
-
-    // 2. Delete invoice (cascade should handle items)
     const { error } = await supabase
         .from('invoices')
         .delete()
@@ -652,28 +576,6 @@ export const deleteInvoice = async (req, res) => {
         .eq('organization_id', req.user.organizationId);
 
     if (error) throw new APIError(error.message, 500);
-
-    // 3. Restore stock for tracked products
-    if (items && items.length > 0) {
-        for (const item of items) {
-            if (!item.productId) continue;
-            
-            const { data: p } = await supabase
-                .from('products')
-                .select('stock, is_inventory_tracked')
-                .eq('id', item.productId)
-                .single();
-                
-            if (p && p.is_inventory_tracked) {
-                const newStock = (p.stock || 0) + item.quantity;
-                await supabase
-                    .from('products')
-                    .update({ stock: newStock, updatedAt: new Date() })
-                    .eq('id', item.productId);
-            }
-        }
-    }
-
     res.json({ success: true });
 };
 

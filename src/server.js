@@ -16,13 +16,10 @@ import aiRoutes from './modules/ai/ai.route.js';
 import authRoutes from './modules/auth/auth.route.js';
 import invoiceRoutes from './modules/invoices/invoice.route.js';
 import customerRoutes from './modules/customers/customer.route.js';
-import productRoutes from './modules/products/product.route.js';
 import expenseRoutes from './modules/expenses/expense.route.js';
 import paymentRoutes from './modules/payments/payment.route.js';
-import settingRoutes from './modules/settings/setting.route.js';
 import complianceRoutes from './modules/compliance/compliance.route.js';
 import notificationRoutes from './modules/notifications/notification.route.js';
-import uploadRoutes from './modules/upload/upload.route.js';
 import analyticsRoutes from './modules/analytics/analytics.route.js';
 import systemRoutes from './modules/system/system.route.js';
 import reportRoutes from './modules/reports/report.route.js';
@@ -103,7 +100,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api', aiRoutes); // Mount at /api to support /api/ai/* AND /api/negotiate-settlement
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/customers', customerRoutes);
-app.use('/api/products', productRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/compliance', complianceRoutes);
@@ -113,8 +109,6 @@ app.use('/api/system', systemRoutes);
 app.use('/api/reports', reportRoutes);
 
 // Shared prefixes / General Routes
-app.use('/api', settingRoutes);   // Handles /api/settings, /api/inventory/settings
-app.use('/api', uploadRoutes);    // Handles /api/upload/logo, /api/uploads/*
 app.use('/api', analyticsRoutes); // Handles /api/dashboard-stats, /api/analytics/*
 
 // SERVE FRONTEND (Optional)

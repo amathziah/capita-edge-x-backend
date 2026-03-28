@@ -1,5 +1,5 @@
 import { supabase } from '../../core/database/supabase.js';
-import emailService from '../settings/email.service.js';
+import emailService from '../../core/services/email.service.js';
 import { DEFAULTS } from '../../core/config/constants.js';
 
 export const checkAndSendFollowUps = async () => {

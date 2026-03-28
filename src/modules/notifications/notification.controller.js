@@ -27,30 +27,6 @@ export const getNotifications = async (req, res) => {
         });
     }
 
-    // 2. Low stock
-    const { data: lowStockProducts } = await supabase
-        .from('products')
-        .select('id, name, stock, minStock, reorder_level, is_inventory_tracked')
-        .eq('organization_id', req.user.organizationId);
-
-    if (lowStockProducts) {
-        lowStockProducts.forEach(product => {
-            if (product.is_inventory_tracked === false) return; // Skip non-tracked items
-
-            const threshold = product.minStock || product.reorder_level || 10;
-            if (product.stock <= threshold) {
-                notifications.push({
-                    id: `lowstock-${product.id}`,
-                    type: product.stock === 0 ? 'danger' : 'warning',
-                    text: product.stock === 0 ? `Out of stock: ${product.name}` : `Low stock: ${product.name}`,
-                    details: `${product.stock} units remaining`,
-                    time: new Date().toISOString(),
-                    actionUrl: '/inventory'
-                });
-            }
-        });
-    }
-
     // 3. Recent payments
     const yesterday = new Date(now - 24 * 60 * 60 * 1000).toISOString();
     const { data: recentPayments } = await supabase

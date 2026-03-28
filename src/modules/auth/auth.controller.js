@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { supabase } from '../../core/database/supabase.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
-import emailService from '../settings/email.service.js';
+import emailService from '../../core/services/email.service.js';
 
 /**
  * Helper to hash OTP for secure storage

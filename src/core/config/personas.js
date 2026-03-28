@@ -21,7 +21,7 @@ export const PERSONA_META = {
         label: 'COMMERCE', color: '#f472b6', colorDim: '#f472b660',
         colorBg: '#f472b612', colorBorder: '#f472b635', colorGlow: '#f472b630',
         robotColor: '#f472b6', robotEye: '#fdf2f8', robotBg: '#500724',
-        greeting: "Inventory secure. **Capita** active — watching replenishment risks and store performance. What do you need?"
+        greeting: "Sales active. **Capita** online — tracking revenue, orders, and collections. What do you need?"
     },
 };
 
@@ -61,9 +61,9 @@ export const personaActions = {
         { label: 'Burn rate', icon: 'Activity', query: 'What is our current monthly burn rate?', tag: 'BURN' },
     ],
     ecommerce: [
-        { label: 'Stock risks', icon: 'AlertTriangle', query: 'Which products are at risk of stockout?', tag: 'RISK' },
-        { label: 'Dead stock', icon: 'Zap', query: 'How much capital is locked in dead stock?', tag: 'LOCK' },
-        { label: 'Refund rate', icon: 'RotateCcw', query: 'What is my current refund rate?', tag: 'REFUND' },
-        { label: 'Sales velocity', icon: 'TrendingUp', query: 'Which items are selling fastest today?', tag: 'VELOCITY' },
+        { label: 'Revenue today', icon: 'TrendingUp', query: 'What is my total revenue today?', tag: 'REVENUE' },
+        { label: 'Overdue orders', icon: 'AlertTriangle', query: 'Show me all overdue invoices', tag: 'RISK' },
+        { label: 'Top customers', icon: 'Users', query: 'Who are my top customers by revenue?', tag: 'CRM' },
+        { label: 'Cash flow', icon: 'Activity', query: 'What is my current net cash flow?', tag: 'CASH' },
     ],
 };

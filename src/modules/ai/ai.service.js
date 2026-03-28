@@ -33,11 +33,6 @@ class AIService {
      */
     async processQuery(query, context = {}) {
         /*
-         *  INVENTORY BRAIN LOGIC
-         *  If context is inventory-heavy or query implies detailed stock questions,
-         *  we use the specialized "Inventory Intelligence" persona.
-         */
-        /*
          *  JSON ACTION AGENT ROUTING
          */
         const actionAgents = ['agent_reminder', 'agent_settlement', 'agent_analytics', 'agent_cashflow'];
@@ -87,7 +82,7 @@ class AIService {
             }
         });
 
-    const { invoices = [], customers = [], products = [], stats = {}, currency } = contextData;
+    const { invoices = [], customers = [], stats = {}, currency } = contextData;
     const curSymbol = getCurrencySymbol(currency);
 
         let systemPrompt = "";
@@ -209,7 +204,7 @@ User Query: "${query}"`;
                 return {
                     text: JSON.stringify({
                         action_type: "text_only",
-                        message: `The generative AI node is offline. Executing standard data fetch instead.\n\n[SYSTEM STATS]\nTotal Revenue: ${formatCurrency(stats.totalRevenue, contextData.currency)}\nOverdue: ${stats.overdueCount || 0}\nPending Recovery: ${formatCurrency(stats.pendingPayments, contextData.currency)}\n\nRouting to detailed reports...`,
+                        message: `The generative AI node is offline. Executing standard data fetch instead.\n\n[SYSTEM STATS]\nTotal Revenue: ${formatCurrency(stats.total_revenue, contextData.currency)}\nOverdue: ${stats.overdue_invoices || 0}\nPending Recovery: ${formatCurrency(stats.pending_payments, contextData.currency)}\n\nRouting to detailed reports...`,
                         ui_data: {}
                     }),
                     action: { type: 'navigate', data: { to: '/reports' } },
@@ -244,12 +239,12 @@ User Query: "${query}"`;
      * Build chatbot prompt with business context
      */
     buildChatbotPrompt(query, context) {
-        const { invoices = [], customers = [], products = [], expenses = [], stats = {}, agentId, currency } = context;
+        const { invoices = [], customers = [], expenses = [], stats = {}, agentId, currency } = context;
         const curSymbol = getCurrencySymbol(currency);
         const lowerQuery = query.toLowerCase();
 
-        // Summarize expenses for context
-        const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+        // Summarize recent expenses for context (limited to top 20 fetched)
+        const totalExpenses = stats.total_expenses || 0;
         const recentExpensesSummary = expenses.slice(0, 5).map(e => `- ${e.description || 'Expense'}: ${formatCurrency(e.amount, currency)} (${new Date(e.date).toLocaleDateString()})`).join('\n');
 
         // --------------------------------------------------
@@ -286,49 +281,6 @@ Quote currency appropriately in the user's localized format using the symbol (${
             }
         }
 
-        // --------------------------------------------------
-        // INVENTORY INTELLIGENCE PERSONA
-        // --------------------------------------------------
-        const isInventoryContext = [
-            'stock', 'inventory', 'sku', 'product', 'reorder', 'selling', 'dead', 'margin', 'cost'
-        ].some(k => lowerQuery.includes(k));
-
-        if (isInventoryContext) {
-            return `You are Capita — CapitaEdgeX's 
-AI financial intelligence layer.
-
-For inventory, your job is to treat stock 
-as money. Every unsold unit is cash locked 
-on a shelf.
-
-STOCK HEALTH RULES:
-🟢 Healthy — stock above reorder level, 
-   selling regularly
-🟡 Reorder Soon — less than 7 days of 
-   stock at current velocity
-🔴 Out of Stock — zero units, revenue loss
-🟠 Overstocked — stock > 3x reorder level, 
-   cash inefficiency  
-⚫ Dead Stock — no sales in 60+ days, 
-   capital trapped
-
-ALWAYS SHOW:
-- Exact currency value of dead/overstocked items
-- Days of stock remaining at current velocity
-- Specific reorder recommendation with quantity
-
-Business Context:
-- Low Stock Items: ${stats.lowStockCount || 0}
-- Total Products: ${products.length}
-- Inventory Value: ${formatCurrency(stats.inventoryValue, currency)}
-- Total Expenses (to date): ${formatCurrency(totalExpenses, currency)}
-- Persona: ${context.businessType || 'Not set'}
-
-User Query: "${query}"
-
-Be specific. Use numbers. One clear action.`;
-        }
-
         // Detect Expense Context
         const isExpenseContext = [
             'expense', 'spend', 'spent', 'cost', 'buy', 'bought', 'purchase', 'burn', 'outflow'
@@ -346,7 +298,7 @@ EXPENSE ANALYSIS RULES:
 
 Business Context:
 - Total Revenue: ${formatCurrency(stats.total_revenue, currency)}
-- Total Expenses (Loaded): ${formatCurrency(totalExpenses, currency)}
+- Total Expenses: ${formatCurrency(totalExpenses, currency)}
 - Net Cash Flow: ${formatCurrency((stats.total_revenue || 0) - totalExpenses, currency)}
 - Recent Expenses List:
 ${recentExpensesSummary || 'None recorded'}
@@ -477,9 +429,9 @@ BUSINESS RULES
                 break;
             case 'ecommerce':
                 personaConstraints = `
-- Your focus is inventory health and sales velocity.
-- You treat stock as locked capital.
-- You proactively flag dead stock and stockout risks.
+- Your focus is revenue performance, order trends, and customer acquisition.
+- You flag overdue collections and revenue concentration risks.
+- You monitor cash flow relative to operating costs.
 `;
                 break;
         }
@@ -511,7 +463,6 @@ YOUR CORE JOBS:
 Business Context:
 - Total Invoices: ${invoices.length}
 - Total Customers: ${customers.length}  
-- Total Products: ${products.length}
 - Total Revenue: ${formatCurrency(stats.total_revenue, currency)}
 - Total Expenses: ${formatCurrency(totalExpenses, currency)}
 - Net Cash Flow: ${formatCurrency((stats.total_revenue || 0) - totalExpenses, currency)}
@@ -619,22 +570,21 @@ JSON:`;
         }
 
         try {
-            const { invoices = [], products = [], customers = [], stats = {}, trends = [], topProducts = [], topCustomers = [], health = {} } = context;
+            const { invoices = [], customers = [], stats = {}, trends = [], topCustomers = [], health = {}, businessType = 'general' } = context;
 
             const prompt = `You are Capita — the AI financial 
 intelligence layer inside CapitaEdgeX, 
 built for Indian small businesses.
-Analyze the following business data and provide 3-4 highly specific, actionable, and "useful" insights. 
+Analyze the following business data for a ${businessType.toUpperCase()} persona and provide 3-4 highly specific, actionable, and "useful" insights. 
 Avoid generic advice like "reduce expenses". Instead, use the data to provide deep intelligence.
+Customization: ${businessType === 'solopreneur' ? 'Focus on simplicity, safe-to-spend cash, and individual tax estimates.' : 'Focus on business growth and efficiency.'}
 
 BUSINESS CONTEXT:
-- Revenue (Total): ${formatCurrency(stats.totalRevenue, context.currency)}
+- Revenue (Total): ${formatCurrency(stats.total_revenue, context.currency)}
 - Revenue Trends (Past 6 Months): ${JSON.stringify(trends)}
-- Top Products: ${JSON.stringify(topProducts)}
 - Top Customers: ${JSON.stringify(topCustomers)}
 - Health Score: ${health.score || 0}/100
-- Overdue Invoices: ${stats.overdueCount || 0} (${formatCurrency(stats.pendingPayments, context.currency)} pending)
-- Inventory Value: ${formatCurrency(stats.inventoryValue, context.currency)}
+- Overdue Invoices: ${stats.overdue_invoices || 0} (${formatCurrency(stats.pending_payments, context.currency)} pending)
 
 OUTPUT INSTRUCTIONS:
 Return ONLY a valid JSON array of objects. Each object MUST follow this EXACT structure:
@@ -685,7 +635,7 @@ JSON:`;
             {
                 id: 'fb-revenue',
                 title: 'Revenue Overview',
-                value: formatCurrency(stats.totalRevenue, currency),
+                value: formatCurrency(stats.total_revenue, currency),
                 subtitle: 'Total earnings to date',
                 description: 'Your revenue is stable. Consider analyzing top customers to identify expansion opportunities.',
                 type: 'info'
@@ -693,10 +643,10 @@ JSON:`;
             {
                 id: 'fb-overdue',
                 title: 'Payment Risk',
-                value: `${stats.overdueCount || 0} Overdue`,
-                subtitle: `${formatCurrency(stats.pendingPayments, currency)} pending`,
+                value: `${stats.overdue_invoices || 0} Overdue`,
+                subtitle: `${formatCurrency(stats.pending_payments, currency)} pending`,
                 description: 'There are outstanding invoices. We recommend sending automated reminders to improve cash flow.',
-                type: stats.overdueCount > 0 ? 'warning' : 'success'
+                type: stats.overdue_invoices > 0 ? 'warning' : 'success'
             },
             {
                 id: 'fb-health',
@@ -883,23 +833,20 @@ JSON:`;
 
     fallbackProcessQuery(query, context) {
         const q = query.toLowerCase().trim();
-        const { invoices = [], customers = [], products = [], expenses = [], stats = {} } = context;
+        const { invoices = [], customers = [], expenses = [], stats = {} } = context;
 
-        const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+        const totalExpenses = stats.total_expenses || 0;
 
         // ─── GREETINGS ───
         if (/^(hi|hello|hey|sup|yo|good morning|good evening|good afternoon|what's up|howdy)\b/.test(q)) {
             const totalRev = stats.total_revenue || 0;
             const overdueCount = stats.overdue_invoices || 0;
-            const lowStock = stats.low_stock_items || 0;
             let greeting = "👋 Hey, I'm Capita — your AI CFO inside CapitaEdgeX. Here's your business right now:\n\n";
             greeting += `💰 **Revenue**: ${formatCurrency(totalRev, context.currency)}\n`;
             greeting += `💸 **Expenses**: ${formatCurrency(totalExpenses, context.currency)}\n`;
             greeting += `📄 **Invoices**: ${invoices.length} total`;
             if (overdueCount > 0) greeting += ` (⚠️ ${overdueCount} overdue)`;
             greeting += `\n👥 **Customers**: ${customers.length}\n`;
-            greeting += `📦 **Products**: ${products.length}`;
-            if (lowStock > 0) greeting += ` (🔴 ${lowStock} low stock)`;
             greeting += `\n\nWhat would you like to do?`;
             return { text: greeting };
         }
@@ -911,7 +858,6 @@ JSON:`;
                     "📊 **Analytics** — \"What is my revenue?\", \"Show expenses\", \"Profit this month\"\n" +
                     "📄 **Invoices** — \"Create invoice\", \"Show overdue\", \"Pending payments\"\n" +
                     "👥 **Customers** — \"Top customers\", \"How many customers?\"\n" +
-                    "📦 **Inventory** — \"Low stock items\", \"Inventory value\", \"Out of stock\"\n" +
                     "🏥 **Health** — \"Business health\", \"Cash flow\", \"GST summary\"\n" +
                     "🧾 **Quick Actions** — \"Bill [Name] [Amount]\", \"Export report\"\n\n" +
                     "Just ask in natural language!"
@@ -1031,66 +977,15 @@ JSON:`;
             };
         }
 
-        // ─── INVENTORY / PRODUCTS ───
-        if (q.includes('stock') || q.includes('inventory') || q.includes('product') || q.includes('item') || q.includes('sku')) {
-            const lowStock = products.filter(p => p.stock <= (p.min_stock || 10));
-            const outOfStock = products.filter(p => p.stock === 0);
-            const totalValue = products.reduce((sum, p) => sum + (p.price * p.stock), 0);
-
-            if (q.includes('low') || q.includes('reorder')) {
-                if (lowStock.length === 0) {
-                    return { text: '✅ **All products are well-stocked!** No reorders needed.' };
-                }
-                let text = `🔴 **${lowStock.length} Low Stock Item${lowStock.length > 1 ? 's' : ''}**\n\n`;
-                lowStock.slice(0, 5).forEach(p => {
-                    text += `• **${p.name}** — ${p.stock} left (min: ${p.min_stock || 10})\n`;
-                });
-                return { text, action: { type: 'navigate', data: { to: '/inventory' } } };
-            }
-
-            if (q.includes('out of stock') || q.includes('zero')) {
-                if (outOfStock.length === 0) {
-                    return { text: '✅ **No out-of-stock products!**' };
-                }
-                let text = `🚨 **${outOfStock.length} Out of Stock**\n\n`;
-                outOfStock.slice(0, 5).forEach(p => {
-                    text += `• **${p.name}** — ${formatCurrency(p.price, context.currency)} (selling price)\n`;
-                });
-                return { text, action: { type: 'navigate', data: { to: '/inventory' } } };
-            }
-
-            if (q.includes('value') || q.includes('worth')) {
-                return {
-                    text: `📦 **Inventory Value**: ${formatCurrency(totalValue, context.currency)}\n\n` +
-                        `• **Products**: ${products.length}\n` +
-                        `• **Low Stock**: ${lowStock.length}\n` +
-                        `• **Out of Stock**: ${outOfStock.length}`,
-                    data: { type: 'stat', value: totalValue }
-                };
-            }
-
-            return {
-                text: `📦 **Inventory Overview**\n\n` +
-                    `• **Total Products**: ${products.length}\n` +
-                    `• **Inventory Value**: ${formatCurrency(totalValue, context.currency)}\n` +
-                    `• **Low Stock**: ${lowStock.length}\n` +
-                    `• **Out of Stock**: ${outOfStock.length}\n\n` +
-                    `Ask "low stock items" or "inventory value" for details.`,
-                action: { type: 'navigate', data: { to: '/inventory' } }
-            };
-        }
-
         // ─── BUSINESS HEALTH / SUMMARY ───
         if (q.includes('health') || q.includes('summary') || q.includes('overview') || q.includes('dashboard') || q.includes('how is my business') || q.includes('status')) {
-            const rev = stats.totalRevenue || 0;
-            const exp = stats.totalExpenses || 0;
+            const rev = stats.total_revenue || 0;
+            const exp = stats.total_expenses || 0;
             const profit = rev - exp;
-            const overdueCount = stats.overdueCount || 0;
-            const lowStock = stats.lowStockCount || 0;
+            const overdueCount = stats.overdue_invoices || 0;
 
             let score = 100;
             if (overdueCount > 0) score -= overdueCount * 5;
-            if (lowStock > 0) score -= lowStock * 3;
             if (profit < 0) score -= 20;
             score = Math.max(0, Math.min(100, score));
 
@@ -1102,16 +997,15 @@ JSON:`;
                     `💸 Expenses: ${formatCurrency(exp, context.currency)}\n` +
                     `📈 Net Profit: ${formatCurrency(profit, context.currency)}\n` +
                     `📄 Invoices: ${invoices.length} (${overdueCount} overdue)\n` +
-                    `👥 Customers: ${customers.length}\n` +
-                    `📦 Products: ${products.length} (${lowStock} low stock)\n\n` +
+                    `👥 Customers: ${customers.length}\n\n` +
                     `${score >= 80 ? 'Business is in great shape! 🎉' : score >= 50 ? 'Some areas need attention.' : 'Critical issues require your attention.'}`,
             };
         }
 
         // ─── CASH FLOW ───
         if (q.includes('cash flow') || q.includes('cashflow') || q.includes('money flow') || q.includes('liquidity')) {
-            const rev = stats.totalRevenue || 0;
-            const exp = stats.totalExpenses || 0;
+            const rev = stats.total_revenue || 0;
+            const exp = stats.total_expenses || 0;
             const pending = invoices.filter(i => i.status === 'sent' || i.status === 'overdue')
                 .reduce((sum, i) => sum + (i.total || 0), 0);
 
@@ -1211,7 +1105,7 @@ JSON:`;
             'expense': '/expenses', 'expenses': '/expenses',
             'customer': '/customers', 'customers': '/customers',
             'report': '/reports', 'reports': '/reports', 'analytics': '/reports',
-            'inventory': '/inventory', 'products': '/inventory',
+
             'payment': '/payments', 'payments': '/payments',
             'compliance': '/compliance', 'settings': '/settings',
             'reminder': '/reminders', 'reminders': '/reminders',
@@ -1238,8 +1132,7 @@ JSON:`;
             text: "🤔 I'm not sure what you're looking for. Here are some things you can try:\n\n" +
                 "• **\"Revenue\"** or **\"How is my business?\"** — Quick overview\n" +
                 "• **\"Overdue invoices\"** — Payment follow-ups\n" +
-                "• **\"Top customers\"** — Best clients by revenue\n" +
-                "• **\"Low stock\"** — Inventory alerts\n" +
+                "• **\"Show overdue\"** — Invoice check\n" +
                 "• **\"Bill Acme 50000\"** — Quick invoice\n" +
                 "• **\"Business health\"** — Full health score\n" +
                 "• **\"Help\"** — See all my capabilities"
@@ -1283,29 +1176,21 @@ JSON:`;
         const insights = [];
         const { stats = {} } = context;
 
-        if (stats.overdueCount > 0) {
+        if (stats.overdue_invoices > 0) {
             insights.push({
                 id: 'overdue-warn',
                 type: 'warn',
-                message: `You have ${stats.overdueCount} overdue invoices. Consider sending payment reminders.`,
+                message: `You have ${stats.overdue_invoices} overdue invoices. Consider sending payment reminders.`,
                 priority: 1
             });
         }
 
-        if (stats.lowStockCount > 0) {
-            insights.push({
-                id: 'stock-warn',
-                type: 'warn',
-                message: `${stats.lowStockCount} products are low on stock. Time to reorder!`,
-                priority: 2
-            });
-        }
 
-        if (stats.totalRevenue > 0) {
+        if (stats.total_revenue > 0) {
             insights.push({
                 id: 'revenue-suggest',
                 type: 'suggest',
-                message: `Great work! You've earned ${formatCurrency(stats.totalRevenue, context.currency)} so far.`,
+                message: `Great work! You've earned ${formatCurrency(stats.total_revenue, context.currency)} so far.`,
                 priority: 3
             });
         }

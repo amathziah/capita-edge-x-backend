@@ -1,6 +1,6 @@
 import { supabase } from '../../core/database/supabase.js';
 import ledgerService from './ledger.service.js';
-import fileService from '../upload/file.service.js';
+import fileService from '../../core/services/file.service.js';
 import pdfService from '../invoices/pdf.service.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../../core/utils/configUtils.js';

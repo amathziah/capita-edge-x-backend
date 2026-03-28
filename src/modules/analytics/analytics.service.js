@@ -153,57 +153,10 @@ class AnalyticsService {
     }
 
     /**
-     * Get product performance metrics
+     * Get product performance metrics (DEPRECATED - Inventory Removed)
      */
     async getProductPerformance(organizationId) {
-        if (!organizationId) throw new Error('Organization ID required');
-
-        // We need invoice items and products
-        const { data: products, error: prodError } = await supabase
-            .from('products')
-            .select('id, name, price, stock, minStock')
-            .eq('organization_id', organizationId);
-
-        if (prodError) throw new Error(prodError.message);
-
-        // Invoice items generally rely on invoiceId, but for strictness we could filter by invoices first
-        // or assume RLS handles it. But for analytics, let's fetch items for the Org's invoices or products.
-        // A direct join or explicit fetch is better.
-        // Simplified: Fetch items where productId is in our Org's products list.
-        const productIds = products.map(p => p.id);
-
-        let items = [];
-        if (productIds.length > 0) {
-            const { data: fetchedItems, error: itemError } = await supabase
-                .from('invoice_items')
-                .select('id, productId, quantity, price')
-                .in('productId', productIds);
-
-            if (itemError) throw new Error(itemError.message);
-            items = fetchedItems;
-        }
-
-        const productStats = {};
-
-        products.forEach(p => {
-            productStats[p.id] = {
-                ...p,
-                times_sold: 0,
-                total_quantity_sold: 0,
-                total_revenue: 0
-            };
-        });
-
-        items.forEach(item => {
-            if (productStats[item.productId]) {
-                const stats = productStats[item.productId];
-                stats.times_sold++;
-                stats.total_quantity_sold += item.quantity;
-                stats.total_revenue += (item.quantity * item.price);
-            }
-        });
-
-        return Object.values(productStats).sort((a, b) => b.total_revenue - a.total_revenue);
+        return [];
     }
 
     /**
@@ -280,11 +233,16 @@ class AnalyticsService {
             .eq('organization_id', organizationId);
         if (custError) throw new Error(custError.message);
 
-        const { data: products, error: prodError } = await supabase
-            .from('products')
-            .select('stock, minStock, cost_price, is_inventory_tracked')
+        const { data: expenses, error: expError } = await supabase
+            .from('expenses')
+            .select('amount')
             .eq('organization_id', organizationId);
-        if (prodError) throw new Error(prodError.message);
+        if (expError) throw new Error(expError.message);
+
+        const totalExpenses = expenses?.reduce((sum, exp) => sum + (exp.amount || 0), 0) || 0;
+
+
+
 
         const stats = {
             paid_invoices: 0,
@@ -294,9 +252,6 @@ class AnalyticsService {
             pending_payments: 0,
             overdue_revenue: 0,
             total_customers: customerCount || 0,
-            total_products: products?.length || 0,
-            low_stock_items: 0,
-            inventory_value: 0
         };
 
         invoices.forEach(inv => {
@@ -313,10 +268,7 @@ class AnalyticsService {
             }
         });
 
-        if (products) {
-            stats.low_stock_items = products.filter(p => p.is_inventory_tracked && p.stock <= (p.minStock || 10)).length;
-            stats.inventory_value = products.reduce((sum, p) => sum + (p.stock * (p.cost_price || 0)), 0);
-        }
+        stats.total_expenses = totalExpenses;
 
         return stats;
     }
@@ -362,15 +314,7 @@ class AnalyticsService {
                 break;
 
             case 'products':
-                const { data: products } = await supabase
-                    .from('products')
-                    .select('name, price, stock, unit')
-                    .eq('organization_id', organizationId)
-                    .order('name');
-                data = products;
-                headers = ['Name', 'Price', 'Stock', 'Unit'];
-                data = data.map(row => [row.name, row.price, row.stock, row.unit]);
-                break;
+                return ''; // Inventory removed
 
             case 'payments':
                 const { data: payments } = await supabase
@@ -437,9 +381,6 @@ class AnalyticsService {
             score += Math.max(0, HEALTH_SCORE.CASH_FLOW_MAX_BONUS + (cashFlow.net_cash_flow / HEALTH_SCORE.CASH_FLOW_SCALING) * HEALTH_SCORE.CASH_FLOW_MAX_BONUS);
         }
 
-        // Stock management factor
-        const stockScore = stats.low_stock_items > 0 ? HEALTH_SCORE.STOCK_PARTIAL_BONUS : HEALTH_SCORE.STOCK_FULL_BONUS;
-        score += stockScore;
 
         return {
             score: Math.max(0, Math.min(100, Math.round(score))),
@@ -447,7 +388,6 @@ class AnalyticsService {
                 revenue: Math.round(revenueScore),
                 overdue: Math.round(-overdueRatio * HEALTH_SCORE.OVERDUE_MAX_PENALTY),
                 cashFlow: cashFlow.cash_flow_health === 'positive' ? HEALTH_SCORE.CASH_FLOW_MAX_BONUS : (HEALTH_SCORE.CASH_FLOW_MAX_BONUS / 2),
-                inventory: stockScore
             }
         };
     }
@@ -573,12 +513,6 @@ class AnalyticsService {
                 break;
 
             case 'ecommerce':
-                const { data: ecoProducts } = await supabase
-                    .from('products')
-                    .select('stock, minStock, is_inventory_tracked')
-                    .eq('organization_id', organizationId);
-
-                const lowStock = ecoProducts?.filter(p => p.is_inventory_tracked && p.stock <= (p.minStock || DEFAULTS.DEFAULT_REORDER_LEVEL)).length || 0;
                 const { count: dailyOrders } = await supabase
                     .from('invoices')
                     .select('*', { count: 'exact', head: true })
@@ -586,9 +520,8 @@ class AnalyticsService {
                     .gte('createdAt', new Date(now.setHours(0, 0, 0, 0)).toISOString());
 
                 stats.metrics = {
-                    lowStockItems: lowStock,
                     dailyOrders: dailyOrders || 0,
-                    netMargins: PLACEHOLDERS.ECOMMERCE_NET_MARGINS // Placeholder
+                    netMargins: PLACEHOLDERS.ECOMMERCE_NET_MARGINS
                 };
                 break;
         }

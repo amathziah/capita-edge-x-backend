@@ -1,7 +1,7 @@
 import { supabase } from '../../core/database/supabase.js';
 import aiService from './ai.service.js';
 import analyticsService from '../analytics/analytics.service.js';
-import emailService from '../settings/email.service.js';
+import emailService from '../../core/services/email.service.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
 import { LIMITS } from '../../core/config/constants.js';
 import { PERSONA_META, DEFAULT_META, defaultActions, personaActions } from '../../core/config/personas.js';
@@ -31,18 +31,16 @@ export const processChat = async (req, res) => {
     const [
         { data: invoices },
         { data: customers },
-        { data: products },
         { data: expenses },
         stats
     ] = await Promise.all([
         supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('customers').select('*').eq('organization_id', req.user.organizationId),
-        supabase.from('products').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(20),
         analyticsService.getDashboardStats(req.user.organizationId) // Pass orgId to stats
     ]);
 
-    const context = { invoices, customers, products, expenses, stats, agentId, businessType: persona };
+    const context = { invoices, customers, expenses, stats, agentId, businessType: persona };
 
     const response = await aiService.processQuery(query, context);
 
@@ -78,6 +76,7 @@ export const magicFill = async (req, res) => {
 
 export const getInsights = async (req, res) => {
     const orgId = req.user.organizationId;
+    const { persona } = req.query;
 
     // Check Cache
     if (insightsCache.has(orgId)) {
@@ -90,33 +89,28 @@ export const getInsights = async (req, res) => {
 
     const [
         { data: invoices },
-        { data: products },
         { data: customers },
         stats,
         revenueTrends,
-        productPerformance,
         customerInsights,
         healthScore
     ] = await Promise.all([
         supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId),
-        supabase.from('products').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('customers').select('*').eq('organization_id', req.user.organizationId),
         analyticsService.getDashboardStats(req.user.organizationId),
         analyticsService.getRevenueTrends(req.user.organizationId, 'monthly'),
-        analyticsService.getProductPerformance(req.user.organizationId),
         analyticsService.getCustomerInsights(req.user.organizationId),
         analyticsService.getBusinessHealthScore(req.user.organizationId)
     ]);
 
     const context = {
         invoices,
-        products,
         customers,
         stats,
         trends: revenueTrends.slice(-6), // Last 6 months
-        topProducts: productPerformance.slice(0, 3),
         topCustomers: customerInsights.slice(0, 3),
-        health: healthScore
+        health: healthScore,
+        businessType: persona
     };
     const insights = await aiService.generateInsights(context);
 

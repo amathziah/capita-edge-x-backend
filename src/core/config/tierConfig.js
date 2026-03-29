@@ -13,7 +13,7 @@ export const PLAN_TIERS = {
         description: 'Get started with the essentials.',
         limits: {
             invoices: 5,
-            ai_requests_per_day: 10,
+            ai_token_limit: 50000,
             products: 20,
             customers: 20,
         },
@@ -36,7 +36,7 @@ export const PLAN_TIERS = {
         description: 'For freelancers and solopreneurs scaling up.',
         limits: {
             invoices: Infinity,
-            ai_requests_per_day: 100,
+            ai_token_limit: 250000,
             products: Infinity,
             customers: Infinity,
         },
@@ -59,7 +59,7 @@ export const PLAN_TIERS = {
         description: 'For growing teams and agencies.',
         limits: {
             invoices: Infinity,
-            ai_requests_per_day: 500,
+            ai_token_limit: 1000000,
             products: Infinity,
             customers: Infinity,
         },
@@ -83,7 +83,7 @@ export const PLAN_TIERS = {
         description: 'White-label for Chartered Accountants.',
         limits: {
             invoices: Infinity,
-            ai_requests_per_day: 200,
+            ai_token_limit: 500000,
             products: Infinity,
             customers: Infinity,
         },
@@ -106,7 +106,7 @@ export const PLAN_TIERS = {
         description: 'Custom solutions for large organizations.',
         limits: {
             invoices: Infinity,
-            ai_requests_per_day: Infinity,
+            ai_token_limit: Infinity,
             products: Infinity,
             customers: Infinity,
         },
@@ -147,6 +147,33 @@ export const hasTierFeature = (tier, feature) => {
 };
 
 
+
+// ═══════════════════════════════════════════════════════════════════════
+//  AI PRICING & EXCHANGE RATES
+// ═══════════════════════════════════════════════════════════════════════
+
+export const AI_PRICING = {
+    'gemini-2.0-flash': {
+        inputPer1M: 0.075,  // USD
+        outputPer1M: 0.30,  // USD
+    },
+    'gemini-2.0-flash-lite': {
+        inputPer1M: 0.075,
+        outputPer1M: 0.30,
+    },
+    'gemini-pro': {
+        inputPer1M: 0.125,
+        outputPer1M: 0.375,
+    },
+    'gemini-1.5-flash': {
+        inputPer1M: 0.075,
+        outputPer1M: 0.30,
+    }
+};
+
+export const EXCHANGE_RATE = {
+    USD_TO_INR: 83.0,
+};
 
 /**
  * All valid tier slugs.

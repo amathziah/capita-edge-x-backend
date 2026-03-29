@@ -7,8 +7,84 @@ import { LIMITS } from '../../core/config/constants.js';
 import { PERSONA_META, DEFAULT_META, defaultActions, personaActions } from '../../core/config/personas.js';
 
 // Cache for insights
+// Cache for insights
+import { AI_PRICING, EXCHANGE_RATE, getTierLimit } from '../../core/config/tierConfig.js';
+
+// Cache for insights
 const insightsCache = new Map(); // Key: orgId, Value: { data, timestamp }
 const CACHE_TTL = LIMITS.AI_CACHE_TTL_MS; // Moved to constants
+
+/**
+ * Helper to calculate cost in INR
+ */
+const calculateAICost = (usage, model = 'gemini-2.0-flash') => {
+    if (!usage) return { tokens: 0, cost: 0 };
+    
+    const pricing = AI_PRICING[model] || AI_PRICING['gemini-2.0-flash'];
+    const { promptTokenCount = 0, candidatesTokenCount = 0, totalTokenCount = 0 } = usage;
+    
+    const usdCost = (promptTokenCount * pricing.inputPer1M / 1000000) + 
+                    (candidatesTokenCount * pricing.outputPer1M / 1000000);
+    
+    return {
+        tokens: totalTokenCount,
+        cost: usdCost * EXCHANGE_RATE.USD_TO_INR
+    };
+};
+
+/**
+ * Aggregates total token usage for an organization
+ */
+const getAIUsageData = async (organizationId) => {
+    const { data, error } = await supabase
+        .from('ai_requests')
+        .select('tokens')
+        .eq('organization_id', organizationId);
+
+    if (error) return 0;
+    return data.reduce((sum, req) => sum + (req.tokens || 0), 0);
+};
+
+/**
+ * Enforces credit limits based on organization tier
+ */
+const checkAICreditLimit = async (req) => {
+    // 1. Get organization tier
+    const { data: org, error: orgError } = await supabase
+        .from('organizations')
+        .select('plan_tier')
+        .eq('id', req.user.organizationId)
+        .single();
+
+    if (orgError || !org) throw new APIError('Organization not found', 404);
+
+    const limit = getTierLimit(org.plan_tier, 'ai_token_limit');
+    if (limit === Infinity) return; // Enterprise/Unlimited
+
+    // 2. Get current usage
+    const totalTokens = await getAIUsageData(req.user.organizationId);
+
+    if (totalTokens >= limit) {
+        throw new APIError(`AI Credit Limit Exceeded (${totalTokens.toLocaleString()} / ${limit.toLocaleString()} tokens). Please upgrade your plan to continue using AI features.`, 403);
+    }
+};
+
+export const getAIUsageStatus = async (req, res) => {
+    const [usage, { data: org }] = await Promise.all([
+        getAIUsageData(req.user.organizationId),
+        supabase.from('organizations').select('plan_tier').eq('id', req.user.organizationId).single()
+    ]);
+
+    const limit = getTierLimit(org?.plan_tier || 'starter', 'ai_token_limit');
+
+    res.json({
+        usage,
+        limit,
+        tier: org?.plan_tier || 'starter',
+        remaining: limit === Infinity ? Infinity : Math.max(0, limit - usage),
+        percent: limit === Infinity ? 0 : Math.min(100, Math.round((usage / limit) * 100))
+    });
+};
 
 
 
@@ -23,6 +99,8 @@ export const getConfig = async (req, res) => {
 export const processChat = async (req, res) => {
     const { query, agentId, persona } = req.body;
 
+    await checkAICreditLimit(req);
+
     if (!query) {
         throw new APIError('Query is required', 400);
     }
@@ -32,25 +110,46 @@ export const processChat = async (req, res) => {
         { data: invoices },
         { data: customers },
         { data: expenses },
-        stats
+        stats,
+        safeToSpend,
+        customerInsights,
+        personaStats,
+        revenueTrends
     ] = await Promise.all([
         supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('customers').select('*').eq('organization_id', req.user.organizationId),
-        supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(20),
-        analyticsService.getDashboardStats(req.user.organizationId) // Pass orgId to stats
+        supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(50),
+        analyticsService.getDashboardStats(req.user.organizationId),
+        analyticsService.getSafeToSpend(req.user.organizationId),
+        analyticsService.getCustomerInsights(req.user.organizationId),
+        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur'),
+        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly')
     ]);
 
-    const context = { invoices, customers, expenses, stats, agentId, businessType: persona };
+    const context = { 
+        user: req.user,
+        invoices, 
+        customers, 
+        expenses, 
+        stats, 
+        safeToSpend,
+        customerInsights,
+        personaStats,
+        revenueTrends: revenueTrends.slice(-12), // 1 Year History
+        agentId, 
+        businessType: persona 
+    };
 
     const response = await aiService.processQuery(query, context);
+    const { tokens, cost } = calculateAICost(response.usage, 'gemini-2.0-flash');
 
-    // [AUDIT] Log AI Request
+    // [AUDIT] Log AI Request with precision data
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-2.0-flash-lite',
-        tokens: 100, // Estimate
-        cost: 0
+        model: 'gemini-2.0-flash',
+        tokens,
+        cost
     }]);
 
     res.json(response);
@@ -58,17 +157,21 @@ export const processChat = async (req, res) => {
 
 export const magicFill = async (req, res) => {
     const { text } = req.body;
+
+    await checkAICreditLimit(req);
+
     if (!text) throw new APIError('Text input is required', 400);
 
     const parsed = await aiService.parseInvoiceText(text);
+    const { tokens, cost } = calculateAICost(parsed.usage, 'gemini-2.0-flash');
 
     // [AUDIT] Log AI Request
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-pro',
-        tokens: 150,
-        cost: 0
+        model: 'gemini-2.0-flash',
+        tokens,
+        cost
     }]);
 
     res.json(parsed);
@@ -77,6 +180,8 @@ export const magicFill = async (req, res) => {
 export const getInsights = async (req, res) => {
     const orgId = req.user.organizationId;
     const { persona } = req.query;
+
+    await checkAICreditLimit(req);
 
     // Check Cache
     if (insightsCache.has(orgId)) {
@@ -93,26 +198,36 @@ export const getInsights = async (req, res) => {
         stats,
         revenueTrends,
         customerInsights,
-        healthScore
+        healthScore,
+        safeToSpend,
+        personaStats
     ] = await Promise.all([
         supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId),
         supabase.from('customers').select('*').eq('organization_id', req.user.organizationId),
         analyticsService.getDashboardStats(req.user.organizationId),
         analyticsService.getRevenueTrends(req.user.organizationId, 'monthly'),
         analyticsService.getCustomerInsights(req.user.organizationId),
-        analyticsService.getBusinessHealthScore(req.user.organizationId)
+        analyticsService.getBusinessHealthScore(req.user.organizationId),
+        analyticsService.getSafeToSpend(req.user.organizationId),
+        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur')
     ]);
 
     const context = {
+        user: req.user,
+        organizationId: orgId,
         invoices,
         customers,
         stats,
+        safeToSpend,
+        personaStats,
         trends: revenueTrends.slice(-6), // Last 6 months
         topCustomers: customerInsights.slice(0, 3),
         health: healthScore,
         businessType: persona
     };
+    
     const insights = await aiService.generateInsights(context);
+    const { tokens, cost } = calculateAICost(insights.usage, 'gemini-2.0-flash');
 
     // Save to Cache
     insightsCache.set(orgId, {
@@ -124,9 +239,9 @@ export const getInsights = async (req, res) => {
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-pro',
-        tokens: 300,
-        cost: 0
+        model: 'gemini-2.0-flash',
+        tokens,
+        cost
     }]);
 
     res.json(insights);
@@ -154,6 +269,8 @@ export const predictRevenue = async (req, res) => {
 export const negotiateSettlement = async (req, res) => {
     const { invoiceId } = req.body;
 
+    await checkAICreditLimit(req);
+
     const { data: invoice, error } = await supabase
         .from('invoices')
         .select('*, customers(name, email)')
@@ -164,14 +281,16 @@ export const negotiateSettlement = async (req, res) => {
     if (error || !invoice) throw new APIError('Invoice not found', 404);
 
     const offer = await aiService.generateSettlementOffer(invoice);
+    const { tokens, cost } = calculateAICost(offer?.usage, 'gemini-2.0-flash');
 
-    // [AUDIT] Log
+    // [AUDIT] Log with Customer Attribution
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-pro',
-        tokens: 200,
-        cost: 0
+        customer_id: invoice.customer_id,
+        model: 'gemini-2.0-flash',
+        tokens,
+        cost
     }]);
 
     res.json(offer);
@@ -179,16 +298,20 @@ export const negotiateSettlement = async (req, res) => {
 
 export const processCommand = async (req, res) => {
     const { command } = req.body;
+
+    await checkAICreditLimit(req);
+
     if (!command) throw new APIError('Command text required', 400);
 
     const action = await aiService.parseCommand(command);
+    const { tokens, cost } = calculateAICost(action.usage, 'gemini-2.0-flash');
 
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-pro',
-        tokens: 50,
-        cost: 0
+        model: 'gemini-2.0-flash',
+        tokens,
+        cost
     }]);
 
     res.json(action);
@@ -196,6 +319,8 @@ export const processCommand = async (req, res) => {
 
 export const generateCollectionDraft = async (req, res) => {
     const { invoiceId, forceAggressive } = req.body;
+
+    await checkAICreditLimit(req);
 
     const { data: invoice, error } = await supabase
         .from('invoices')
@@ -209,7 +334,19 @@ export const generateCollectionDraft = async (req, res) => {
 
     if (error || !invoice) throw new APIError('Invoice not found', 404);
 
-    const draft = await aiService.generateCollectionDraft(invoice, forceAggressive);
+    const draft = await aiService.generateCollectionDraft(invoice, 'INR', forceAggressive);
+    const { tokens, cost } = calculateAICost(draft.usage, 'gemini-2.0-flash');
+
+    // [AUDIT] Log with Customer Attribution
+    await supabase.from('ai_requests').insert([{
+        organization_id: req.user.organizationId,
+        user_id: req.user.id,
+        customer_id: invoice.customer_id,
+        model: 'gemini-2.0-flash',
+        tokens,
+        cost
+    }]);
+
     res.json(draft);
 };
 

@@ -3,7 +3,7 @@ export const PERSONA_META = {
         label: 'SOLO', color: '#34d399', colorDim: '#34d39960',
         colorBg: '#34d39912', colorBorder: '#34d39935', colorGlow: '#34d39930',
         robotColor: '#34d399', robotEye: '#ecfdf5', robotBg: '#064e3b',
-        greeting: "Hey! I'm **Capita**. I'll keep your personal finances organized and your cash flow crystal clear. What's on your mind?"
+        greeting: "Hey! I'm **Capita** — your AI CFO. I've analyzed your cash flow, tax reserves, and client reliability. What should we tackle first?"
     },
     subscription: {
         label: 'SaaS', color: '#818cf8', colorDim: '#818cf860',
@@ -43,10 +43,10 @@ export const defaultActions = [
 
 export const personaActions = {
     solopreneur: [
-        { label: 'Tax estimate', icon: 'Zap', query: 'Estimate my taxes for this quarter', tag: 'TAX' },
-        { label: 'Expense check', icon: 'CreditCard', query: 'Show me my expenses for this month', tag: 'SPEND' },
-        { label: 'Cash available', icon: 'Activity', query: 'How much cash is safe to spend?', tag: 'CASH' },
-        { label: 'Personal vs Biz', icon: 'Users', query: 'Analyze my business spending habits', tag: 'SPLIT' },
+        { label: 'Safe to Spend', icon: 'Activity', query: 'How much cash is safe to spend after taxes and risk?', tag: 'LIQUIDITY' },
+        { label: 'Tax Reserves', icon: 'Zap', query: 'Show me my GST and Income Tax reserve breakdown', tag: 'TAX' },
+        { label: 'Client Trust', icon: 'Users', query: 'Who are my most reliable clients and who is late?', tag: 'CRM' },
+        { label: 'Revenue Risk', icon: 'AlertTriangle', query: 'Am I too dependent on a single client for revenue?', tag: 'RISK' },
     ],
     subscription: [
         { label: 'Check MRR', icon: 'TrendingUp', query: 'What is my current Monthly Recurring Revenue?', tag: 'MRR' },

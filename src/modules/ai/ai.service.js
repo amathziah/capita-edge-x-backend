@@ -64,13 +64,15 @@ class AIService {
     isQuotaError(error) {
         if (!error) return false;
         const msg = error.message?.toLowerCase() || '';
+        const stack = error.stack?.toLowerCase() || '';
         return (
             error.status === 429 ||
             error.statusCode === 429 ||
             msg.includes('429') ||
             msg.includes('quota exceeded') ||
             msg.includes('too many requests') ||
-            msg.includes('rate limit')
+            msg.includes('rate limit') ||
+            stack.includes('rate_limit')
         );
     }
 
@@ -245,28 +247,43 @@ class AIService {
      * Generate business insights
      */
     async generateInsights(context, attempt = 1) {
-        if (!this.model) return { data: this.fallbackGenerateInsights(context), provider: 'local_fallback' };
-
         const lockKey = `insights_org_${context.organizationId || 'default'}`;
+
+        // Immediate fallback if we know we are in a bad state or no model
+        if (!this.model) return { data: this.fallbackGenerateInsights(context), provider: 'local_fallback' };
 
         return this.executeWithLock(lockKey, async () => {
             try {
-                const { stats = {} } = context;
-                const prompt = `Generate JSON insights for Revenue: ${stats.total_revenue}`;
+                const { stats = {}, businessType = 'solopreneur' } = context;
+                
+                // Construct a detailed but compact prompt for better tokens
+                const prompt = `You are a CFO for a ${businessType} business.
+                DATA: Revenue: ${stats.total_revenue || 0}, Pending: ${stats.pending_payments || 0}.
+                TASK: Return exactly 3-4 JSON insights. Format: [{ id, title, value, description, type: 'success'|'warning'|'info'|'danger' }].
+                Be specific about cashflow and late payments.`;
+
                 const result = await this.model.generateContent(prompt);
                 const response = await result.response;
                 const insights = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-                return { data: insights, usage: response.usageMetadata, provider: 'cloud' };
+                
+                return { 
+                    data: insights, 
+                    usage: response.usageMetadata, 
+                    provider: 'cloud',
+                    timestamp: new Date().toISOString()
+                };
             } catch (error) {
                 const isQuota = this.isQuotaError(error);
+                
+                // Staggered Retry
                 if (isQuota && attempt < 2) {
                     console.warn(`📡 Insights RPM limit hit (attempt ${attempt}). Staggering 5s retry...`);
-                    await new Promise(resolve => setTimeout(resolve, 5000 * attempt));
+                    await new Promise(resolve => setTimeout(resolve, 5000));
                     return this.generateInsights(context, attempt + 1);
                 }
 
                 if (isQuota) {
-                    console.warn('📡 Gemini Quota Exhausted (Insights): Generating cached/static insights.');
+                    console.warn('📡 Gemini Quota Exhausted (Insights): Generating comprehensive local metrics.');
                 } else {
                     console.error('AI Insights Error:', error.message);
                 }
@@ -274,7 +291,9 @@ class AIService {
                 const fallbackData = this.fallbackGenerateInsights(context);
                 return {
                     data: fallbackData,
-                    provider: isQuota ? 'local_fallback' : 'error_fallback'
+                    provider: isQuota ? 'local_fallback' : 'error_fallback',
+                    error: isQuota ? 'Cloud AI offline' : error.message,
+                    timestamp: new Date().toISOString()
                 };
             }
         });
@@ -329,11 +348,21 @@ class AIService {
     /* ========== Fallback Methods ========== */
 
     fallbackProcessQuery(query, context) {
-        const stats = context.stats || {};
+        const { stats = {}, safeToSpend = {}, currency = 'INR' } = context;
         const totalRev = stats.total_revenue || 0;
+        const pending = stats.pending_payments || 0;
+        
+        let msg = `👋 **Capita Local Mode**\n\nI'm currently operating in local mode because my cloud brain is busy. Here's what I can see:\n`;
+        msg += `• **Total Revenue**: ${formatCurrency(totalRev, currency)}\n`;
+        if (pending > 0) msg += `• **Pending Payments**: ${formatCurrency(pending, currency)}\n`;
+        if (safeToSpend?.safeToSpend) msg += `• **Safe-to-Spend**: ${formatCurrency(safeToSpend.safeToSpend, currency)}\n`;
+        
+        msg += `\nI can't process complex "magic" requests right now, but I'm still tracking your numbers!`;
+
         return { 
-            text: `👋 Capita Local Mode. Revenue: ${formatCurrency(totalRev, context.currency)}. Cloud AI busy.`,
-            provider: 'local_fallback'
+            text: msg,
+            provider: 'local_fallback',
+            timestamp: new Date().toISOString()
         };
     }
 
@@ -342,8 +371,55 @@ class AIService {
     }
 
     fallbackGenerateInsights(context) {
-        const stats = context.stats || {};
-        return [{ id: 'fb-1', title: 'Revenue', value: formatCurrency(stats.total_revenue, context.currency), description: 'Cloud AI offline.', type: 'info' }];
+        const { stats = {}, health = {}, safeToSpend = {}, currency = 'INR', personaStats = {} } = context;
+        const insights = [];
+
+        // 1. Revenue Insight
+        insights.push({
+            id: 'fb-revenue',
+            title: 'Revenue Snapshot',
+            value: formatCurrency(stats.total_revenue || 0, currency),
+            description: stats.total_revenue > 0 ? 'Consistent revenue tracking active.' : 'Start invoicing to build revenue history.',
+            type: 'info'
+        });
+
+        // 2. Collections/Pending
+        if (stats.pending_payments > 0) {
+            const overdueCount = context.invoices?.filter(i => i.status === 'overdue').length || 0;
+            insights.push({
+                id: 'fb-pending',
+                title: 'Receivables Status',
+                value: formatCurrency(stats.pending_payments, currency),
+                description: overdueCount > 0 ? `${overdueCount} invoices are currently overdue. Action recommended.` : 'Outstanding payments are within terms.',
+                type: overdueCount > 0 ? 'warning' : 'info'
+            });
+        }
+
+        // 3. Health Score
+        if (health && health.status) {
+            insights.push({
+                id: 'fb-health',
+                title: 'Business Health',
+                value: health.status,
+                description: `Score: ${health.score}/100. Based on your current payment speed and churn risk.`,
+                type: health.score > 70 ? 'success' : health.score > 40 ? 'warning' : 'danger'
+            });
+        }
+
+        // 4. Safe-to-Spend / Liquidity
+        if (safeToSpend && safeToSpend.safeToSpend) {
+            insights.push({
+                id: 'fb-liquidity',
+                title: 'Safe-to-Spend',
+                value: formatCurrency(safeToSpend.safeToSpend, currency),
+                description: 'Estimated cash available after upcoming payables.',
+                type: safeToSpend.safeToSpend > 0 ? 'success' : 'warning'
+            });
+        }
+
+        return insights.length > 0 ? insights : [
+            { id: 'fb-empty', title: 'Data Pulse', value: 'Ready', description: 'Systems operational. Cloud AI is busy, but local analysis is active.', type: 'info' }
+        ];
     }
 
     fallbackCollectionDraft(invoice, currency, forceAggressive = false) {

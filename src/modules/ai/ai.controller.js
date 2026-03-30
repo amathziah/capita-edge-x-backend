@@ -227,7 +227,14 @@ export const getInsights = async (req, res) => {
     };
     
     const insights = await aiService.generateInsights(context);
-    const { tokens, cost } = calculateAICost(insights.usage, 'gemini-2.0-flash');
+    
+    let tokens = 0;
+    let cost = 0;
+    if (insights.usage) {
+        const usageData = calculateAICost(insights.usage, 'gemini-2.0-flash');
+        tokens = usageData.tokens;
+        cost = usageData.cost;
+    }
 
     // Save to Cache
     insightsCache.set(orgId, {

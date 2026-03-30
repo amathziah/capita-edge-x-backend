@@ -23,6 +23,7 @@ import notificationRoutes from './modules/notifications/notification.route.js';
 import analyticsRoutes from './modules/analytics/analytics.route.js';
 import systemRoutes from './modules/system/system.route.js';
 import reportRoutes from './modules/reports/report.route.js';
+import productsRoutes from './modules/products/products.route.js';
 
 // Load environment variables
 dotenv.config();
@@ -111,6 +112,7 @@ app.use('/api/reports', reportRoutes);
 
 // Shared prefixes / General Routes
 app.use('/api', analyticsRoutes); // Handles /api/dashboard-stats, /api/analytics/*
+app.use('/api', productsRoutes); // Handles /api/products, /api/analytics/product-performance
 
 // SERVE FRONTEND (Optional)
 const CLIENT_BUILD_PATH = path.join(__dirname, 'dist');

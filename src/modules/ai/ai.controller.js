@@ -56,7 +56,14 @@ const checkAICreditLimit = async (req) => {
         .eq('id', req.user.organizationId)
         .single();
 
-    if (orgError || !org) throw new APIError('Organization not found', 404);
+    if (orgError || !org) {
+        // If organization is missing, treat as Starter for safety
+        console.warn(`[AI] Organization ${req.user.organizationId} not found. Defaulting to Starter limits.`);
+        const limit = getTierLimit('starter', 'ai_token_limit');
+        const totalTokens = await getAIUsageData(req.user.organizationId);
+        if (totalTokens >= limit) throw new APIError('AI Limit Exceeded (Starter)', 403);
+        return;
+    }
 
     const limit = getTierLimit(org.plan_tier, 'ai_token_limit');
     if (limit === Infinity) return; // Enterprise/Unlimited
@@ -105,49 +112,50 @@ export const processChat = async (req, res) => {
         throw new APIError('Query is required', 400);
     }
 
-    // Get context data - Parallel Config
+    // Get context data - Parallel Robust Config
     const [
-        { data: invoices },
-        { data: customers },
-        { data: expenses },
+        invoicesRes,
+        customersRes,
+        expensesRes,
         stats,
         safeToSpend,
         customerInsights,
         personaStats,
         revenueTrends
     ] = await Promise.all([
-        supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId),
-        supabase.from('customers').select('*').eq('organization_id', req.user.organizationId),
-        supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(50),
-        analyticsService.getDashboardStats(req.user.organizationId),
-        analyticsService.getSafeToSpend(req.user.organizationId),
-        analyticsService.getCustomerInsights(req.user.organizationId),
-        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur'),
-        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly')
+        Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
+        Promise.resolve(supabase.from('customers').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
+        Promise.resolve(supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(50)).catch(() => ({ data: [] })),
+        analyticsService.getDashboardStats(req.user.organizationId).catch(() => ({})),
+        analyticsService.getSafeToSpend(req.user.organizationId).catch(() => ({})),
+        analyticsService.getCustomerInsights(req.user.organizationId).catch(() => ([])),
+        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur').catch(() => ({})),
+        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(() => ([]))
     ]);
 
     const context = { 
         user: req.user,
-        invoices, 
-        customers, 
-        expenses, 
-        stats, 
-        safeToSpend,
-        customerInsights,
-        personaStats,
-        revenueTrends: revenueTrends.slice(-12), // 1 Year History
+        invoices: invoicesRes?.data || [], 
+        customers: customersRes?.data || [], 
+        expenses: expensesRes?.data || [], 
+        stats: stats || {}, 
+        safeToSpend: safeToSpend || {},
+        customerInsights: Array.isArray(customerInsights) ? customerInsights : [],
+        personaStats: personaStats || {},
+        revenueTrends: Array.isArray(revenueTrends) ? revenueTrends.slice(-12) : [], // Safeguard slice
         agentId, 
         businessType: persona 
     };
 
     const response = await aiService.processQuery(query, context);
-    const { tokens, cost } = calculateAICost(response.usage, 'gemini-2.0-flash');
+    const modelUsed = response.provider?.split(':')?.[1] || 'gemini-3.1-flash-preview';
+    const { tokens, cost } = calculateAICost(response.usage, modelUsed);
 
     // [AUDIT] Log AI Request with precision data
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-2.0-flash',
+        model: modelUsed,
         tokens,
         cost
     }]);
@@ -163,13 +171,14 @@ export const magicFill = async (req, res) => {
     if (!text) throw new APIError('Text input is required', 400);
 
     const parsed = await aiService.parseInvoiceText(text);
-    const { tokens, cost } = calculateAICost(parsed.usage, 'gemini-2.0-flash');
+    const modelUsed = parsed.provider?.split(':')?.[1] || 'gemini-3.1-flash-preview';
+    const { tokens, cost } = calculateAICost(parsed.usage, modelUsed);
 
     // [AUDIT] Log AI Request
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-2.0-flash',
+        model: modelUsed,
         tokens,
         cost
     }]);
@@ -193,8 +202,8 @@ export const getInsights = async (req, res) => {
     }
 
     const [
-        { data: invoices },
-        { data: customers },
+        invoicesRes,
+        customersRes,
         stats,
         revenueTrends,
         customerInsights,
@@ -202,27 +211,27 @@ export const getInsights = async (req, res) => {
         safeToSpend,
         personaStats
     ] = await Promise.all([
-        supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId),
-        supabase.from('customers').select('*').eq('organization_id', req.user.organizationId),
-        analyticsService.getDashboardStats(req.user.organizationId),
-        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly'),
-        analyticsService.getCustomerInsights(req.user.organizationId),
-        analyticsService.getBusinessHealthScore(req.user.organizationId),
-        analyticsService.getSafeToSpend(req.user.organizationId),
-        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur')
+        Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
+        Promise.resolve(supabase.from('customers').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
+        analyticsService.getDashboardStats(req.user.organizationId).catch(() => ({})),
+        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(() => ([])),
+        analyticsService.getCustomerInsights(req.user.organizationId).catch(() => ([])),
+        analyticsService.getBusinessHealthScore(req.user.organizationId).catch(() => ({})),
+        analyticsService.getSafeToSpend(req.user.organizationId).catch(() => ({})),
+        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur').catch(() => ({}))
     ]);
 
     const context = {
         user: req.user,
         organizationId: orgId,
-        invoices,
-        customers,
-        stats,
-        safeToSpend,
-        personaStats,
-        trends: revenueTrends.slice(-6), // Last 6 months
-        topCustomers: customerInsights.slice(0, 3),
-        health: healthScore,
+        invoices: invoicesRes?.data || [],
+        customers: customersRes?.data || [],
+        stats: stats || {},
+        safeToSpend: safeToSpend || {},
+        personaStats: personaStats || {},
+        trends: Array.isArray(revenueTrends) ? revenueTrends.slice(-6) : [], // Safeguard slice
+        topCustomers: Array.isArray(customerInsights) ? customerInsights.slice(0, 3) : [], // Safeguard slice
+        health: healthScore || {},
         businessType: persona
     };
     

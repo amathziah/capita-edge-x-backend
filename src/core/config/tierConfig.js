@@ -153,22 +153,26 @@ export const hasTierFeature = (tier, feature) => {
 // ═══════════════════════════════════════════════════════════════════════
 
 export const AI_PRICING = {
-    'gemini-2.0-flash': {
-        inputPer1M: 0.075,  // USD
-        outputPer1M: 0.30,  // USD
+    'gemini-3.1-flash-preview': {
+        inputPer1M: 0.10,  // USD (Est)
+        outputPer1M: 0.40,  // USD (Est)
     },
-    'gemini-2.0-flash-lite': {
+    'gemini-3-flash-preview': {
+        inputPer1M: 0.10,
+        outputPer1M: 0.40,
+    },
+    'gemini-2.5-flash': {
         inputPer1M: 0.075,
         outputPer1M: 0.30,
     },
-    'gemini-pro': {
+    'gemini-2.5-pro': {
         inputPer1M: 0.125,
         outputPer1M: 0.375,
     },
-    'gemini-1.5-flash': {
+    'gemini-2.0-flash': {
         inputPer1M: 0.075,
         outputPer1M: 0.30,
-    }
+    },
 };
 
 export const EXCHANGE_RATE = {

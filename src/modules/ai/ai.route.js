@@ -17,18 +17,23 @@ const aiLimiter = rateLimit({
     validate: false
 });
 
-// Apply strict limit to all AI routes
-// Apply strict limit ONLY to AI routes (not globally to the router if mounted at root)
-// router.use(aiLimiter); // REMOVED to prevent affecting other /api routes
+// Meta Rate Limiter (Relaxed for UI/Status checks)
+const metaLimiter = rateLimit({
+    windowMs: LIMITS.AI_RATE_WINDOW_MS,
+    max: LIMITS.META_RATE_LIMIT || 100,
+    message: { error: 'Too many status check requests, please wait.' },
+    keyGenerator: (req) => req.user?.id || req.ip || 'anonymous',
+    validate: false
+});
 
 // Routes
 router.post('/ai/chat', aiLimiter, asyncHandler(aiController.processChat));
 router.post('/ai/magic-fill', aiLimiter, asyncHandler(aiController.magicFill));
 router.get('/ai/insights', aiLimiter, asyncHandler(aiController.getInsights));
 router.get('/ai/predict-revenue', aiLimiter, asyncHandler(aiController.predictRevenue));
-router.get('/ai/usage', aiLimiter, asyncHandler(aiController.getAIUsageStatus));
+router.get('/ai/usage', metaLimiter, asyncHandler(aiController.getAIUsageStatus)); // Use metaLimiter
 router.post('/ai/command', aiLimiter, asyncHandler(aiController.processCommand));
-router.get('/ai/config', aiLimiter, asyncHandler(aiController.getConfig));
+router.get('/ai/config', metaLimiter, asyncHandler(aiController.getConfig)); // Use metaLimiter
 
 // Smart Collections
 router.post('/ai/collections/generate-draft', aiLimiter, asyncHandler(aiController.generateCollectionDraft));

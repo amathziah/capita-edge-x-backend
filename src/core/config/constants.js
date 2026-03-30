@@ -32,7 +32,8 @@ export const DEFAULTS = {
 export const LIMITS = {
     JSON_BODY_SIZE: '50mb',
     FILE_UPLOAD_SIZE: parseInt(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024,
-    AI_RATE_LIMIT: parseInt(process.env.AI_RATE_LIMIT) || 10,
+    AI_RATE_LIMIT: parseInt(process.env.AI_RATE_LIMIT) || 30, // Increased from 10
+    META_RATE_LIMIT: 100, // For usage and config checks
     AI_RATE_WINDOW_MS: 60 * 1000,
     AI_CACHE_TTL_MS: (parseInt(process.env.AI_CACHE_TTL_HOURS) || 24) * 60 * 60 * 1000,
     MAX_INVOICE_RETRIES: 50,

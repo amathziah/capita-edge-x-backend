@@ -15,45 +15,6 @@ export const getTasks = async (req, res) => {
 
     if (error) throw new Error(error.message);
 
-    // [New Logic] Auto-Seed Default Compliance Tasks for Solopreneurs if empty
-    if (tasks.length === 0 && offset === 0) {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = now.getMonth() + 1;
-        const monthStr = month < 10 ? `0${month}` : `${month}`;
-
-        const defaultTasks = [
-            {
-                organization_id: orgId,
-                type: 'GST Return (GSTR-1)',
-                description: 'Monthly filing of outward supplies (Sales)',
-                due_date: `${year}-${monthStr}-11`,
-                status: 'pending',
-                priority: 'high',
-                notes: 'Generated automatically by Capita Intelligence'
-            },
-            {
-                organization_id: orgId,
-                type: 'GST Return (GSTR-3B)',
-                description: 'Monthly summary return and tax payment',
-                due_date: `${year}-${monthStr}-20`,
-                status: 'pending',
-                priority: 'critical',
-                notes: 'Critical for avoiding interest and penalties'
-            }
-        ];
-
-        const { data: seeded, error: seedError } = await supabase
-            .from('compliance_tasks')
-            .insert(defaultTasks)
-            .select();
-
-        if (!seedError && seeded) {
-            tasks = seeded;
-            count = seeded.length;
-        }
-    }
-
     // Auto-update overdue status
     const today = new Date().toISOString().split('T')[0];
     const updatedTasks = tasks.map(task => {

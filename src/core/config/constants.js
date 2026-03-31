@@ -65,6 +65,12 @@ export const CUSTOMER_HEALTH = {
     VIP_THRESHOLD: 90,
     ACTIVE_THRESHOLD: 80,
     AT_RISK_THRESHOLD: 50,
+
+    // Churn Risk Math
+    DEFAULT_AVG_INTERVAL_DAYS: 30,
+    MAX_CHURN_RISK: 100,
+    CRITICAL_RISK_THRESHOLD: 80,
+    MODERATE_RISK_THRESHOLD: 40,
 };
 
 // ─── Tax Reserve Estimates (Safe-to-Spend) ──────────────────────────────────

@@ -6,8 +6,15 @@ dotenv.config();
 
 /**
  * AI Service using Google Gemini API
- * Provides real AI capabilities for chatbot, magic fill, insights, and predictions
- * Features: Multi-model fallback, Circuit Breaker, Request Deduplication
+ * Optimized for Free Tier: 20 users on 40 RPD budget
+ * 
+ * Strategy:
+ * 1. Only use models with free-tier quota (2.5-flash, 3-flash)
+ * 2. TTL-based response cache (3-5x RPD multiplier)
+ * 3. Per-user daily AI budget (fair share)
+ * 4. Proactive rate limiter (token bucket, prevents 429s)
+ * 5. Rule-based insights (zero API calls)
+ * 6. Request deduplication + circuit breaker
  */
 class AIService {
     constructor() {
@@ -16,43 +23,207 @@ class AIService {
         this.pendingRequests = new Map();
         this.circuitStatus = { open: false, until: 0 };
 
+        // ═══════════════════════════════════════════════════════
+        // RESPONSE CACHE — TTL-based, in-memory
+        // ═══════════════════════════════════════════════════════
+        this.cache = new Map(); // key → { data, expiresAt }
+        this.CACHE_TTL = {
+            chat: 5 * 60 * 1000,       // 5 minutes for chat
+            insights: 30 * 60 * 1000,   // 30 minutes for insights
+            invoice: 10 * 60 * 1000,    // 10 minutes for invoice parse
+            draft: 15 * 60 * 1000,      // 15 minutes for collection drafts
+        };
+
+        // ═══════════════════════════════════════════════════════
+        // RATE LIMITER — Token Bucket (5 RPM per model = 10 total)
+        // ═══════════════════════════════════════════════════════
+        this.rateBucket = {
+            tokens: 10,           // Start full (5 per model × 2 models)
+            maxTokens: 10,
+            refillRate: 10,       // 10 tokens per minute
+            lastRefill: Date.now(),
+        };
+
+        // ═══════════════════════════════════════════════════════
+        // DAILY BUDGET — 35 RPD (saving 5 as buffer from 40 total)
+        // ═══════════════════════════════════════════════════════
+        this.dailyBudget = {
+            maxRequests: 35,
+            used: 0,
+            resetDate: this._getTodayPacific(),
+            perUser: new Map(),   // userId → count
+        };
+
         if (!apiKey || apiKey === 'your_gemini_api_key_here') {
             console.warn('⚠️  Gemini API key not configured. AI features will use fallback logic.');
             this.genAI = null;
         } else {
             this.genAI = new GoogleGenerativeAI(apiKey);
-            // 2026 Modern Model Chain (Priority Order)
+            // Only models with FREE TIER quota (verified from AI Studio dashboard)
             this.models = [
-                'gemini-3.1-flash-preview',
-                'gemini-3-flash-preview',
-                'gemini-2.5-flash',
-                'gemini-2.0-flash',
-                'gemini-2.5-pro'
+                'gemini-2.5-flash',       // 5 RPM, 250K TPM, 20 RPD ✅
+                'gemini-3-flash-preview',  // 5 RPM, 250K TPM, 20 RPD ✅
             ];
-            console.log('📡 AI Service Initialized with Gemini 3+ Multi-Model Fallback.');
+            console.log('📡 AI Service Initialized — Free Tier Optimized (2 models, 40 RPD budget)');
         }
     }
 
+    // ═══════════════════════════════════════════════════════════
+    // CACHE SYSTEM
+    // ═══════════════════════════════════════════════════════════
+
     /**
-     * Internal helper to get a specific model instance
+     * Normalize a query string into a stable cache key
      */
+    _cacheKey(prefix, input) {
+        const normalized = input.toLowerCase().trim().replace(/\s+/g, ' ').slice(0, 100);
+        return `${prefix}:${normalized}`;
+    }
+
+    /**
+     * Get from cache if not expired
+     */
+    _cacheGet(key) {
+        const entry = this.cache.get(key);
+        if (!entry) return null;
+        if (Date.now() > entry.expiresAt) {
+            this.cache.delete(key);
+            return null;
+        }
+        return entry.data;
+    }
+
+    /**
+     * Set cache entry with TTL
+     */
+    _cacheSet(key, data, ttlMs) {
+        // Prevent cache from growing unbounded (max 200 entries)
+        if (this.cache.size > 200) {
+            const oldest = this.cache.keys().next().value;
+            this.cache.delete(oldest);
+        }
+        this.cache.set(key, { data, expiresAt: Date.now() + ttlMs });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // RATE LIMITER (Token Bucket)
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * Check if we can make a request without hitting RPM limits
+     */
+    _canMakeRequest() {
+        // Refill tokens based on elapsed time
+        const now = Date.now();
+        const elapsed = now - this.rateBucket.lastRefill;
+        const tokensToAdd = (elapsed / 60000) * this.rateBucket.refillRate;
+        this.rateBucket.tokens = Math.min(
+            this.rateBucket.maxTokens,
+            this.rateBucket.tokens + tokensToAdd
+        );
+        this.rateBucket.lastRefill = now;
+
+        return this.rateBucket.tokens >= 1;
+    }
+
+    /**
+     * Consume one rate limit token
+     */
+    _consumeToken() {
+        this.rateBucket.tokens = Math.max(0, this.rateBucket.tokens - 1);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // DAILY BUDGET SYSTEM
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * Get today's date string in Pacific time (Google resets RPD at midnight PT)
+     */
+    _getTodayPacific() {
+        return new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' });
+    }
+
+    /**
+     * Check if the daily budget has been exceeded
+     */
+    _isDailyBudgetExhausted(userId) {
+        // Reset if it's a new day
+        const today = this._getTodayPacific();
+        if (this.dailyBudget.resetDate !== today) {
+            this.dailyBudget.used = 0;
+            this.dailyBudget.perUser.clear();
+            this.dailyBudget.resetDate = today;
+            console.log('📡 Daily AI budget reset (midnight Pacific).');
+        }
+
+        // Global budget check
+        if (this.dailyBudget.used >= this.dailyBudget.maxRequests) {
+            return true;
+        }
+
+        // Per-user fair share: max 5 per user per day (35 ÷ ~7-20 users)
+        const userUsed = this.dailyBudget.perUser.get(userId) || 0;
+        if (userUsed >= 5) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Record a successful API call against the budget
+     */
+    _recordUsage(userId) {
+        this.dailyBudget.used++;
+        const userUsed = this.dailyBudget.perUser.get(userId) || 0;
+        this.dailyBudget.perUser.set(userId, userUsed + 1);
+    }
+
+    /**
+     * Get remaining budget info (exposed to frontend via API)
+     */
+    getBudgetStatus(userId) {
+        const today = this._getTodayPacific();
+        if (this.dailyBudget.resetDate !== today) {
+            this.dailyBudget.used = 0;
+            this.dailyBudget.perUser.clear();
+            this.dailyBudget.resetDate = today;
+        }
+
+        const userUsed = this.dailyBudget.perUser.get(userId) || 0;
+        const globalRemaining = Math.max(0, this.dailyBudget.maxRequests - this.dailyBudget.used);
+        const userRemaining = Math.max(0, 5 - userUsed);
+
+        return {
+            globalUsed: this.dailyBudget.used,
+            globalRemaining,
+            globalMax: this.dailyBudget.maxRequests,
+            userUsed,
+            userRemaining,
+            userMax: 5,
+            isExhausted: globalRemaining === 0 || userRemaining === 0,
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // CORE MODEL HELPERS
+    // ═══════════════════════════════════════════════════════════
+
     getModel(modelName, isJson = false) {
         if (!this.genAI) return null;
         return this.genAI.getGenerativeModel({
             model: modelName,
             generationConfig: isJson ? {
-                maxOutputTokens: 1000,
+                maxOutputTokens: 800,
                 responseMimeType: "application/json"
             } : {
-                maxOutputTokens: 2048,
+                maxOutputTokens: 1500,  // Reduced from 2048 to save tokens
                 temperature: 0.7,
             }
         });
     }
 
-    /**
-     * Helper to check if the Gemini circuit is currently "Open" (Down)
-     */
     isCircuitOpen() {
         if (this.circuitStatus.open && Date.now() < this.circuitStatus.until) {
             return true;
@@ -64,18 +235,12 @@ class AIService {
         return false;
     }
 
-    /**
-     * Helper to open (trip) the circuit when a quota limit is hit
-     */
     openCircuit(error) {
-        const cooldown = 45000; // 45 seconds initial cooldown
+        const cooldown = 60000; // 60 seconds (longer cooldown for free tier)
         this.circuitStatus = { open: true, until: Date.now() + cooldown };
-        console.warn(`📡 Gemini Circuit Opened: Cloud AI busy. Defaulting to Local Mode for ${cooldown/1000}s.`);
+        console.warn(`📡 Gemini Circuit Opened: Defaulting to Local Mode for ${cooldown/1000}s.`);
     }
 
-    /**
-     * Deduplicates parallel requests for the same resource
-     */
     async executeWithLock(key, fn) {
         if (this.pendingRequests.has(key)) {
             console.log(`📡 Sharing in-flight request for: ${key}`);
@@ -94,58 +259,69 @@ class AIService {
         return promise;
     }
 
-    /**
-     * Helper to detect quota/rate-limit errors
-     */
     isRetryable(error) {
         if (!error) return false;
         const msg = error.message?.toLowerCase() || '';
         const status = error.status || error.statusCode || 0;
         
-        // 429: Quota, 503: Overloaded
         const isTransient = (
-            status === 429 ||
-            status === 503 ||
-            msg.includes('429') ||
-            msg.includes('quota') ||
-            msg.includes('overloaded') ||
-            msg.includes('rate limit')
+            status === 429 || status === 503 ||
+            msg.includes('429') || msg.includes('quota') ||
+            msg.includes('overloaded') || msg.includes('rate limit')
         );
 
-        // 404: Model Not Found (skip it in the chain)
         const isConfigError = (
-            status === 404 ||
-            msg.includes('not found') ||
-            msg.includes('not supported')
+            status === 404 || msg.includes('not found') || msg.includes('not supported')
         );
 
         return isTransient || isConfigError;
     }
 
-    /**
-     * Process chatbot query with real AI
-     */
+    // ═══════════════════════════════════════════════════════════
+    // MAIN API: processQuery (Chat)
+    // ═══════════════════════════════════════════════════════════
+
     async processQuery(query, context = {}, retry = true) {
+        const userId = context.user?.id || 'anon';
         const actionAgents = ['agent_reminder', 'agent_settlement', 'agent_analytics', 'agent_cashflow'];
+        
         if (context.agentId && actionAgents.includes(context.agentId)) {
             return this.processStructuredAgentQuery(query, context.agentId, context);
         }
 
-        if (!this.genAI || this.isCircuitOpen()) {
+        // 1. Check cache first (FREE — no API call)
+        const cacheKey = this._cacheKey('chat', query);
+        const cached = this._cacheGet(cacheKey);
+        if (cached) {
+            console.log(`📡 Cache HIT for chat query: "${query.slice(0, 30)}..."`);
+            return { ...cached, provider: cached.provider + ':cached' };
+        }
+
+        // 2. Check budget + rate limits before calling API
+        if (!this.genAI || this.isCircuitOpen() || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+            const reason = !this.genAI ? 'no_api_key' 
+                : this.isCircuitOpen() ? 'circuit_open' 
+                : !this._canMakeRequest() ? 'rpm_limit' 
+                : 'daily_budget';
+            console.log(`📡 Local fallback: ${reason} (user: ${userId})`);
+            
+            const fallback = await this.fallbackProcessQuery(query, context);
             return {
-                ...(await this.fallbackProcessQuery(query, context)),
+                ...fallback,
                 provider: 'local_fallback',
-                is_cooldown: this.isCircuitOpen()
+                budget: this.getBudgetStatus(userId),
+                is_cooldown: reason !== 'no_api_key'
             };
         }
 
-        const lockKey = `chat_${context.user?.id || 'anon'}_${query.slice(0, 20)}`;
+        const lockKey = `chat_${userId}_${query.slice(0, 20)}`;
 
         return this.executeWithLock(lockKey, async () => {
             let lastError = null;
             
             for (const modelName of this.models) {
                 try {
+                    this._consumeToken();
                     const modelInstance = this.getModel(modelName);
                     if (!modelInstance) continue;
 
@@ -153,16 +329,22 @@ class AIService {
                     const result = await modelInstance.generateContent(prompt);
                     const response = await result.response;
                     const text = response.text();
-
                     const action = this.extractAction(text, query);
 
-                    return {
+                    const responseData = {
                         text: text.trim(),
                         action,
                         data: action ? action.data : null,
                         usage: response.usageMetadata,
-                        provider: `cloud:${modelName}`
+                        provider: `cloud:${modelName}`,
+                        budget: this.getBudgetStatus(userId),
                     };
+
+                    // Record usage & cache
+                    this._recordUsage(userId);
+                    this._cacheSet(cacheKey, responseData, this.CACHE_TTL.chat);
+
+                    return responseData;
                 } catch (error) {
                     lastError = error;
                     if (this.isRetryable(error)) {
@@ -185,6 +367,7 @@ class AIService {
             return {
                 ...fallback,
                 provider: isRetryable ? 'local_fallback' : 'error_fallback',
+                budget: this.getBudgetStatus(userId),
                 error: lastError?.message || 'AI service unavailable'
             };
         });
@@ -194,9 +377,11 @@ class AIService {
      * Process queries strictly enforcing structured JSON output
      */
     async processStructuredAgentQuery(query, agentId, contextData) {
-        if (!this.genAI) {
+        const userId = contextData.user?.id || 'anon';
+
+        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
             const fallback = await this.fallbackProcessQuery(query, contextData);
-            return { ...fallback, provider: 'local_fallback' };
+            return { ...fallback, provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
         }
 
         const { invoices = [], stats = {}, currency } = contextData;
@@ -217,15 +402,20 @@ class AIService {
         let lastError = null;
         for (const modelName of this.models) {
             try {
+                this._consumeToken();
                 const modelInstance = this.getModel(modelName, true);
                 if (!modelInstance) continue;
 
                 const result = await modelInstance.generateContent(systemPrompt);
                 const response = await result.response;
+                
+                this._recordUsage(userId);
+                
                 return {
                     text: response.text().trim(),
                     usage: response.usageMetadata,
-                    provider: `cloud:${modelName}:json`
+                    provider: `cloud:${modelName}:json`,
+                    budget: this.getBudgetStatus(userId),
                 };
             } catch (error) {
                 lastError = error;
@@ -234,12 +424,9 @@ class AIService {
             }
         }
 
-        return { ...(await this.fallbackProcessQuery(query, contextData)), provider: 'local_fallback' };
+        return { ...(await this.fallbackProcessQuery(query, contextData)), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
     }
 
-    /**
-     * Build system prompt with persona
-     */
     buildChatbotPrompt(query, context) {
         const { stats = {}, currency = 'INR', safeToSpend, businessType = 'solopreneur' } = context;
         
@@ -254,158 +441,177 @@ class AIService {
         1. Only mention the numbers above if they are relevant to the user's query.
         2. If the user asks a social or non-business question, respond politely as a CFO but do NOT include financial data.
         3. Be concise and professional. Use a helpful, advisor-like tone.
+        4. Keep responses SHORT — max 3-4 sentences. Users are on mobile.
         
         User Query: "${query}"`;
     }
 
-    /**
-     * Extract action from AI response
-     */
     extractAction(text, query) {
         const lowerQuery = query.toLowerCase();
         if (lowerQuery.includes('create') && lowerQuery.includes('invoice')) return { type: 'open_invoice_modal', data: {} };
         if (lowerQuery.includes('show') && lowerQuery.includes('invoice')) return { type: 'navigate', data: { to: '/invoices' } };
+        
+        if ((lowerQuery.includes('add') || lowerQuery.includes('create') || lowerQuery.includes('new')) && 
+            (lowerQuery.includes('customer') || lowerQuery.includes('client'))) {
+            return { type: 'open_customer_modal', data: {} };
+        }
+
         return null;
     }
 
-    /**
-     * Parse invoice text (Magic Fill)
-     */
-    async parseInvoiceText(text) {
-        if (!this.genAI) return { ...this.fallbackParseInvoice(text), provider: 'local_fallback' };
+    // ═══════════════════════════════════════════════════════════
+    // INVOICE PARSE (Magic Fill) — with cache
+    // ═══════════════════════════════════════════════════════════
+
+    async parseInvoiceText(text, userId = 'anon') {
+        // Cache check
+        const cacheKey = this._cacheKey('invoice', text);
+        const cached = this._cacheGet(cacheKey);
+        if (cached) {
+            console.log(`📡 Cache HIT for invoice parse`);
+            return { ...cached, provider: cached.provider + ':cached' };
+        }
+
+        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+            return { ...this.fallbackParseInvoice(text), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        }
 
         for (const modelName of this.models) {
             try {
+                this._consumeToken();
                 const modelInstance = this.getModel(modelName, true);
                 const prompt = `Parse this text into a strict JSON invoice: "${text}"`;
                 const result = await modelInstance.generateContent(prompt);
                 const response = await result.response;
                 const jsonText = response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
                 const parsed = JSON.parse(jsonText);
-                return { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:magic` };
+                
+                this._recordUsage(userId);
+                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:magic`, budget: this.getBudgetStatus(userId) };
+                this._cacheSet(cacheKey, responseData, this.CACHE_TTL.invoice);
+                
+                return responseData;
             } catch (error) {
                 if (this.isRetryable(error)) continue;
                 break;
             }
         }
-        return { ...this.fallbackParseInvoice(text), provider: 'local_fallback' };
+        return { ...this.fallbackParseInvoice(text), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
     }
 
-    /**
-     * Generate business insights
-     */
+    // ═══════════════════════════════════════════════════════════
+    // INSIGHTS — 100% Rule-Based (ZERO API calls)
+    // ═══════════════════════════════════════════════════════════
+
     async generateInsights(context) {
-        const lockKey = `insights_org_${context.organizationId || 'default'}`;
-
-        if (!this.genAI || this.isCircuitOpen()) {
-            return { 
-                data: this.fallbackGenerateInsights(context), 
-                provider: 'local_fallback',
-                is_cooldown: this.isCircuitOpen()
-            };
-        }
-
-        return this.executeWithLock(lockKey, async () => {
-            let lastError = null;
-
-            for (const modelName of this.models) {
-                try {
-                    const modelInstance = this.getModel(modelName, true);
-                    if (!modelInstance) continue;
-
-                    const { stats = {}, businessType = 'solopreneur' } = context;
-                    const prompt = `You are a CFO for a ${businessType} business.
-                    DATA: Revenue: ${stats.total_revenue || 0}, Pending: ${stats.pending_payments || 0}.
-                    TASK: Return exactly 3-4 JSON insights. Format: [{ id, title, value, description, type: 'success'|'warning'|'info'|'danger' }].`;
-
-                    const result = await modelInstance.generateContent(prompt);
-                    const response = await result.response;
-                    const cleanJson = response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                    const insights = JSON.parse(cleanJson);
-                    
-                    return { 
-                        data: insights, 
-                        usage: response.usageMetadata, 
-                        provider: `cloud:${modelName}:insights`,
-                        timestamp: new Date().toISOString()
-                    };
-                } catch (error) {
-                    lastError = error;
-                    if (this.isRetryable(error)) continue;
-                    break;
-                }
-            }
-
-            const isRetryable = this.isRetryable(lastError);
-            if (isRetryable && (lastError?.status === 429 || lastError?.statusCode === 429)) {
-                this.openCircuit(lastError);
-            }
-            return { data: this.fallbackGenerateInsights(context), provider: isRetryable ? 'local_fallback' : 'error_fallback' };
-        });
+        // STRATEGY: Always use rule-based. This saves 5-15 RPD/day.
+        // The math-based insights are just as useful and instant.
+        return { 
+            data: this.fallbackGenerateInsights(context), 
+            provider: 'local_rulebased',
+            timestamp: new Date().toISOString()
+        };
     }
 
     predictRevenue(historicalData) {
         return [{ month: 'Forecast', revenue: 0, isForecast: true, provider: 'local_fallback' }];
     }
 
-    async generateCollectionDraft(invoice, currency, forceAggressive = false) {
-        if (!this.genAI) return { ...this.fallbackCollectionDraft(invoice, currency, forceAggressive), provider: 'local_fallback' };
+    // ═══════════════════════════════════════════════════════════
+    // COLLECTION DRAFTS — with cache
+    // ═══════════════════════════════════════════════════════════
+
+    async generateCollectionDraft(invoice, currency, forceAggressive = false, userId = 'anon') {
+        const cacheKey = this._cacheKey('draft', `${invoice.invoiceNumber}_${forceAggressive}`);
+        const cached = this._cacheGet(cacheKey);
+        if (cached) {
+            return { ...cached, provider: cached.provider + ':cached' };
+        }
+
+        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+            return { ...this.fallbackCollectionDraft(invoice, currency, forceAggressive), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        }
 
         for (const modelName of this.models) {
             try {
+                this._consumeToken();
                 const modelInstance = this.getModel(modelName, true);
                 const prompt = `Generate collection draft for Invoice #${invoice.invoiceNumber}`;
                 const result = await modelInstance.generateContent(prompt);
                 const response = await result.response;
                 const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-                return { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:draft` };
+                
+                this._recordUsage(userId);
+                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:draft`, budget: this.getBudgetStatus(userId) };
+                this._cacheSet(cacheKey, responseData, this.CACHE_TTL.draft);
+                
+                return responseData;
             } catch (error) {
                 if (this.isRetryable(error)) continue;
                 break;
             }
         }
-        return { ...this.fallbackCollectionDraft(invoice, currency, forceAggressive), provider: 'local_fallback' };
+        return { ...this.fallbackCollectionDraft(invoice, currency, forceAggressive), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
     }
 
-    async generateSettlementOffer(invoice, currency) {
-        if (!this.genAI) return { subject: 'Offer', body: 'Please pay', provider: 'local_fallback' };
+    async generateSettlementOffer(invoice, currency, userId = 'anon') {
+        const cacheKey = this._cacheKey('draft', `settle_${invoice.invoiceNumber}`);
+        const cached = this._cacheGet(cacheKey);
+        if (cached) {
+            return { ...cached, provider: cached.provider + ':cached' };
+        }
+
+        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+            return { subject: 'Offer', body: 'Please pay', provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        }
         
         for (const modelName of this.models) {
             try {
+                this._consumeToken();
                 const modelInstance = this.getModel(modelName, true);
                 const prompt = `Generate settlement for Invoice #${invoice.invoiceNumber}`;
                 const result = await modelInstance.generateContent(prompt);
                 const response = await result.response;
                 const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-                return { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:settle` };
+                
+                this._recordUsage(userId);
+                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:settle`, budget: this.getBudgetStatus(userId) };
+                this._cacheSet(cacheKey, responseData, this.CACHE_TTL.draft);
+                
+                return responseData;
             } catch (error) {
                 if (this.isRetryable(error)) continue;
                 break;
             }
         }
-        return { subject: 'Offer', body: 'Please pay', provider: 'local_fallback' };
+        return { subject: 'Offer', body: 'Please pay', provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
     }
 
-    async parseCommand(text) {
-        if (!this.genAI) return { type: 'LIST_OVERDUE', provider: 'local_fallback' };
+    async parseCommand(text, userId = 'anon') {
+        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+            return { type: 'LIST_OVERDUE', provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        }
         
         for (const modelName of this.models) {
             try {
+                this._consumeToken();
                 const modelInstance = this.getModel(modelName, true);
                 const prompt = `Parse command: "${text}"`;
                 const result = await modelInstance.generateContent(prompt);
                 const response = await result.response;
                 const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-                return { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:cmd` };
+                
+                this._recordUsage(userId);
+                return { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:cmd`, budget: this.getBudgetStatus(userId) };
             } catch (error) {
                 if (this.isRetryable(error)) continue;
                 break;
             }
         }
-        return { type: 'LIST_OVERDUE', provider: 'local_fallback' };
+        return { type: 'LIST_OVERDUE', provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
     }
 
-    /* ========== Fallback Methods ========== */
+    /* ========== Fallback Methods (Always Available) ========== */
 
     fallbackProcessQuery(query, context) {
         const { stats = {}, safeToSpend = {}, currency = 'INR' } = context;

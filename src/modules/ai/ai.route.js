@@ -34,6 +34,7 @@ router.get('/ai/predict-revenue', aiLimiter, asyncHandler(aiController.predictRe
 router.get('/ai/usage', metaLimiter, asyncHandler(aiController.getAIUsageStatus)); // Use metaLimiter
 router.post('/ai/command', aiLimiter, asyncHandler(aiController.processCommand));
 router.get('/ai/config', metaLimiter, asyncHandler(aiController.getConfig)); // Use metaLimiter
+router.get('/ai/budget', metaLimiter, asyncHandler(aiController.getBudget)); // Daily AI budget status
 
 // Smart Collections
 router.post('/ai/collections/generate-draft', aiLimiter, asyncHandler(aiController.generateCollectionDraft));

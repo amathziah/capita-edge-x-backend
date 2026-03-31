@@ -45,11 +45,11 @@ const getAIUsageData = async (organizationId) => {
     return data.reduce((sum, req) => sum + (req.tokens || 0), 0);
 };
 
-/**
- * Enforces credit limits based on organization tier
- */
 const checkAICreditLimit = async (req) => {
-    // 1. Get organization tier
+    // 1. Get current usage
+    const totalTokens = await getAIUsageData(req.user.organizationId);
+
+    // 2. Get organization tier
     const { data: org, error: orgError } = await supabase
         .from('organizations')
         .select('plan_tier')
@@ -58,22 +58,24 @@ const checkAICreditLimit = async (req) => {
 
     if (orgError || !org) {
         // If organization is missing, treat as Starter for safety
-        console.warn(`[AI] Organization ${req.user.organizationId} not found. Defaulting to Starter limits.`);
         const limit = getTierLimit('starter', 'ai_token_limit');
-        const totalTokens = await getAIUsageData(req.user.organizationId);
-        if (totalTokens >= limit) throw new APIError('AI Limit Exceeded (Starter)', 403);
-        return;
+        if (totalTokens >= limit) return { allowed: false, message: 'AI Limit Exceeded (Starter)', limit, usage: totalTokens };
+        return { allowed: true, limit, usage: totalTokens };
     }
 
     const limit = getTierLimit(org.plan_tier, 'ai_token_limit');
-    if (limit === Infinity) return; // Enterprise/Unlimited
-
-    // 2. Get current usage
-    const totalTokens = await getAIUsageData(req.user.organizationId);
+    if (limit === Infinity) return { allowed: true, limit: Infinity, usage: totalTokens };
 
     if (totalTokens >= limit) {
-        throw new APIError(`AI Credit Limit Exceeded (${totalTokens.toLocaleString()} / ${limit.toLocaleString()} tokens). Please upgrade your plan to continue using AI features.`, 403);
+        return { 
+            allowed: false, 
+            message: `AI Credit Limit Reached (${totalTokens.toLocaleString()} / ${limit.toLocaleString()})`,
+            limit, 
+            usage: totalTokens 
+        };
     }
+
+    return { allowed: true, limit, usage: totalTokens };
 };
 
 export const getAIUsageStatus = async (req, res) => {
@@ -106,7 +108,19 @@ export const getConfig = async (req, res) => {
 export const processChat = async (req, res) => {
     const { query, agentId, persona } = req.body;
 
-    await checkAICreditLimit(req);
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        return res.json({
+            text: "🚀 **AI Credit Limit Reached**\n\nYou've used your assigned tokens for this period. To continue getting personal CFO insights and automated support, please upgrade to a higher plan.",
+            is_limit_reached: true,
+            usage: {
+                totalTokenCount: creditStatus.usage,
+                limit: creditStatus.limit
+            },
+            action: { type: 'navigate', data: { to: '/settings/billing' } },
+            provider: 'system:billing_gate'
+        });
+    }
 
     if (!query) {
         throw new APIError('Query is required', 400);
@@ -166,7 +180,15 @@ export const processChat = async (req, res) => {
 export const magicFill = async (req, res) => {
     const { text } = req.body;
 
-    await checkAICreditLimit(req);
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        return res.status(200).json({
+            error: "AI Credit Limit Reached",
+            is_limit_reached: true,
+            text: "Upgrade your plan to use Magic Fill.",
+            provider: 'system:billing_gate'
+        });
+    }
 
     if (!text) throw new APIError('Text input is required', 400);
 
@@ -190,7 +212,15 @@ export const getInsights = async (req, res) => {
     const orgId = req.user.organizationId;
     const { persona } = req.query;
 
-    await checkAICreditLimit(req);
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        return res.json({
+            data: [],
+            is_limit_reached: true,
+            text: "Please upgrade your plan to generate business insights.",
+            provider: 'system:billing_gate'
+        });
+    }
 
     // Check Cache
     if (insightsCache.has(orgId)) {
@@ -285,7 +315,15 @@ export const predictRevenue = async (req, res) => {
 export const negotiateSettlement = async (req, res) => {
     const { invoiceId } = req.body;
 
-    await checkAICreditLimit(req);
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        return res.json({
+            error: "AI Credit Limit Reached",
+            is_limit_reached: true,
+            text: "Please upgrade your plan to use AI negotiation features.",
+            provider: 'system:billing_gate'
+        });
+    }
 
     const { data: invoice, error } = await supabase
         .from('invoices')
@@ -315,7 +353,15 @@ export const negotiateSettlement = async (req, res) => {
 export const processCommand = async (req, res) => {
     const { command } = req.body;
 
-    await checkAICreditLimit(req);
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        return res.json({
+            error: "AI Credit Limit Reached",
+            is_limit_reached: true,
+            text: "Please upgrade your plan to use AI command processing.",
+            provider: 'system:billing_gate'
+        });
+    }
 
     if (!command) throw new APIError('Command text required', 400);
 
@@ -336,7 +382,15 @@ export const processCommand = async (req, res) => {
 export const generateCollectionDraft = async (req, res) => {
     const { invoiceId, forceAggressive } = req.body;
 
-    await checkAICreditLimit(req);
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        return res.json({
+            error: "AI Credit Limit Reached",
+            is_limit_reached: true,
+            text: "Please upgrade your plan to generate AI collection drafts.",
+            provider: 'system:billing_gate'
+        });
+    }
 
     const { data: invoice, error } = await supabase
         .from('invoices')
@@ -403,4 +457,10 @@ export const sendCollectionReminder = async (req, res) => {
     }]);
 
     res.json({ success: true, sentAt: new Date().toISOString() });
+};
+
+export const getBudget = async (req, res) => {
+    const userId = req.user?.id || 'anon';
+    const budget = aiService.getBudgetStatus(userId);
+    res.json(budget);
 };

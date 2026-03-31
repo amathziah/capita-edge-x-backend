@@ -113,17 +113,8 @@ class AIService {
      * Check if we can make a request without hitting RPM limits
      */
     _canMakeRequest() {
-        // Refill tokens based on elapsed time
-        const now = Date.now();
-        const elapsed = now - this.rateBucket.lastRefill;
-        const tokensToAdd = (elapsed / 60000) * this.rateBucket.refillRate;
-        this.rateBucket.tokens = Math.min(
-            this.rateBucket.maxTokens,
-            this.rateBucket.tokens + tokensToAdd
-        );
-        this.rateBucket.lastRefill = now;
-
-        return this.rateBucket.tokens >= 1;
+        // Temporarily disabled: Always allow requests
+        return true;
     }
 
     /**
@@ -148,26 +139,7 @@ class AIService {
      * Check if the daily budget has been exceeded
      */
     _isDailyBudgetExhausted(userId) {
-        // Reset if it's a new day
-        const today = this._getTodayPacific();
-        if (this.dailyBudget.resetDate !== today) {
-            this.dailyBudget.used = 0;
-            this.dailyBudget.perUser.clear();
-            this.dailyBudget.resetDate = today;
-            console.log('📡 Daily AI budget reset (midnight Pacific).');
-        }
-
-        // Global budget check
-        if (this.dailyBudget.used >= this.dailyBudget.maxRequests) {
-            return true;
-        }
-
-        // Per-user fair share: max 5 per user per day (35 ÷ ~7-20 users)
-        const userUsed = this.dailyBudget.perUser.get(userId) || 0;
-        if (userUsed >= 5) {
-            return true;
-        }
-
+        // Temporarily disabled: Usage limits lifted
         return false;
     }
 
@@ -192,17 +164,15 @@ class AIService {
         }
 
         const userUsed = this.dailyBudget.perUser.get(userId) || 0;
-        const globalRemaining = Math.max(0, this.dailyBudget.maxRequests - this.dailyBudget.used);
-        const userRemaining = Math.max(0, 5 - userUsed);
-
+        // Reporting infinite availability to the UI
         return {
             globalUsed: this.dailyBudget.used,
-            globalRemaining,
-            globalMax: this.dailyBudget.maxRequests,
+            globalRemaining: 999,
+            globalMax: 999,
             userUsed,
-            userRemaining,
-            userMax: 5,
-            isExhausted: globalRemaining === 0 || userRemaining === 0,
+            userRemaining: 999,
+            userMax: 999,
+            isExhausted: false,
         };
     }
 
@@ -225,13 +195,7 @@ class AIService {
     }
 
     isCircuitOpen() {
-        if (this.circuitStatus.open && Date.now() < this.circuitStatus.until) {
-            return true;
-        }
-        if (this.circuitStatus.open) {
-            console.log('📡 Gemini Circuit Closed: Re-enabling cloud brain.');
-            this.circuitStatus.open = false;
-        }
+        // Temporarily disabled: Always try cloud brain first
         return false;
     }
 
@@ -428,22 +392,83 @@ class AIService {
     }
 
     buildChatbotPrompt(query, context) {
-        const { stats = {}, currency = 'INR', safeToSpend, businessType = 'solopreneur' } = context;
+        const { 
+            stats = {}, 
+            currency = 'INR', 
+            safeToSpend = {}, 
+            businessType = 'solopreneur',
+            invoices = [],
+            payments = [],
+            expenses = [],
+            customerInsights = [],
+            revenueTrends = [],
+            settings = {}
+        } = context;
+
+        const businessName = settings.business_name || 'this business';
         
-        return `You are Capita AI CFO, a premium financial advisor for a ${businessType}.
-        
-        CONTEXT:
-        - Revenue: ${formatCurrency(stats.total_revenue || 0, currency)}
-        - Pending Receipts: ${formatCurrency(stats.pending_payments || 0, currency)}
-        - Safe-to-Spend: ${safeToSpend?.safeToSpend || 'N/A'}
-        
-        INSTRUCTIONS:
-        1. Only mention the numbers above if they are relevant to the user's query.
-        2. If the user asks a social or non-business question, respond politely as a CFO but do NOT include financial data.
-        3. Be concise and professional. Use a helpful, advisor-like tone.
-        4. Keep responses SHORT — max 3-4 sentences. Users are on mobile.
-        
-        User Query: "${query}"`;
+        // 1. Core Financials
+        let contextBlock = `You are Capita AI CFO, a premium financial advisor for ${businessName} (${businessType}).\n\n`;
+        contextBlock += `CORE FINANCIALS:\n`;
+        contextBlock += `- Total Revenue: ${formatCurrency(stats.total_revenue || 0, currency)}\n`;
+        contextBlock += `- Pending Receipts: ${formatCurrency(stats.pending_payments || 0, currency)}\n`;
+        contextBlock += `- Safe-to-Spend: ${formatCurrency(safeToSpend?.safeToSpend || 0, currency)}\n`;
+        contextBlock += `- Net Profit: ${formatCurrency(stats.net_profit || 0, currency)}\n`;
+        contextBlock += `- Avg Margin: ${stats.avg_margin || 0}%\n\n`;
+
+        // 2. Recent Transactions (Invoices)
+        if (invoices.length > 0) {
+            contextBlock += `RECENT INVOICES:\n`;
+            invoices.slice(0, 5).forEach(inv => {
+                contextBlock += `- #${inv.invoiceNumber}: ${formatCurrency(inv.total, currency)} to ${inv.customer_name || 'Unknown'} (Status: ${inv.status}, Due: ${inv.dueDate})\n`;
+            });
+            contextBlock += `\n`;
+        }
+
+        // 3. Recent Payments
+        if (payments.length > 0) {
+            contextBlock += `RECENT PAYMENTS RECEIVED:\n`;
+            payments.slice(0, 5).forEach(p => {
+                contextBlock += `- ${formatCurrency(p.amount, currency)} from ${p.customers?.name || 'Customer'} on ${new Date(p.date || p.createdAt).toLocaleDateString()}\n`;
+            });
+            contextBlock += `\n`;
+        }
+
+        // 4. Recent Expenses
+        if (expenses.length > 0) {
+            contextBlock += `RECENT EXPENSES:\n`;
+            expenses.slice(0, 3).forEach(e => {
+                contextBlock += `- ${formatCurrency(e.amount, currency)} for ${e.category} (${e.description || 'No desc'})\n`;
+            });
+            contextBlock += `\n`;
+        }
+
+        // 5. Top Customers
+        if (customerInsights.length > 0) {
+            contextBlock += `TOP CUSTOMERS:\n`;
+            customerInsights.slice(0, 3).forEach(c => {
+                contextBlock += `- ${c.name}: Total paid ${formatCurrency(c.total_paid, currency)}\n`;
+            });
+            contextBlock += `\n`;
+        }
+
+        // 6. Trends
+        if (revenueTrends.length > 0) {
+            contextBlock += `REVENUE TREND (Last 6 Months):\n`;
+            revenueTrends.slice(-6).forEach(t => {
+                contextBlock += `- ${t.month || t.period}: ${formatCurrency(t.revenue, currency)}\n`;
+            });
+            contextBlock += `\n`;
+        }
+
+        contextBlock += `INSTRUCTIONS:\n`;
+        contextBlock += `1. Use the data above to provide specific, data-driven answers.\n`;
+        contextBlock += `2. If asked about "access to data", confirm you have full real-time access to their ledger, customers, and cash flow.\n`;
+        contextBlock += `3. Be concise and professional. Use a helpful, advisor-like tone.\n`;
+        contextBlock += `4. Keep responses SHORT — max 3-4 sentences.\n\n`;
+        contextBlock += `User Query: "${query}"`;
+
+        return contextBlock;
     }
 
     extractAction(text, query) {

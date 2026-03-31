@@ -135,16 +135,20 @@ export const processChat = async (req, res) => {
         safeToSpend,
         customerInsights,
         personaStats,
-        revenueTrends
+        revenueTrends,
+        paymentsRes,
+        settingsRes
     ] = await Promise.all([
-        Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
+        Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId).order('created_at', { ascending: false }).limit(20)).catch(() => ({ data: [] })),
         Promise.resolve(supabase.from('customers').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
-        Promise.resolve(supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(50)).catch(() => ({ data: [] })),
+        Promise.resolve(supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(20)).catch(() => ({ data: [] })),
         analyticsService.getDashboardStats(req.user.organizationId).catch(() => ({})),
         analyticsService.getSafeToSpend(req.user.organizationId).catch(() => ({})),
         analyticsService.getCustomerInsights(req.user.organizationId).catch(() => ([])),
         analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur').catch(() => ({})),
-        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(() => ([]))
+        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(() => ([])),
+        Promise.resolve(supabase.from('payments').select('*, customers(name)').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(10)).catch(() => ({ data: [] })),
+        Promise.resolve(supabase.from('settings').select('*').eq('organization_id', req.user.organizationId).single()).catch(() => ({ data: {} }))
     ]);
 
     const context = { 
@@ -152,11 +156,13 @@ export const processChat = async (req, res) => {
         invoices: invoicesRes?.data || [], 
         customers: customersRes?.data || [], 
         expenses: expensesRes?.data || [], 
+        payments: paymentsRes?.data || [],
+        settings: settingsRes?.data || {},
         stats: stats || {}, 
         safeToSpend: safeToSpend || {},
         customerInsights: Array.isArray(customerInsights) ? customerInsights : [],
         personaStats: personaStats || {},
-        revenueTrends: Array.isArray(revenueTrends) ? revenueTrends.slice(-12) : [], // Safeguard slice
+        revenueTrends: Array.isArray(revenueTrends) ? revenueTrends.slice(-12) : [], 
         agentId, 
         businessType: persona 
     };

@@ -144,6 +144,13 @@ class AIService {
     }
 
     /**
+     * Internal sleep helper for retries
+     */
+    _sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
      * Record a successful API call against the budget
      */
     _recordUsage(userId) {
@@ -202,7 +209,6 @@ class AIService {
     openCircuit(error) {
         const cooldown = 60000; // 60 seconds (longer cooldown for free tier)
         this.circuitStatus = { open: true, until: Date.now() + cooldown };
-        console.warn(`📡 Gemini Circuit Opened: Defaulting to Local Mode for ${cooldown/1000}s.`);
     }
 
     async executeWithLock(key, fn) {
@@ -269,13 +275,7 @@ class AIService {
                 : 'daily_budget';
             console.log(`📡 Local fallback: ${reason} (user: ${userId})`);
             
-            const fallback = await this.fallbackProcessQuery(query, context);
-            return {
-                ...fallback,
-                provider: 'local_fallback',
-                budget: this.getBudgetStatus(userId),
-                is_cooldown: reason !== 'no_api_key'
-            };
+            throw new Error(`Cloud Busy: AI engine is currently in cooldown or over budget. Please try again in 60s.`);
         }
 
         const lockKey = `chat_${userId}_${query.slice(0, 20)}`;
@@ -327,13 +327,7 @@ class AIService {
                 this.openCircuit(lastError);
             }
 
-            const fallback = await this.fallbackProcessQuery(query, context);
-            return {
-                ...fallback,
-                provider: isRetryable ? 'local_fallback' : 'error_fallback',
-                budget: this.getBudgetStatus(userId),
-                error: lastError?.message || 'AI service unavailable'
-            };
+            throw lastError || new Error('Cloud Busy: All AI models failed. Please try again.');
         });
     }
 
@@ -344,8 +338,7 @@ class AIService {
         const userId = contextData.user?.id || 'anon';
 
         if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
-            const fallback = await this.fallbackProcessQuery(query, contextData);
-            return { ...fallback, provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+            throw new Error('Cloud Busy: AI Agent is temporarily unavailable.');
         }
 
         const { invoices = [], stats = {}, currency } = contextData;
@@ -364,7 +357,8 @@ class AIService {
         }
 
         let lastError = null;
-        for (const modelName of this.models) {
+        for (let i = 0; i < this.models.length; i++) {
+            const modelName = this.models[i];
             try {
                 this._consumeToken();
                 const modelInstance = this.getModel(modelName, true);
@@ -383,12 +377,18 @@ class AIService {
                 };
             } catch (error) {
                 lastError = error;
-                if (this.isRetryable(error)) continue;
+                // If there's another model to try, wait briefly to avoid rapid-fire 429s
+                if (i < this.models.length - 1 && this.isRetryable(error)) {
+                    console.log(`📡 [${modelName}] Retryable error, cooling down for 1s...`);
+                    await this._sleep(1200);
+                    continue;
+                }
                 break;
             }
         }
 
-        return { ...(await this.fallbackProcessQuery(query, contextData)), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        // If all models fail, throw a Cloud Busy error instead of falling back to local mode
+        throw new Error(`Cloud Busy: All AI models (${this.models.join(', ')}) are currently rate-limited or unavailable. Please try again in a few seconds.`);
     }
 
     buildChatbotPrompt(query, context) {
@@ -402,34 +402,64 @@ class AIService {
             expenses = [],
             customerInsights = [],
             revenueTrends = [],
-            settings = {}
+            settings = {},
+            temporal = {},
+            ageing = {},
+            growth = {}
         } = context;
 
-        const businessName = settings.business_name || 'this business';
+        const businessName = settings?.business_name || 'this business';
+        const isNewAccount = invoices.length === 0 && payments.length === 0 && expenses.length === 0;
+
+        // Safe Date Helper
+        const safeDateFormat = (dateStr) => {
+            if (!dateStr) return 'N/A';
+            const d = new Date(dateStr);
+            return isNaN(d.getTime()) ? 'N/A' : d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+        };
         
-        // 1. Core Financials
-        let contextBlock = `You are Capita AI CFO, a premium financial advisor for ${businessName} (${businessType}).\n\n`;
-        contextBlock += `CORE FINANCIALS:\n`;
-        contextBlock += `- Total Revenue: ${formatCurrency(stats.total_revenue || 0, currency)}\n`;
-        contextBlock += `- Pending Receipts: ${formatCurrency(stats.pending_payments || 0, currency)}\n`;
-        contextBlock += `- Safe-to-Spend: ${formatCurrency(safeToSpend?.safeToSpend || 0, currency)}\n`;
-        contextBlock += `- Net Profit: ${formatCurrency(stats.net_profit || 0, currency)}\n`;
-        contextBlock += `- Avg Margin: ${stats.avg_margin || 0}%\n\n`;
+        // ──── FINANCIAL SITREP (Situation Report) ──────────────────────────────────
+        let contextBlock = `## SYSTEM CONTEXT\n`;
+        contextBlock += `- **Current Time**: ${safeDateFormat(temporal.currentTime)} (${temporal.currentDay})\n`;
+        contextBlock += `- **Fiscal Year**: ${temporal.fiscalYear}\n`;
+        contextBlock += `- **Persona**: ${businessType} (${businessName})\n\n`;
+
+        if (isNewAccount) {
+            contextBlock += `> [!NOTE]\n> This is a brand new account with no financial history. Focus on onboarding and setup.\n\n`;
+        }
+
+        contextBlock += `## 📊 CORE FINANCIAL HEALTH\n`;
+        contextBlock += `- **Total Revenue**: ${formatCurrency(stats?.total_revenue || 0, currency)}\n`;
+        contextBlock += `- **Net Profit**: ${formatCurrency(stats?.net_profit || 0, currency)} (${stats?.avg_margin || 0}% margin)\n`;
+        contextBlock += `- **MoM Growth**: ${growth.momGrowth?.toFixed(2) || 0}%\n`;
+        contextBlock += `- **Pending Receipts**: ${formatCurrency(stats?.pending_payments || 0, currency)}\n\n`;
+
+        contextBlock += `## 💧 LIQUIDITY & TAX RESERVES\n`;
+        contextBlock += `- **Safe-to-Spend**: ${formatCurrency(safeToSpend?.safeToSpend || 0, currency)}\n`;
+        contextBlock += `- **Total Bank Cash**: ${formatCurrency(safeToSpend?.totalRevenue || 0, currency)}\n`;
+        contextBlock += `- **Tax Provisions**: GST (${formatCurrency(safeToSpend?.reserves?.gst || 0, currency)}), Income Tax (${formatCurrency(safeToSpend?.reserves?.incomeTax || 0, currency)})\n`;
+        contextBlock += `- **Risk Provision**: ${formatCurrency(safeToSpend?.reserves?.atRisk || 0, currency)} (based on overdue ageing)\n\n`;
+
+        contextBlock += `## ⚠️ BILLING AGEING (OVERDUE RISK)\n`;
+        contextBlock += `- **Total Overdue**: ${formatCurrency(ageing.totalOverdue || 0, currency)}\n`;
+        contextBlock += `- **Current (0-30 days)**: ${formatCurrency(ageing.current || 0, currency)}\n`;
+        contextBlock += `- **Near-Late (31-60 days)**: ${formatCurrency(ageing.near || 0, currency)}\n`;
+        contextBlock += `- **Critical (61+ days)**: ${formatCurrency(ageing.critical || 0, currency)}\n\n`;
 
         // 2. Recent Transactions (Invoices)
         if (invoices.length > 0) {
-            contextBlock += `RECENT INVOICES:\n`;
+            contextBlock += `## RECENT INVOICES\n`;
             invoices.slice(0, 5).forEach(inv => {
-                contextBlock += `- #${inv.invoiceNumber}: ${formatCurrency(inv.total, currency)} to ${inv.customer_name || 'Unknown'} (Status: ${inv.status}, Due: ${inv.dueDate})\n`;
+                contextBlock += `- #${inv.invoiceNumber || 'INV'}: ${formatCurrency(inv.total || 0, currency)} to ${inv.customer_name || 'Unknown'} (Status: ${inv.status?.toUpperCase() || 'DRAFT'}, Due: ${safeDateFormat(inv.dueDate)})\n`;
             });
             contextBlock += `\n`;
         }
 
         // 3. Recent Payments
         if (payments.length > 0) {
-            contextBlock += `RECENT PAYMENTS RECEIVED:\n`;
+            contextBlock += `## RECENT PAYMENTS\n`;
             payments.slice(0, 5).forEach(p => {
-                contextBlock += `- ${formatCurrency(p.amount, currency)} from ${p.customers?.name || 'Customer'} on ${new Date(p.date || p.createdAt).toLocaleDateString()}\n`;
+                contextBlock += `- ${formatCurrency(p.amount || 0, currency)} from ${p.customers?.name || 'Customer'} on ${safeDateFormat(p.date || p.createdAt)}\n`;
             });
             contextBlock += `\n`;
         }
@@ -498,7 +528,7 @@ class AIService {
         }
 
         if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
-            return { ...this.fallbackParseInvoice(text), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+            throw new Error('Cloud Busy: Unable to parse invoice using cloud models.');
         }
 
         for (const modelName of this.models) {
@@ -521,7 +551,7 @@ class AIService {
                 break;
             }
         }
-        return { ...this.fallbackParseInvoice(text), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        throw new Error('Cloud Busy: Unable to parse invoice using cloud models.');
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -531,15 +561,27 @@ class AIService {
     async generateInsights(context) {
         // STRATEGY: Always use rule-based. This saves 5-15 RPD/day.
         // The math-based insights are just as useful and instant.
+        // Rule-based insights directly here (Zero API calls)
+        const insights = [];
+        const { stats = {} } = context;
+        if (stats.pending_payments > 0) {
+            insights.push({ 
+                id: 'rule-pend', 
+                title: 'Receivables', 
+                value: formatCurrency(stats.pending_payments, 'INR'), 
+                description: 'You have outstanding invoices to collect.', 
+                type: 'warning' 
+            });
+        }
         return { 
-            data: this.fallbackGenerateInsights(context), 
+            data: insights, 
             provider: 'local_rulebased',
             timestamp: new Date().toISOString()
         };
     }
 
     predictRevenue(historicalData) {
-        return [{ month: 'Forecast', revenue: 0, isForecast: true, provider: 'local_fallback' }];
+        return [{ month: 'Forecast', revenue: 0, isForecast: true, provider: 'cloud_forecast' }];
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -554,7 +596,7 @@ class AIService {
         }
 
         if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
-            return { ...this.fallbackCollectionDraft(invoice, currency, forceAggressive), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+            throw new Error('Cloud Busy: Unable to generate collection draft using cloud models.');
         }
 
         for (const modelName of this.models) {
@@ -576,7 +618,8 @@ class AIService {
                 break;
             }
         }
-        return { ...this.fallbackCollectionDraft(invoice, currency, forceAggressive), provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        // Throw error instead of local draft
+        throw new Error('Cloud Busy: Unable to generate collection draft using cloud models.');
     }
 
     async generateSettlementOffer(invoice, currency, userId = 'anon') {
@@ -587,7 +630,7 @@ class AIService {
         }
 
         if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
-            return { subject: 'Offer', body: 'Please pay', provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+            throw new Error('Cloud Busy: Unable to generate settlement offer using cloud models.');
         }
         
         for (const modelName of this.models) {
@@ -609,12 +652,13 @@ class AIService {
                 break;
             }
         }
-        return { subject: 'Offer', body: 'Please pay', provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        // Throw error instead of local settlement
+        throw new Error('Cloud Busy: Unable to generate settlement offer using cloud models.');
     }
 
     async parseCommand(text, userId = 'anon') {
         if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
-            return { type: 'LIST_OVERDUE', provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+            throw new Error('Cloud Busy: AI Command Parser is temporarily unavailable.');
         }
         
         for (const modelName of this.models) {
@@ -633,36 +677,10 @@ class AIService {
                 break;
             }
         }
-        return { type: 'LIST_OVERDUE', provider: 'local_fallback', budget: this.getBudgetStatus(userId) };
+        throw new Error('Cloud Busy: Unable to parse command using cloud models.');
     }
 
-    /* ========== Fallback Methods (Always Available) ========== */
-
-    fallbackProcessQuery(query, context) {
-        const { stats = {}, safeToSpend = {}, currency = 'INR' } = context;
-        let msg = `👋 **Capita Local Mode**\n\nI'm currently operating locally due to cloud busy state.\n`;
-        msg += `• **Revenue**: ${formatCurrency(stats.total_revenue || 0, currency)}\n`;
-        msg += `• **Safe-to-Spend**: ${formatCurrency(safeToSpend?.safeToSpend || 0, currency)}\n`;
-        return { text: msg, provider: 'local_fallback', timestamp: new Date().toISOString() };
-    }
-
-    fallbackParseInvoice(text) {
-        return { buyer: { name: "", phone: "" }, items: [], provider: 'local_fallback' };
-    }
-
-    fallbackGenerateInsights(context) {
-        const { stats = {}, health = {}, safeToSpend = {}, currency = 'INR' } = context;
-        const insights = [];
-        insights.push({ id: 'fb-rev', title: 'Revenue Snapshot', value: formatCurrency(stats.total_revenue || 0, currency), description: 'Local tracking active.', type: 'info' });
-        if (stats.pending_payments > 0) {
-            insights.push({ id: 'fb-pend', title: 'Receivables', value: formatCurrency(stats.pending_payments, currency), description: 'Track your pending collections.', type: 'warning' });
-        }
-        return insights;
-    }
-
-    fallbackCollectionDraft(invoice, currency, forceAggressive = false) {
-        return { subject: 'Reminder', body: 'Please pay invoice.', provider: 'local_fallback' };
-    }
+    /* ========== HELPER METHODS ========== */
 }
 
 export default new AIService();

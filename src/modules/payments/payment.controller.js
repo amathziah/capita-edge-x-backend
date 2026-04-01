@@ -27,23 +27,27 @@ export const getPayments = async (req, res) => {
 export const createPayment = async (req, res) => {
     const { id, invoiceId, amount, date, method, notes, status } = req.body;
 
-    // Insert payment
-    const { data: payment, error } = await supabase
-        .from('payments')
-        .insert([{
-            invoiceId,
-            amount,
-            date: date || new Date().toISOString(),
-            method,
-            notes,
-            status: status || 'completed',
-            organization_id: req.user.organizationId,
-            payment_mode: req.body.paymentMode || req.body.method || null,
-            reference_number: req.body.referenceNumber || null,
-            upi_transaction_id: req.body.upiTransactionId || null
-        }])
-        .select()
-        .single();
+        const rawMode = (req.body.paymentMode || req.body.method || 'other').toString().toLowerCase().trim();
+        const validModes = ['upi', 'neft', 'imps', 'rtgs', 'cheque', 'cash', 'razorpay', 'stripe', 'other'];
+        const paymentMode = validModes.includes(rawMode) ? rawMode : 'other';
+
+        // Insert payment
+        const { data: payment, error } = await supabase
+            .from('payments')
+            .insert([{
+                invoiceId,
+                amount,
+                date: date || new Date().toISOString(),
+                method,
+                notes,
+                status: status || 'completed',
+                organization_id: req.user.organizationId,
+                payment_mode: paymentMode,
+                reference_number: req.body.referenceNumber || null,
+                upi_transaction_id: req.body.upiTransactionId || null
+            }])
+            .select()
+            .single();
 
     if (error) throw new Error(error.message);
 

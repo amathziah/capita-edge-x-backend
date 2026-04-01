@@ -46,36 +46,15 @@ const getAIUsageData = async (organizationId) => {
 };
 
 const checkAICreditLimit = async (req) => {
-    // 1. Get current usage
+    // Usage tracking continues for analytics, but limit enforcement is temporarily lifted
     const totalTokens = await getAIUsageData(req.user.organizationId);
-
-    // 2. Get organization tier
-    const { data: org, error: orgError } = await supabase
-        .from('organizations')
-        .select('plan_tier')
-        .eq('id', req.user.organizationId)
-        .single();
-
-    if (orgError || !org) {
-        // If organization is missing, treat as Starter for safety
-        const limit = getTierLimit('starter', 'ai_token_limit');
-        if (totalTokens >= limit) return { allowed: false, message: 'AI Limit Exceeded (Starter)', limit, usage: totalTokens };
-        return { allowed: true, limit, usage: totalTokens };
-    }
-
-    const limit = getTierLimit(org.plan_tier, 'ai_token_limit');
-    if (limit === Infinity) return { allowed: true, limit: Infinity, usage: totalTokens };
-
-    if (totalTokens >= limit) {
-        return { 
-            allowed: false, 
-            message: `AI Credit Limit Reached (${totalTokens.toLocaleString()} / ${limit.toLocaleString()})`,
-            limit, 
-            usage: totalTokens 
-        };
-    }
-
-    return { allowed: true, limit, usage: totalTokens };
+    
+    // Always allowed for now as requested
+    return { 
+        allowed: true, 
+        limit: Infinity, 
+        usage: totalTokens 
+    };
 };
 
 export const getAIUsageStatus = async (req, res) => {
@@ -126,7 +105,7 @@ export const processChat = async (req, res) => {
         throw new APIError('Query is required', 400);
     }
 
-    // Get context data - Parallel Robust Config
+    // Get context data - Parallel Robust Config with Safe-Defaults
     const [
         invoicesRes,
         customersRes,
@@ -139,32 +118,72 @@ export const processChat = async (req, res) => {
         paymentsRes,
         settingsRes
     ] = await Promise.all([
-        Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId).order('created_at', { ascending: false }).limit(20)).catch(() => ({ data: [] })),
-        Promise.resolve(supabase.from('customers').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
-        Promise.resolve(supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(20)).catch(() => ({ data: [] })),
-        analyticsService.getDashboardStats(req.user.organizationId).catch(() => ({})),
-        analyticsService.getSafeToSpend(req.user.organizationId).catch(() => ({})),
-        analyticsService.getCustomerInsights(req.user.organizationId).catch(() => ([])),
-        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur').catch(() => ({})),
-        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(() => ([])),
-        Promise.resolve(supabase.from('payments').select('*, customers(name)').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(10)).catch(() => ({ data: [] })),
-        Promise.resolve(supabase.from('settings').select('*').eq('organization_id', req.user.organizationId).single()).catch(() => ({ data: {} }))
+        Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId).order('created_at', { ascending: false }).limit(20)).catch(err => { console.error('AI Context Error (Invoices):', err); return { data: [] }; }),
+        Promise.resolve(supabase.from('customers').select('*').eq('organization_id', req.user.organizationId)).catch(err => { console.error('AI Context Error (Customers):', err); return { data: [] }; }),
+        Promise.resolve(supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(20)).catch(err => { console.error('AI Context Error (Expenses):', err); return { data: [] }; }),
+        analyticsService.getDashboardStats(req.user.organizationId).catch(err => { console.error('AI Context Error (Stats):', err); return {}; }),
+        analyticsService.getSafeToSpend(req.user.organizationId).catch(err => { console.error('AI Context Error (SafeToSpend):', err); return {}; }),
+        analyticsService.getCustomerInsights(req.user.organizationId).catch(err => { console.error('AI Context Error (CustomerInsights):', err); return []; }),
+        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur').catch(err => { console.error('AI Context Error (PersonaStats):', err); return {}; }),
+        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(err => { console.error('AI Context Error (RevenueTrends):', err); return []; }),
+        Promise.resolve(supabase.from('payments').select('*, customers(name)').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(10)).catch(err => { console.error('AI Context Error (Payments):', err); return { data: [] }; }),
+        Promise.resolve(supabase.from('settings').select('*').eq('organization_id', req.user.organizationId).maybeSingle()).catch(err => { console.error('AI Context Error (Settings):', err); return { data: {} }; })
     ]);
+
+    // ──── High-Fidelity Context Computation ────────────────────────────────────
+    const now = new Date();
+    const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const lastMonthKey = now.getMonth() === 0 
+        ? `${now.getFullYear() - 1}-12` 
+        : `${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}`;
+
+    // 1. Calculate Ageing Report
+    const ageing = {
+        current: 0,    // 0-30 days
+        near: 0,       // 31-60 days
+        critical: 0,   // 61+ days
+        totalOverdue: 0
+    };
+
+    (invoicesRes?.data || []).filter(inv => inv.status === 'overdue').forEach(inv => {
+        const dueDate = new Date(inv.dueDate);
+        const diffDays = Math.ceil((now - dueDate) / (1000 * 60 * 60 * 24));
+        ageing.totalOverdue += inv.total;
+        if (diffDays <= 30) ageing.current += inv.total;
+        else if (diffDays <= 60) ageing.near += inv.total;
+        else ageing.critical += inv.total;
+    });
+
+    // 2. Calculate Growth (MoM)
+    const currentMonthData = (revenueTrends || []).find(t => t.period === currentMonthKey);
+    const lastMonthData = (revenueTrends || []).find(t => t.period === lastMonthKey);
+    const momGrowth = lastMonthData?.revenue > 0 
+        ? ((currentMonthData?.revenue || 0) - lastMonthData.revenue) / lastMonthData.revenue * 100 
+        : 0;
 
     const context = { 
         user: req.user,
-        invoices: invoicesRes?.data || [], 
-        customers: customersRes?.data || [], 
-        expenses: expensesRes?.data || [], 
-        payments: paymentsRes?.data || [],
+        organizationId: req.user.organizationId,
+        temporal: {
+            currentTime: now.toISOString(),
+            currentDay: dayOfWeek,
+            fiscalYear: now.getMonth() >= 3 ? `${now.getFullYear()}-${now.getFullYear() + 1}` : `${now.getFullYear() - 1}-${now.getFullYear()}`
+        },
+        invoices: Array.isArray(invoicesRes?.data) ? invoicesRes.data : [], 
+        customers: Array.isArray(customersRes?.data) ? customersRes.data : [], 
+        expenses: Array.isArray(expensesRes?.data) ? expensesRes.data : [], 
+        payments: Array.isArray(paymentsRes?.data) ? paymentsRes.data : [],
         settings: settingsRes?.data || {},
         stats: stats || {}, 
         safeToSpend: safeToSpend || {},
+        ageing,
+        growth: { momGrowth },
         customerInsights: Array.isArray(customerInsights) ? customerInsights : [],
         personaStats: personaStats || {},
         revenueTrends: Array.isArray(revenueTrends) ? revenueTrends.slice(-12) : [], 
         agentId, 
-        businessType: persona 
+        businessType: persona || 'solopreneur'
     };
 
     const response = await aiService.processQuery(query, context);

@@ -255,13 +255,35 @@ export const processChat = async (req, res) => {
 
     // [HISTORY] Save User Message and AI Response
     try {
+        let conversationId = req.body.conversationId;
+        
+        // 1. Create conversation if it doesn't exist
+        if (!conversationId) {
+            const { data: newConv, error: convError } = await supabase
+                .from('ai_conversations')
+                .insert([{ 
+                    organization_id: req.user.organizationId, 
+                    user_id: req.user.id,
+                    title: query.length > 40 ? query.substring(0, 40) + '...' : query
+                }])
+                .select()
+                .single();
+            
+            if (convError) throw convError;
+            conversationId = newConv.id;
+        }
+
+        // 2. Save Messages to Conversation
         await supabase.from('ai_chat_messages').insert([
-            { organization_id: req.user.organizationId, user_id: req.user.id, role: 'user', content: query },
-            { organization_id: req.user.organizationId, user_id: req.user.id, role: 'model', content: response.text, data: response.data || null }
+            { organization_id: req.user.organizationId, user_id: req.user.id, conversation_id: conversationId, role: 'user', content: query },
+            { organization_id: req.user.organizationId, user_id: req.user.id, conversation_id: conversationId, role: 'model', content: response.text, data: response.data || null }
         ]);
+
+        // 3. Attach conversationId to response for the UI to track
+        response.conversationId = conversationId;
+
     } catch (histError) {
         console.error('Failed to save chat history:', histError.message);
-        // Don't fail the request if history save fails
     }
 
     res.json(response);
@@ -575,6 +597,38 @@ export const sendCollectionReminder = async (req, res) => {
     }]);
 
     res.json({ success: true, sentAt: new Date().toISOString() });
+};
+
+export const getConversations = async (req, res) => {
+    const { data, error } = await supabase
+        .from('ai_conversations')
+        .select('*')
+        .eq('organization_id', req.user.organizationId)
+        .eq('user_id', req.user.id)
+        .order('created_at', { ascending: false })
+        .limit(30);
+
+    if (error) throw error;
+    res.json(data);
+};
+
+export const getConversationMessages = async (req, res) => {
+    const { id } = req.params;
+    const { data, error } = await supabase
+        .from('ai_chat_messages')
+        .select('*')
+        .eq('conversation_id', id)
+        .order('created_at', { ascending: true });
+
+    if (error) throw error;
+    
+    res.json(data.map(msg => ({
+        id: msg.id,
+        sender: msg.role === 'user' ? 'user' : 'bot',
+        text: msg.content,
+        data: msg.data,
+        timestamp: msg.created_at
+    })));
 };
 
 export const getChatHistory = async (req, res) => {

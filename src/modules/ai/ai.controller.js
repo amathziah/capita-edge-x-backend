@@ -162,9 +162,61 @@ export const processChat = async (req, res) => {
         ? ((currentMonthData?.revenue || 0) - lastMonthData.revenue) / lastMonthData.revenue * 100 
         : 0;
 
+    // 3. Deep Context Metrics for Strategic Advisory
+    const totalCash = (paymentsRes?.data || []).reduce((sum, p) => sum + (p.amount || 0), 0);
+    const avgMonthlyExpenses = (revenueTrends || []).slice(-6).reduce((sum, t) => sum + (t.expenses || 0), 0) / Math.max(1, Math.min(6, revenueTrends?.length || 1));
+    const runwayMonths = avgMonthlyExpenses > 0 ? totalCash / avgMonthlyExpenses : (totalCash > 0 ? 99 : 0);
+
+    const totalRevenue = stats?.total_revenue || 1; // Prevent div by zero
+    const customerRecs = Array.isArray(customerInsights) ? customerInsights : [];
+    const topClients = customerRecs.slice(0, 3).map(c => ({
+        name: c.name,
+        revenue: c.total_revenue,
+        percentage: (c.total_revenue / totalRevenue) * 100
+    }));
+    const maxConcentration = topClients.length > 0 ? Math.max(...topClients.map(c => c.percentage)) : 0;
+
+    const riskyOverdue = (invoicesRes?.data || [])
+        .filter(inv => inv.status === 'overdue')
+        .map(inv => {
+            const dueDate = new Date(inv.dueDate);
+            const daysLate = Math.ceil((now - dueDate) / (1000 * 60 * 60 * 24));
+            return { invoiceNumber: inv.invoiceNumber, daysLate, total: inv.total };
+        })
+        .sort((a, b) => b.daysLate - a.daysLate);
+
+    const deepContext = {
+        liquidity: {
+            totalCash,
+            runwayMonths: runwayMonths > 99 ? '99+' : runwayMonths.toFixed(1),
+            burnRate: avgMonthlyExpenses.toFixed(0)
+        },
+        risk: {
+            maxConcentration: maxConcentration.toFixed(1),
+            topClients,
+            riskyOverdue: riskyOverdue.slice(0, 3)
+        },
+        growth: {
+            dormantClients: customerRecs
+                .filter(c => {
+                    if (!c.last_invoice_date) return true;
+                    const lastInv = new Date(c.last_invoice_date);
+                    return (now - lastInv) / (1000 * 60 * 60 * 24) > 90;
+                })
+                .map(c => c.name)
+                .slice(0, 3)
+        }
+    };
+
+    const realSettings = settingsRes?.data || {};
+    const currency = realSettings?.currency || 'INR';
+    const planTier = realSettings?.plan_tier || req.user?.plan_tier || 'starter';
+
     const context = { 
         user: req.user,
         organizationId: req.user.organizationId,
+        currency,
+        planTier,
         temporal: {
             currentTime: now.toISOString(),
             currentDay: dayOfWeek,
@@ -174,16 +226,18 @@ export const processChat = async (req, res) => {
         customers: Array.isArray(customersRes?.data) ? customersRes.data : [], 
         expenses: Array.isArray(expensesRes?.data) ? expensesRes.data : [], 
         payments: Array.isArray(paymentsRes?.data) ? paymentsRes.data : [],
-        settings: settingsRes?.data || {},
+        settings: realSettings,
         stats: stats || {}, 
         safeToSpend: safeToSpend || {},
         ageing,
         growth: { momGrowth },
+        deepContext,
         customerInsights: Array.isArray(customerInsights) ? customerInsights : [],
         personaStats: personaStats || {},
         revenueTrends: Array.isArray(revenueTrends) ? revenueTrends.slice(-12) : [], 
         agentId, 
-        businessType: persona || 'solopreneur'
+        businessType: persona || realSettings?.business_type || 'solopreneur',
+        history: req.body.history || []
     };
 
     const response = await aiService.processQuery(query, context);

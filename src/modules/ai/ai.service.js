@@ -290,7 +290,11 @@ class AIService {
                     if (!modelInstance) continue;
 
                     const prompt = this.buildChatbotPrompt(query, context);
-                    const result = await modelInstance.generateContent(prompt);
+                    const history = context.history || [];
+                    
+                    // Use startChat for multi-turn memory
+                    const chat = modelInstance.startChat({ history });
+                    const result = await chat.sendMessage(prompt);
                     const response = await result.response;
                     const text = response.text();
                     const action = this.extractAction(text, query);
@@ -394,9 +398,8 @@ class AIService {
     buildChatbotPrompt(query, context) {
         const { 
             stats = {}, 
-            currency = 'INR', 
             safeToSpend = {}, 
-            businessType = 'solopreneur',
+            businessType,
             invoices = [],
             payments = [],
             expenses = [],
@@ -405,10 +408,15 @@ class AIService {
             settings = {},
             temporal = {},
             ageing = {},
-            growth = {}
+            growth = {},
+            deepContext = {}
         } = context;
 
-        const businessName = settings?.business_name || 'this business';
+        // Derive everything from real settings — no hardcoded defaults
+        const currency = settings?.currency || context?.currency || 'INR';
+        const businessName = settings?.business_name || settings?.businessName || 'your business';
+        const businessSegment = businessType || settings?.business_type || settings?.businessType || 'freelancer';
+        const ownerName = settings?.owner_name || settings?.full_name || null;
         const isNewAccount = invoices.length === 0 && payments.length === 0 && expenses.length === 0;
 
         // Safe Date Helper
@@ -422,7 +430,9 @@ class AIService {
         let contextBlock = `## SYSTEM CONTEXT\n`;
         contextBlock += `- **Current Time**: ${safeDateFormat(temporal.currentTime)} (${temporal.currentDay})\n`;
         contextBlock += `- **Fiscal Year**: ${temporal.fiscalYear}\n`;
-        contextBlock += `- **Persona**: ${businessType} (${businessName})\n\n`;
+        contextBlock += `- **Business**: ${businessName} (${businessSegment})\n`;
+        if (ownerName) contextBlock += `- **Owner**: ${ownerName}\n`;
+        contextBlock += `- **Currency**: ${currency}\n\n`;
 
         if (isNewAccount) {
             contextBlock += `> [!NOTE]\n> This is a brand new account with no financial history. Focus on onboarding and setup.\n\n`;
@@ -473,30 +483,64 @@ class AIService {
             contextBlock += `\n`;
         }
 
-        // 5. Top Customers
+        // 5. Top Customers (with real data fields)
         if (customerInsights.length > 0) {
-            contextBlock += `TOP CUSTOMERS:\n`;
-            customerInsights.slice(0, 3).forEach(c => {
-                contextBlock += `- ${c.name}: Total paid ${formatCurrency(c.total_paid, currency)}\n`;
+            contextBlock += `## TOP CUSTOMERS\n`;
+            customerInsights.slice(0, 5).forEach(c => {
+                const revenue = c.total_revenue ?? c.total_paid ?? c.revenue ?? 0;
+                const invoiceCount = c.invoice_count ?? c.total_invoices ?? 'N/A';
+                const lastSeen = c.last_invoice_date ? safeDateFormat(c.last_invoice_date) : 'N/A';
+                contextBlock += `- **${c.name}**: ${formatCurrency(revenue, currency)} revenue, ${invoiceCount} invoices, last active ${lastSeen}\n`;
             });
             contextBlock += `\n`;
         }
 
         // 6. Trends
         if (revenueTrends.length > 0) {
-            contextBlock += `REVENUE TREND (Last 6 Months):\n`;
+            contextBlock += `## REVENUE TREND (Last 6 Months)\n`;
             revenueTrends.slice(-6).forEach(t => {
                 contextBlock += `- ${t.month || t.period}: ${formatCurrency(t.revenue, currency)}\n`;
             });
             contextBlock += `\n`;
         }
 
-        contextBlock += `INSTRUCTIONS:\n`;
-        contextBlock += `1. Use the data above to provide specific, data-driven answers.\n`;
-        contextBlock += `2. If asked about "access to data", confirm you have full real-time access to their ledger, customers, and cash flow.\n`;
-        contextBlock += `3. Be concise and professional. Use a helpful, advisor-like tone.\n`;
-        contextBlock += `4. Keep responses SHORT — max 3-4 sentences.\n\n`;
-        contextBlock += `User Query: "${query}"`;
+        // 7. STRATEGIC DEEP CONTEXT
+        if (deepContext.liquidity) {
+            contextBlock += `## 🧠 STRATEGIC SITUATION REPORT\n`;
+            contextBlock += `- **Cash Runway**: ${deepContext.liquidity.runwayMonths} months (Avg Burn: ${formatCurrency(deepContext.liquidity.burnRate, currency)}/mo)\n`;
+            contextBlock += `- **Revenue Risk**: Max Concentration ${deepContext.risk.maxConcentration}% (Top client dependency)\n`;
+            
+            if (deepContext.growth.dormantClients?.length > 0) {
+                contextBlock += `- **Growth Gaps**: ${deepContext.growth.dormantClients.length} clients inactive for >90 days (e.g., ${deepContext.growth.dormantClients.join(', ')}).\n`;
+            }
+            
+            if (deepContext.risk.riskyOverdue?.length > 0) {
+                const topRisk = deepContext.risk.riskyOverdue[0];
+                contextBlock += `- **Critical Action**: Invoice #${topRisk.invoiceNumber} is ${topRisk.daysLate} days late. Collect ${formatCurrency(topRisk.total, currency)} immediately.\n`;
+            }
+            contextBlock += `\n`;
+        }
+
+        contextBlock += `---\n`;
+        contextBlock += `## RESPONSE FORMATTING RULES (YOU MUST FOLLOW)\n\n`;
+        contextBlock += `You are **Capita**, a high-end Strategic CFO AI for freelancers. Give sharp, structured, visually clear answers.\n\n`;
+        contextBlock += `**TONE:** Authoritative but warm. Senior advisor, not a chatbot.\n\n`;
+        contextBlock += `**FORMAT RULES:**\n`;
+        contextBlock += `- Start with a **1-sentence executive summary** — bold the key number or insight.\n`;
+        contextBlock += `- Use \`## Heading\` for responses covering more than 2 topics.\n`;
+        contextBlock += `- Use **bullet points** for any list of 3+ items. Never write lists as a comma sentence.\n`;
+        contextBlock += `- Use **markdown tables** when comparing clients, invoices, or multiple metrics.\n`;
+        contextBlock += `- **Bold** every currency amount, percentage, and key metric.\n`;
+        contextBlock += `- Use \`> ⚠️ ...\` for risks. Use \`> 🚀 ...\` for growth opportunities.\n`;
+        contextBlock += `- End with **→ one clear next action** the user should take.\n\n`;
+        contextBlock += `**TABLE FORMAT FOR COMPARISONS** (use your real data — not this example):\n`;
+        contextBlock += `| Client | Revenue | Status |\n|--------|---------|--------|\n\n`;
+        contextBlock += `**NEVER DO:**\n`;
+        contextBlock += `- ❌ Walls of text — max 4 sentences per paragraph.\n`;
+        contextBlock += `- ❌ Comma-separated lists when there are 3+ items.\n`;
+        contextBlock += `- ❌ Filler phrases like "I can help with that" or "Great question!"\n`;
+        contextBlock += `- ❌ Repeat the user's question back to them.\n\n`;
+        contextBlock += `**User's Question:** "${query}"`;
 
         return contextBlock;
     }
@@ -559,16 +603,14 @@ class AIService {
     // ═══════════════════════════════════════════════════════════
 
     async generateInsights(context) {
-        // STRATEGY: Always use rule-based. This saves 5-15 RPD/day.
-        // The math-based insights are just as useful and instant.
-        // Rule-based insights directly here (Zero API calls)
         const insights = [];
-        const { stats = {} } = context;
+        const { stats = {}, settings = {}, currency: ctxCurrency } = context;
+        const currency = ctxCurrency || settings?.currency || 'INR';
         if (stats.pending_payments > 0) {
             insights.push({ 
                 id: 'rule-pend', 
                 title: 'Receivables', 
-                value: formatCurrency(stats.pending_payments, 'INR'), 
+                value: formatCurrency(stats.pending_payments, currency), 
                 description: 'You have outstanding invoices to collect.', 
                 type: 'warning' 
             });

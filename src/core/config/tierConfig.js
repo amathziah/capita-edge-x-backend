@@ -5,122 +5,167 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 export const PLAN_TIERS = {
+
+    // ─── Free (Starter) ──────────────────────────────────────────────────────
     starter: {
-        name: 'Starter',
-        label: 'Free',
+        name: 'Free',
+        label: 'Free forever',
+        badge: null,
         price: 0,
         priceAnnual: 0,
-        description: 'Get started with the essentials.',
+        annualSavings: 0,
+        trialDays: 14,            // 14-day free trial of Solo features
+        description: 'Everything you need to get started and test Capita.',
+        ai: {
+            queriesPerMonth: 25,
+            tokensPerMonth: 50_000,
+            features: ['Basic business Q&A', 'Revenue & expense queries', 'Invoice status lookups'],
+        },
         limits: {
-            invoices: 5,
-            ai_token_limit: 50000,
+            invoices: 5,            // Per month
+            customers: 15,
             products: 20,
-            customers: 20,
+            ai_token_limit: 50_000,
         },
         features: {
+            pdf_invoices: true,
             email_invoices: false,
-            bulk_email: false,
-            pdf_download: true,
+            auto_followup: false,
+            gst_reports: false,
             reports: 'basic',
             white_label: false,
-            multi_client: false,
             priority_support: false,
+            weekly_summary: false,
+            ai_strategic_brief: false,
+            ai_deep_context: false,
+            ai_cashflow_forecast: false,
         },
     },
 
-    freelancer: {
-        name: 'Freelancer',
-        label: '₹499/mo',
-        price: 499,
-        priceAnnual: 4990,   // ~2 months free
-        description: 'For freelancers and solopreneurs scaling up.',
+    // ─── Solo ₹299/mo ────────────────────────────────────────────────────────
+    solo: {
+        name: 'Solo',
+        label: '₹299/mo',
+        badge: 'Most Popular',
+        price: 299,
+        priceAnnual: 2_990,          // ≈ 2 months free (₹598 savings)
+        annualSavings: 598,
+        trialDays: 0,
+        description: 'For active freelancers who want to move fast and get paid.',
+        ai: {
+            queriesPerMonth: 150,
+            tokensPerMonth: 300_000,
+            features: [
+                'All Free AI features',
+                'Strategic CFO advice',
+                'Cash runway analysis',
+                'Revenue concentration risk',
+                'Dormant client recovery',
+                'Auto follow-up drafts',
+            ],
+        },
         limits: {
             invoices: Infinity,
-            ai_token_limit: 250000,
-            products: Infinity,
             customers: Infinity,
+            products: Infinity,
+            ai_token_limit: 300_000,
         },
         features: {
+            pdf_invoices: true,
             email_invoices: true,
-            bulk_email: false,
-            pdf_download: true,
+            auto_followup: true,
+            gst_reports: true,
             reports: 'full',
             white_label: false,
-            multi_client: false,
             priority_support: false,
+            weekly_summary: true,
+            ai_strategic_brief: true,
+            ai_deep_context: true,
+            ai_cashflow_forecast: false,
         },
     },
 
-    smb: {
-        name: 'SMB',
-        label: '₹1,499/mo',
-        price: 1499,
-        priceAnnual: 14990,  // ~2 months free
-        description: 'For growing teams and agencies.',
+    // ─── Solo Pro ₹699/mo ────────────────────────────────────────────────────
+    solo_pro: {
+        name: 'Solo Pro',
+        label: '₹699/mo',
+        badge: 'Best Value',
+        price: 699,
+        priceAnnual: 6_990,          // ≈ 2 months free (₹1,398 savings)
+        annualSavings: 1_398,
+        trialDays: 0,
+        description: 'For high-volume freelancers who want deep intelligence.',
+        ai: {
+            queriesPerMonth: 500,
+            tokensPerMonth: 1_250_000,
+            features: [
+                'All Solo AI features',
+                'Cash flow forecasting',
+                'Client churn prediction',
+                'Proactive risk alerts',
+                'Collection letter drafts',
+                'Settlement negotiation AI',
+                'Priority AI response queue',
+            ],
+        },
         limits: {
             invoices: Infinity,
-            ai_token_limit: 1000000,
-            products: Infinity,
             customers: Infinity,
+            products: Infinity,
+            ai_token_limit: 1_250_000,
         },
         features: {
+            pdf_invoices: true,
             email_invoices: true,
-            bulk_email: true,
-            pdf_download: true,
+            auto_followup: true,
+            gst_reports: true,
             reports: 'full',
             white_label: false,
-            multi_client: false,
             priority_support: true,
+            weekly_summary: true,
+            ai_strategic_brief: true,
+            ai_deep_context: true,
+            ai_cashflow_forecast: true,
         },
     },
 
-    ca_pro: {
-        name: 'CA Pro',
-        label: '₹10,000 setup + ₹500/client/mo',
-        price: 10000,         // Setup fee
-        pricePerClient: 500,  // Monthly per-client fee
-        priceAnnual: null,    // Custom pricing
-        description: 'White-label for Chartered Accountants.',
-        limits: {
-            invoices: Infinity,
-            ai_token_limit: 500000,
-            products: Infinity,
-            customers: Infinity,
-        },
-        features: {
-            email_invoices: true,
-            bulk_email: true,
-            pdf_download: true,
-            reports: 'full',
-            white_label: true,
-            multi_client: true,
-            priority_support: true,
-        },
-    },
-
+    // ─── Enterprise / CA Pro (Custom) ────────────────────────────────────────
     enterprise: {
         name: 'Enterprise',
-        label: 'Custom',
-        price: null,          // Contact sales
+        label: 'Custom pricing',
+        badge: null,
+        price: null,
         priceAnnual: null,
-        description: 'Custom solutions for large organizations.',
+        annualSavings: 0,
+        trialDays: 0,
+        description: 'White-label for CAs and agencies managing multiple clients.',
+        ai: {
+            queriesPerMonth: Infinity,
+            tokensPerMonth: Infinity,
+            features: ['Unlimited AI queries', 'Custom model tuning', 'Dedicated support'],
+        },
         limits: {
             invoices: Infinity,
-            ai_token_limit: Infinity,
-            products: Infinity,
             customers: Infinity,
+            products: Infinity,
+            ai_token_limit: Infinity,
         },
         features: {
+            pdf_invoices: true,
             email_invoices: true,
-            bulk_email: true,
-            pdf_download: true,
+            auto_followup: true,
+            gst_reports: true,
             reports: 'custom',
             white_label: true,
-            multi_client: true,
             priority_support: true,
+            weekly_summary: true,
+            ai_strategic_brief: true,
+            ai_deep_context: true,
+            ai_cashflow_forecast: true,
         },
     },
 };
+
 
 /**
  * Get config for a specific tier. Falls back to 'starter' for unknown tiers.

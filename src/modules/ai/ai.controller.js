@@ -600,56 +600,109 @@ export const sendCollectionReminder = async (req, res) => {
 };
 
 export const getConversations = async (req, res) => {
-    const { data, error } = await supabase
-        .from('ai_conversations')
-        .select('*')
-        .eq('organization_id', req.user.organizationId)
-        .eq('user_id', req.user.id)
-        .order('created_at', { ascending: false })
-        .limit(30);
+    const results = [];
+    
+    // 1. Check for orphaned messages (legacy history) first as it's the most stable table
+    try {
+        const { count, error: countError } = await supabase
+            .from('ai_chat_messages')
+            .select('*', { count: 'exact', head: true })
+            .is('conversation_id', null)
+            .eq('user_id', req.user.id);
 
-    if (error) throw error;
-    res.json(data);
+        if (!countError && count > 0) {
+            results.push({
+                id: 'legacy',
+                title: 'My Previous History',
+                created_at: new Date().toISOString()
+            });
+        }
+    } catch (e) {
+        console.error('Legacy check failed:', e.message);
+    }
+
+    // 2. Try to fetch new conversations from the new table
+    try {
+        const { data, error } = await supabase
+            .from('ai_conversations')
+            .select('*')
+            .eq('organization_id', req.user.organizationId)
+            .eq('user_id', req.user.id)
+            .order('created_at', { ascending: false })
+            .limit(30);
+
+        if (!error && data) {
+            results.unshift(...data);
+        }
+    } catch (err) {
+        console.warn('Conversations table may not exist yet:', err.message);
+    }
+
+    res.json(results);
 };
 
 export const getConversationMessages = async (req, res) => {
     const { id } = req.params;
-    const { data, error } = await supabase
-        .from('ai_chat_messages')
-        .select('*')
-        .eq('conversation_id', id)
-        .order('created_at', { ascending: true });
-
-    if (error) throw error;
     
-    res.json(data.map(msg => ({
-        id: msg.id,
-        sender: msg.role === 'user' ? 'user' : 'bot',
-        text: msg.content,
-        data: msg.data,
-        timestamp: msg.created_at
-    })));
+    try {
+        let query = supabase
+            .from('ai_chat_messages')
+            .select('*')
+            .order('created_at', { ascending: true });
+
+        if (id === 'legacy') {
+            query = query.is('conversation_id', null).eq('user_id', req.user.id);
+        } else {
+            query = query.eq('conversation_id', id);
+        }
+
+        const { data, error } = await query;
+        
+        if (error) {
+            console.warn('Failed to fetch messages:', error.message);
+            return res.json([]);
+        }
+        
+        res.json((data || []).map(msg => ({
+            id: msg.id,
+            sender: msg.role === 'user' ? 'user' : 'bot',
+            text: msg.content,
+            data: msg.data,
+            timestamp: msg.created_at
+        })));
+    } catch (err) {
+        console.error('getConversationMessages crash prevented:', err.message);
+        res.json([]);
+    }
 };
 
 export const getChatHistory = async (req, res) => {
-    const { data, error } = await supabase
-        .from('ai_chat_messages')
-        .select('*')
-        .eq('organization_id', req.user.organizationId)
-        .eq('user_id', req.user.id)
-        .order('created_at', { ascending: false })
-        .limit(50);
+    try {
+        const { data, error } = await supabase
+            .from('ai_chat_messages')
+            .select('*')
+            .eq('organization_id', req.user.organizationId)
+            .eq('user_id', req.user.id)
+            .order('created_at', { ascending: false })
+            .limit(50);
 
-    if (error) throw error;
-    
-    // Reverse to get chronological order for the UI
-    res.json(data.reverse().map(msg => ({
-        id: msg.id,
-        sender: msg.role === 'user' ? 'user' : 'bot',
-        text: msg.content,
-        data: msg.data,
-        timestamp: msg.created_at
-    })));
+        if (error) {
+            console.warn('getChatHistory failed:', error.message);
+            return res.json([]);
+        }
+        
+        // Reverse to get chronological order for the UI
+        res.json((data || []).reverse().map(msg => ({
+            id: msg.id,
+            sender: msg.role === 'user' ? 'user' : 'bot',
+            text: msg.content,
+            data: msg.data,
+            timestamp: msg.created_at
+        })));
+    } catch (err) {
+        console.error('getChatHistory crash prevented:', err.message);
+        res.json([]);
+    }
 };
 
 export const deleteChatHistory = async (req, res) => {

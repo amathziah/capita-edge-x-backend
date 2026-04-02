@@ -42,7 +42,9 @@ app.use(helmet());
 const allowedOrigins = [
     process.env.APP_URL?.replace(/\/$/, ''), // Production Frontend (trim trailing slash)
     'http://localhost:5173', 
-    'http://localhost:5174'
+    'http://localhost:5174',
+    'https://capitaedgex.com',
+    'https://www.capitaedgex.com'
 ].filter(Boolean);
 
 app.use(cors({

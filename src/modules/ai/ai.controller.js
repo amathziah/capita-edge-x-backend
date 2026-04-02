@@ -253,6 +253,17 @@ export const processChat = async (req, res) => {
         cost
     }]);
 
+    // [HISTORY] Save User Message and AI Response
+    try {
+        await supabase.from('ai_chat_messages').insert([
+            { organization_id: req.user.organizationId, user_id: req.user.id, role: 'user', content: query },
+            { organization_id: req.user.organizationId, user_id: req.user.id, role: 'model', content: response.text, data: response.data || null }
+        ]);
+    } catch (histError) {
+        console.error('Failed to save chat history:', histError.message);
+        // Don't fail the request if history save fails
+    }
+
     res.json(response);
 };
 
@@ -564,6 +575,38 @@ export const sendCollectionReminder = async (req, res) => {
     }]);
 
     res.json({ success: true, sentAt: new Date().toISOString() });
+};
+
+export const getChatHistory = async (req, res) => {
+    const { data, error } = await supabase
+        .from('ai_chat_messages')
+        .select('*')
+        .eq('organization_id', req.user.organizationId)
+        .eq('user_id', req.user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+    if (error) throw error;
+    
+    // Reverse to get chronological order for the UI
+    res.json(data.reverse().map(msg => ({
+        id: msg.id,
+        sender: msg.role === 'user' ? 'user' : 'bot',
+        text: msg.content,
+        data: msg.data,
+        timestamp: msg.created_at
+    })));
+};
+
+export const deleteChatHistory = async (req, res) => {
+    const { error } = await supabase
+        .from('ai_chat_messages')
+        .delete()
+        .eq('organization_id', req.user.organizationId)
+        .eq('user_id', req.user.id);
+
+    if (error) throw error;
+    res.json({ success: true });
 };
 
 export const getBudget = async (req, res) => {

@@ -34,6 +34,8 @@ router.get('/ai/predict-revenue', aiLimiter, asyncHandler(aiController.predictRe
 router.get('/ai/usage', metaLimiter, asyncHandler(aiController.getAIUsageStatus)); // Use metaLimiter
 router.post('/ai/command', aiLimiter, asyncHandler(aiController.processCommand));
 router.post('/ai/audit-invoice', aiLimiter, asyncHandler(aiController.auditInvoice));
+router.get('/ai/history', aiLimiter, asyncHandler(aiController.getChatHistory));
+router.delete('/ai/history', aiLimiter, asyncHandler(aiController.deleteChatHistory));
 router.get('/ai/config', metaLimiter, asyncHandler(aiController.getConfig)); // Use metaLimiter
 router.get('/ai/budget', metaLimiter, asyncHandler(aiController.getBudget)); // Daily AI budget status
 

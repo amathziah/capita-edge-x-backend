@@ -64,6 +64,10 @@ class AIService {
                 'gemini-2.5-flash',       // 5 RPM, 250K TPM, 20 RPD ✅
                 'gemini-3-flash-preview',  // 5 RPM, 250K TPM, 20 RPD ✅
             ];
+            this.modelMetadata = {
+                'gemini-2.5-flash': 'Flash 2.5',
+                'gemini-3-flash-preview': 'Flash 3.0',
+            };
             console.log('📡 AI Service Initialized — Free Tier Optimized (2 models, 40 RPD budget)');
         }
     }
@@ -563,39 +567,85 @@ class AIService {
     // ═══════════════════════════════════════════════════════════
 
     async parseInvoiceText(text, userId = 'anon') {
-        // Cache check
-        const cacheKey = this._cacheKey('invoice', text);
+        return this.executeWithLock(`parse_${userId}_${text.slice(0, 20)}`, async () => {
+            // Cache check
+            const cacheKey = this._cacheKey('invoice', text);
+            const cached = this._cacheGet(cacheKey);
+            if (cached) {
+                console.log(`📡 Cache HIT for invoice parse`);
+                return { ...cached, provider: cached.provider + ':cached' };
+            }
+
+            if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+                throw new Error('Cloud Busy: Unable to parse invoice using cloud models.');
+            }
+
+            for (const modelName of this.models) {
+                try {
+                    this._consumeToken();
+                    const modelInstance = this.getModel(modelName, true);
+                    const prompt = `Parse this text into a strict JSON invoice: "${text}"`;
+                    const result = await modelInstance.generateContent(prompt);
+                    const response = await result.response;
+                    const jsonText = response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                    const parsed = JSON.parse(jsonText);
+                    
+                    this._recordUsage(userId);
+                    const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:magic`, budget: this.getBudgetStatus(userId) };
+                    this._cacheSet(cacheKey, responseData, this.CACHE_TTL.invoice);
+                    
+                    return responseData;
+                } catch (error) {
+                    if (this.isRetryable(error)) continue;
+                    break;
+                }
+            }
+            throw new Error('Cloud Busy: Unable to parse invoice using cloud models.');
+        });
+    }
+
+    /**
+     * Audit a generated invoice for risks and suggests improvements
+     */
+    async auditInvoice(invoiceData, userId = 'anon') {
+        const cacheKey = this._cacheKey('audit', JSON.stringify(invoiceData));
         const cached = this._cacheGet(cacheKey);
-        if (cached) {
-            console.log(`📡 Cache HIT for invoice parse`);
-            return { ...cached, provider: cached.provider + ':cached' };
-        }
+        if (cached) return { ...cached, provider: cached.provider + ':cached' };
 
         if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
-            throw new Error('Cloud Busy: Unable to parse invoice using cloud models.');
+            throw new Error('Cloud Busy: AI Audit is currently unavailable.');
         }
+
+        const prompt = `You are a strict financial auditor. Audit this invoice for errors (GST/Tax errors, pricing logic, missing information, risk of rejection).
+        Invoice: ${JSON.stringify(invoiceData)}
+        Return a strict JSON object: { "riskScore": number (0-100), "suggestions": string[] }`;
 
         for (const modelName of this.models) {
             try {
                 this._consumeToken();
                 const modelInstance = this.getModel(modelName, true);
-                const prompt = `Parse this text into a strict JSON invoice: "${text}"`;
                 const result = await modelInstance.generateContent(prompt);
                 const response = await result.response;
                 const jsonText = response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
                 const parsed = JSON.parse(jsonText);
                 
+                const data = {
+                    riskScore: parsed.riskScore ?? 0,
+                    suggestions: parsed.suggestions ?? ["Looks perfect!"],
+                    usage: response.usageMetadata,
+                    provider: `cloud:${modelName}:audit`,
+                    budget: this.getBudgetStatus(userId)
+                };
+
                 this._recordUsage(userId);
-                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:magic`, budget: this.getBudgetStatus(userId) };
-                this._cacheSet(cacheKey, responseData, this.CACHE_TTL.invoice);
-                
-                return responseData;
+                this._cacheSet(cacheKey, data, this.CACHE_TTL.invoice);
+                return data;
             } catch (error) {
                 if (this.isRetryable(error)) continue;
                 break;
             }
         }
-        throw new Error('Cloud Busy: Unable to parse invoice using cloud models.');
+        throw new Error('Cloud Busy: AI Audit failed.');
     }
 
     // ═══════════════════════════════════════════════════════════

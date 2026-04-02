@@ -20,7 +20,7 @@ const CACHE_TTL = LIMITS.AI_CACHE_TTL_MS; // Moved to constants
 const calculateAICost = (usage, model = 'gemini-2.0-flash') => {
     if (!usage) return { tokens: 0, cost: 0 };
     
-    const pricing = AI_PRICING[model] || AI_PRICING['gemini-2.0-flash'];
+    const pricing = AI_PRICING[model] || AI_PRICING['gemini-2.5-flash'] || AI_PRICING['gemini-2.0-flash'];
     const { promptTokenCount = 0, candidatesTokenCount = 0, totalTokenCount = 0 } = usage;
     
     const usdCost = (promptTokenCount * pricing.inputPer1M / 1000000) + 
@@ -241,7 +241,7 @@ export const processChat = async (req, res) => {
     };
 
     const response = await aiService.processQuery(query, context);
-    const modelUsed = response.provider?.split(':')?.[1] || 'gemini-3.1-flash-preview';
+    const modelUsed = response.provider?.split(':')?.[1] || 'gemini-3-flash-preview';
     const { tokens, cost } = calculateAICost(response.usage, modelUsed);
 
     // [AUDIT] Log AI Request with precision data
@@ -272,7 +272,7 @@ export const magicFill = async (req, res) => {
     if (!text) throw new APIError('Text input is required', 400);
 
     const parsed = await aiService.parseInvoiceText(text);
-    const modelUsed = parsed.provider?.split(':')?.[1] || 'gemini-3.1-flash-preview';
+    const modelUsed = parsed.provider?.split(':')?.[1] || 'gemini-3-flash-preview';
     const { tokens, cost } = calculateAICost(parsed.usage, modelUsed);
 
     // [AUDIT] Log AI Request
@@ -285,6 +285,34 @@ export const magicFill = async (req, res) => {
     }]);
 
     res.json(parsed);
+};
+
+export const auditInvoice = async (req, res) => {
+    const { items, customerName, total } = req.body;
+
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        return res.json({
+            riskScore: 0,
+            suggestions: ["Audit unavailable on free tier."],
+            is_limit_reached: true
+        });
+    }
+
+    const audit = await aiService.auditInvoice(req.body, req.user?.id);
+    const modelUsed = audit.provider?.split(':')?.[1] || 'gemini-3-flash-preview';
+    const { tokens, cost } = calculateAICost(audit.usage, modelUsed);
+
+    // [AUDIT] Log AI Request
+    await supabase.from('ai_requests').insert([{
+        organization_id: req.user.organizationId,
+        user_id: req.user.id,
+        model: modelUsed,
+        tokens,
+        cost
+    }]);
+
+    res.json(audit);
 };
 
 export const getInsights = async (req, res) => {

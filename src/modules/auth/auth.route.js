@@ -10,6 +10,6 @@ router.post('/verify-otp',          authController.verifyOtp);
 
 // Auth required — user must have a valid Supabase session token
 router.post('/provision',           authenticateUser, authController.provisionOrganization);
-router.post('/resend-confirmation', authenticateUser, authController.resendConfirmation);
+router.post('/resend-confirmation', authController.resendConfirmation);
 
 export default router;

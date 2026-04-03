@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { supabase } from '../../core/database/supabase.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
 import emailService from '../../core/services/email.service.js';
+import { DEFAULTS } from '../../core/config/constants.js';
 
 /**
  * Helper to hash OTP for secure storage
@@ -130,19 +131,38 @@ export const provisionOrganization = async (req, res) => {
  * Resend confirmation email
  */
 export const resendConfirmation = async (req, res) => {
-    const email = req.user.email; // From authenticateUser middleware
-    const userId = req.user.id;
+    const { email } = req.body;
+
+    if (!email) {
+        throw new APIError('Email is required', 400);
+    }
 
     try {
+        // 1. Fetch user by email to get ID (Use admin API to bypass RLS)
+        const { data: { users }, error: listError } = await supabase.auth.admin.listUsers();
+        if (listError) throw listError;
+
+        const user = users.find(u => u.email === email);
+
+        if (!user) {
+            // Standard practice: Don't reveal if email exists, but here we can be helpful or silent.
+            // For resend, being helpful is usually fine.
+            throw new APIError('No account found with this email.', 404);
+        }
+
+        if (user.email_confirmed_at) {
+            throw new APIError('This account is already verified. Please sign in.', 400);
+        }
+
         const otp = generateOTP();
         const otpHash = hashOTP(otp);
         const expiresAt = new Date(Date.now() + DEFAULTS.OTP_EXPIRY_MS).toISOString();
 
-        // 1. Store in otp_verifications (Fix Bugs 5, 6, 7)
+        // 2. Store in otp_verifications
         const { error: otpError } = await supabase
             .from('otp_verifications')
             .insert([{
-                user_id: userId,
+                user_id: user.id,
                 email: email,
                 otp_hash: otpHash,
                 expires_at: expiresAt
@@ -150,7 +170,7 @@ export const resendConfirmation = async (req, res) => {
 
         if (otpError) throw new Error(`Failed to store verification code: ${otpError.message}`);
 
-        // 2. Send via EmailService
+        // 3. Send via EmailService
         await emailService.sendOtpEmail(email, otp);
 
         res.status(200).json({
@@ -159,7 +179,7 @@ export const resendConfirmation = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('[Resend Confirmation Error]:', error);
+        console.error('[Public Resend Error]:', error);
         throw new APIError(error.message || 'Failed to resend confirmation', 500);
     }
 };
@@ -229,7 +249,7 @@ export const signUp = async (req, res) => {
     }
 
     try {
-        // 1. Create User in Supabase (Confirm Bug 8: businessType saved in metadata)
+        // 1. Create User in Supabase
         const { data: userData, error: userError } = await supabase.auth.admin.createUser({
             email,
             password,
@@ -240,12 +260,42 @@ export const signUp = async (req, res) => {
             email_confirm: false
         });
 
-        if (userError) throw new APIError(userError.message, 400);
+        if (userError) {
+            // Handle existing user (Industry Practice)
+            if (userError.message.includes('already registered') || userError.message.includes('already exists')) {
+                const { data: { users } } = await supabase.auth.admin.listUsers();
+                const existingUser = users.find(u => u.email === email);
 
-        // 2. Generate and store OTP (Fix Bug 6: Secure Hashing)
+                if (existingUser && !existingUser.email_confirmed_at) {
+                    // Resend OTP for unconfirmed accounts
+                    const otp = generateOTP();
+                    const otpHash = hashOTP(otp);
+                    const expiresAt = new Date(Date.now() + DEFAULTS.OTP_EXPIRY_MS).toISOString();
+
+                    await supabase.from('otp_verifications').insert([{
+                        user_id: existingUser.id,
+                        email: email,
+                        otp_hash: otpHash,
+                        expires_at: expiresAt
+                    }]);
+
+                    await emailService.sendOtpEmail(email, otp);
+
+                    return res.status(200).json({
+                        success: true,
+                        message: 'This email is already registered but not verified. A new 6-digit code has been sent.'
+                    });
+                } else {
+                    throw new APIError('This email is already registered. Please sign in.', 400);
+                }
+            }
+            throw new APIError(userError.message, 400);
+        }
+
+        // 2. Generate and store OTP for new user
         const otp = generateOTP();
         const otpHash = hashOTP(otp);
-        const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        const expiresAt = new Date(Date.now() + DEFAULTS.OTP_EXPIRY_MS).toISOString();
 
         await supabase
             .from('otp_verifications')

@@ -46,14 +46,12 @@ const getAIUsageData = async (organizationId) => {
 };
 
 const checkAICreditLimit = async (req) => {
-    // Usage tracking continues for analytics, but limit enforcement is temporarily lifted
-    const totalTokens = await getAIUsageData(req.user.organizationId);
+    const budget = await aiService.getBudgetStatus(req.user.id, req.user.organizationId);
     
-    // Always allowed for now as requested
     return { 
-        allowed: true, 
-        limit: Infinity, 
-        usage: totalTokens 
+        allowed: !budget.isExhausted, 
+        limit: budget.userMax, 
+        usage: budget.userUsed 
     };
 };
 

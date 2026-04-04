@@ -68,7 +68,7 @@ class AIService {
             this.tiers = {
                 free: {
                     models: ['gemini-2.5-flash', 'gemini-3-flash-preview'],
-                    limit: 100, // Increased buffer for onboarding
+                    limit: 25, // Synchronized with tierConfig.js (was 100)
                     label: 'Free'
                 },
                 solo: {
@@ -444,14 +444,21 @@ class AIService {
         }
 
         // 2. Check budget + rate limits before calling API
-        if (!this.genAI || this.isCircuitOpen() || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+        const orgId = context.organizationId;
+        const budget = await this._checkPlanBudget(orgId);
+        
+        if (!this.genAI || this.isCircuitOpen() || !budget.allowed || !this._canMakeRequest()) {
             const reason = !this.genAI ? 'no_api_key' 
                 : this.isCircuitOpen() ? 'circuit_open' 
                 : !this._canMakeRequest() ? 'rpm_limit' 
-                : 'daily_budget';
+                : 'monthly_budget_exhausted';
             console.log(`📡 Local fallback: ${reason} (user: ${userId})`);
             
-            throw new Error(`Cloud Busy: AI engine is currently in cooldown or over budget. Please try again in 60s.`);
+            if (!budget.allowed) {
+                throw new Error(`You have reached your monthly limit of ${budget.limit} AI queries on the ${budget.tier} plan. Please upgrade to continue.`);
+            }
+            
+            throw new Error(`Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.`);
         }
 
         const lockKey = `chat_${userId}_${query.slice(0, 20)}`;
@@ -675,8 +682,11 @@ class AIService {
     async processStructuredAgentQuery(query, agentId, contextData) {
         const userId = contextData.user?.id || 'anon';
 
-        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
-            throw new Error('Cloud Busy: AI Agent is temporarily unavailable.');
+        const orgId = contextData.organizationId;
+        const budget = await this._checkPlanBudget(orgId);
+
+        if (!this.genAI || !budget.allowed || this.isCircuitOpen() || !this._canMakeRequest()) {
+            throw new Error('Cloud Busy: AI Agent is temporarily unavailable or over budget.');
         }
 
         const { invoices = [], stats = {}, currency } = contextData;

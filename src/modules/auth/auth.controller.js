@@ -22,30 +22,30 @@ const generateOTP = () => {
  * Helper to find a user by email via admin API (handles pagination)
  */
 const findUserByEmail = async (email) => {
-    let page = 1;
-    const perPage = 1000;
     const searchEmail = email.trim().toLowerCase();
     
-    while (true) {
-        const { data: { users }, error } = await supabase.auth.admin.listUsers({
-            page,
-            perPage
-        });
+    try {
+        console.log(`[Auth] Searching for user: ${searchEmail}`);
+        // Simple listUsers() call matching the check_user.js logic
+        const { data: { users }, error } = await supabase.auth.admin.listUsers();
         
         if (error) {
             console.error('[Admin] failed to list users:', error);
             return null;
         }
         
-        if (!users || users.length === 0) break;
-        
         const found = users.find(u => u.email.trim().toLowerCase() === searchEmail);
-        if (found) return found;
+        if (found) {
+            console.log(`[Auth] User found: ${found.id} (Confirmed: ${!!found.email_confirmed_at})`);
+            return found;
+        }
         
-        if (users.length < perPage) break;
-        page++;
+        console.warn(`[Auth] User not found in first page of users list`);
+        return null;
+    } catch (err) {
+        console.error('[Auth] findUserByEmail exception:', err);
+        return null;
     }
-    return null;
 };
 
 /**

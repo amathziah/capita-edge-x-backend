@@ -19,6 +19,36 @@ const generateOTP = () => {
 };
 
 /**
+ * Helper to find a user by email via admin API (handles pagination)
+ */
+const findUserByEmail = async (email) => {
+    let page = 1;
+    const perPage = 1000;
+    const searchEmail = email.toLowerCase();
+    
+    while (true) {
+        const { data: { users }, error } = await supabase.auth.admin.listUsers({
+            page,
+            perPage
+        });
+        
+        if (error) {
+            console.error('[Admin] failed to list users:', error);
+            return null;
+        }
+        
+        if (!users || users.length === 0) break;
+        
+        const found = users.find(u => u.email.toLowerCase() === searchEmail);
+        if (found) return found;
+        
+        if (users.length < perPage) break;
+        page++;
+    }
+    return null;
+};
+
+/**
  * Provision a new organization for a user
  */
 export const provisionOrganization = async (req, res) => {
@@ -139,12 +169,7 @@ export const resendConfirmation = async (req, res) => {
 
     try {
         // 1. Fetch user by email to get ID (Use admin API to bypass RLS)
-        const { data: { users }, error: listError } = await supabase.auth.admin.listUsers({
-            perPage: 1000
-        });
-        if (listError) throw listError;
-
-        const user = users.find(u => u.email === email);
+        const user = await findUserByEmail(email);
 
         if (!user) {
             // Standard practice: Don't reveal if email exists, but here we can be helpful or silent.
@@ -265,11 +290,8 @@ export const signUp = async (req, res) => {
         if (userError) {
             // Handle existing user (Industry Practice)
             if (userError.message.includes('already registered') || userError.message.includes('already exists')) {
-                // Find user blindly by email via admin API
-                const { data: { users } } = await supabase.auth.admin.listUsers({
-                    perPage: 1000 // Increase limit to be more likely to find them in early stages
-                });
-                const existingUser = users.find(u => u.email === email);
+                // Find user blindness by email via admin API (Enhanced pagination)
+                const existingUser = await findUserByEmail(email);
 
                 if (existingUser && !existingUser.email_confirmed_at) {
                     // Resend OTP for unconfirmed accounts

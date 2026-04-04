@@ -24,7 +24,7 @@ const generateOTP = () => {
 const findUserByEmail = async (email) => {
     let page = 1;
     const perPage = 1000;
-    const searchEmail = email.toLowerCase();
+    const searchEmail = email.trim().toLowerCase();
     
     while (true) {
         const { data: { users }, error } = await supabase.auth.admin.listUsers({
@@ -39,7 +39,7 @@ const findUserByEmail = async (email) => {
         
         if (!users || users.length === 0) break;
         
-        const found = users.find(u => u.email.toLowerCase() === searchEmail);
+        const found = users.find(u => u.email.trim().toLowerCase() === searchEmail);
         if (found) return found;
         
         if (users.length < perPage) break;

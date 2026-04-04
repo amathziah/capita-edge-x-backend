@@ -31,8 +31,7 @@ async function clearDatabase() {
     'organization_users',
     'organizations',
     'profiles',
-    'otp_verifications',
-    'email_otps'
+    'otp_verifications'
   ];
 
   for (const table of tables) {

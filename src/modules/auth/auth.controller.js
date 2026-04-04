@@ -25,47 +25,37 @@ const findUserByEmail = async (email) => {
     const searchEmail = email.trim().toLowerCase();
     
     try {
-        console.log(`[Auth] Probing status for: ${searchEmail} using "Ghost Login"...`);
+        console.log(`[Auth] Probing status for: ${searchEmail} using "Link Discovery"...`);
         
-        // Use a dummy login attempt to detect user state without needing list permissions
-        // This is highly reliable for detecting unverified vs confirmed users
-        const { error: loginError } = await supabase.auth.signInWithPassword({
+        // Use generateLink('signup') to detect unverified users
+        // This is the most reliable way to check unconfirmed state without list permissions
+        const { data: signupResult, error: signupError } = await supabase.auth.admin.generateLink({
+            type: 'signup',
             email: searchEmail,
-            password: 'DUMMY_PASSWORD_FOR_PROBING_' + Math.random(),
         });
 
-        if (!loginError) {
-          // This should never happen because of the dummy password, but just in case:
-          console.log('[Auth] User exists and dummy password somehow worked? (Confirmed)');
-          return { email_confirmed_at: new Date().toISOString() }; 
+        if (signupResult && signupResult.user) {
+            console.log('[Auth] Detected: UNCONFIRMED existing user via signup link discovery.');
+            return signupResult.user;
         }
 
-        const msg = loginError.message.toLowerCase();
-        console.log(`[Auth] Probe response: "${msg}"`);
+        // If 'signup' fails, the user is either confirmed or doesn't exist.
+        // We try a dummy signin to see if they exist at all.
+        const { error: inviteError } = await supabase.auth.admin.generateLink({
+            type: 'magiclink',
+            email: searchEmail,
+        });
 
-        // Case 1: Email not confirmed (THIS IS THE ONE WE WANT)
-        if (msg.includes('email not confirmed') || msg.includes('email_not_confirmed')) {
-            console.log('[Auth] Detected: UNCONFIRMED existing user.');
-            
-            // To get the ID, we still do one targeted list call, 
-            // but now we know they exist, it's safer.
-            const { data: { users } } = await supabase.auth.admin.listUsers();
-            const found = users.find(u => u.email.trim().toLowerCase() === searchEmail);
-            return found || { email: searchEmail, email_confirmed_at: null };
-        }
-
-        // Case 2: Invalid credentials (means user exists and is confirmed)
-        if (msg.includes('invalid login credentials')) {
-            console.log('[Auth] Detected: CONFIRMED existing user.');
+        if (!inviteError || !inviteError.message.toLowerCase().includes('not found')) {
+            console.log('[Auth] Detected: CONFIRMED existing user via magiclink probe.');
             return { email: searchEmail, email_confirmed_at: new Date().toISOString() };
         }
 
-        // Case 3: User not found
         console.log('[Auth] Detected: NEITHER (New User).');
         return null;
 
     } catch (err) {
-        console.error('[Auth] Ghost Login probe exception:', err);
+        console.error('[Auth] Link Discovery probe exception:', err);
         return null;
     }
 };

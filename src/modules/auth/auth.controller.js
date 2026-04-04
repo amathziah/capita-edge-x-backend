@@ -302,29 +302,23 @@ export const signUp = async (req, res) => {
         if (userError) {
             // Handle existing user (Industry Practice)
             if (userError.message.includes('already registered') || userError.message.includes('already exists')) {
-                console.log(`[Auth] User conflict detected for ${email}. Triggering automatic resume...`);
+                console.log(`[Auth] Conflict for ${email}. Overriding with automatic resume...`);
                 
-                // Native approach: Try resending confirmation. 
-                const { error: resendError } = await supabase.auth.admin.resendConfirmationEmail(email);
-
                 const otp = generateOTP();
                 const otpHash = hashOTP(otp);
                 const expiresAt = new Date(Date.now() + DEFAULTS.OTP_EXPIRY_MS).toISOString();
 
-                // 2. Store in otp_verifications (Unified Table)
+                // 2. Store in otp_verifications
                 await supabase.from('otp_verifications').upsert({
                     email: email.trim().toLowerCase(),
                     otp_hash: otpHash,
-                    expires_at: expiresAt,
-                    // Use a temporary system ID or fetch real ID if needed, 
-                    // but for resend, email is the primary lookup.
+                    expires_at: expiresAt
                 }, { onConflict: 'email' });
 
                 await emailService.sendOtpEmail(email, otp);
                 
                 return res.status(200).json({
                     success: true,
-                    isResume: true,
                     message: 'Welcome back! Your setup was interrupted. A fresh 6-digit code has been sent.'
                 });
             }

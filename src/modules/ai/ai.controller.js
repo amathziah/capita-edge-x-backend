@@ -84,164 +84,83 @@ export const getConfig = async (req, res) => {
     res.json({ meta, actions });
 };
 
-export const processChat = async (req, res) => {
-    const { query, agentId, persona } = req.body;
 
-    const creditStatus = await checkAICreditLimit(req);
-    if (!creditStatus.allowed) {
-        return res.json({
-            text: "🚀 **AI Credit Limit Reached**\n\nYou've used your assigned tokens for this period. To continue getting personal CFO insights and automated support, please upgrade to a higher plan.",
-            is_limit_reached: true,
-            usage: {
-                totalTokenCount: creditStatus.usage,
-                limit: creditStatus.limit
-            },
-            action: { type: 'navigate', data: { to: '/settings/billing' } },
-            provider: 'system:billing_gate'
-        });
+
+/**
+ * Helper to gather minimal base financial context for the AI.
+ * Heavy data fetching is now deferred to Gemini Native Tools (Function Calling).
+ */
+const getAIContext = async (req, persona, agentId, history) => {
+    // Only fetch basic org settings
+    let realSettings = {};
+    try {
+        const settingsRes = await supabase.from('settings')
+            .select('*')
+            .eq('organization_id', req.user.organizationId)
+            .maybeSingle();
+        if (settingsRes?.data) {
+            realSettings = settingsRes.data;
+        }
+    } catch (err) {
+        console.error('AI Context Error (Settings):', err); 
     }
 
-    if (!query) {
-        throw new APIError('Query is required', 400);
-    }
-
-    // Get context data - Parallel Robust Config with Safe-Defaults
-    const [
-        invoicesRes,
-        customersRes,
-        expensesRes,
-        stats,
-        safeToSpend,
-        customerInsights,
-        personaStats,
-        revenueTrends,
-        paymentsRes,
-        settingsRes
-    ] = await Promise.all([
-        Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId).order('created_at', { ascending: false }).limit(20)).catch(err => { console.error('AI Context Error (Invoices):', err); return { data: [] }; }),
-        Promise.resolve(supabase.from('customers').select('*').eq('organization_id', req.user.organizationId)).catch(err => { console.error('AI Context Error (Customers):', err); return { data: [] }; }),
-        Promise.resolve(supabase.from('expenses').select('*').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(20)).catch(err => { console.error('AI Context Error (Expenses):', err); return { data: [] }; }),
-        analyticsService.getDashboardStats(req.user.organizationId).catch(err => { console.error('AI Context Error (Stats):', err); return {}; }),
-        analyticsService.getSafeToSpend(req.user.organizationId).catch(err => { console.error('AI Context Error (SafeToSpend):', err); return {}; }),
-        analyticsService.getCustomerInsights(req.user.organizationId).catch(err => { console.error('AI Context Error (CustomerInsights):', err); return []; }),
-        analyticsService.getPersonaStats(req.user.organizationId, persona || 'solopreneur').catch(err => { console.error('AI Context Error (PersonaStats):', err); return {}; }),
-        analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(err => { console.error('AI Context Error (RevenueTrends):', err); return []; }),
-        Promise.resolve(supabase.from('payments').select('*, customers(name)').eq('organization_id', req.user.organizationId).order('date', { ascending: false }).limit(10)).catch(err => { console.error('AI Context Error (Payments):', err); return { data: [] }; }),
-        Promise.resolve(supabase.from('settings').select('*').eq('organization_id', req.user.organizationId).maybeSingle()).catch(err => { console.error('AI Context Error (Settings):', err); return { data: {} }; })
-    ]);
-
-    // ──── High-Fidelity Context Computation ────────────────────────────────────
     const now = new Date();
     const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
-    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const lastMonthKey = now.getMonth() === 0 
-        ? `${now.getFullYear() - 1}-12` 
-        : `${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}`;
-
-    // 1. Calculate Ageing Report
-    const ageing = {
-        current: 0,    // 0-30 days
-        near: 0,       // 31-60 days
-        critical: 0,   // 61+ days
-        totalOverdue: 0
-    };
-
-    (invoicesRes?.data || []).filter(inv => inv.status === 'overdue').forEach(inv => {
-        const dueDate = new Date(inv.dueDate);
-        const diffDays = Math.ceil((now - dueDate) / (1000 * 60 * 60 * 24));
-        ageing.totalOverdue += inv.total;
-        if (diffDays <= 30) ageing.current += inv.total;
-        else if (diffDays <= 60) ageing.near += inv.total;
-        else ageing.critical += inv.total;
-    });
-
-    // 2. Calculate Growth (MoM)
-    const currentMonthData = (revenueTrends || []).find(t => t.period === currentMonthKey);
-    const lastMonthData = (revenueTrends || []).find(t => t.period === lastMonthKey);
-    const momGrowth = lastMonthData?.revenue > 0 
-        ? ((currentMonthData?.revenue || 0) - lastMonthData.revenue) / lastMonthData.revenue * 100 
-        : 0;
-
-    // 3. Deep Context Metrics for Strategic Advisory
-    const totalCash = (paymentsRes?.data || []).reduce((sum, p) => sum + (p.amount || 0), 0);
-    const avgMonthlyExpenses = (revenueTrends || []).slice(-6).reduce((sum, t) => sum + (t.expenses || 0), 0) / Math.max(1, Math.min(6, revenueTrends?.length || 1));
-    const runwayMonths = avgMonthlyExpenses > 0 ? totalCash / avgMonthlyExpenses : (totalCash > 0 ? 99 : 0);
-
-    const totalRevenue = stats?.total_revenue || 1; // Prevent div by zero
-    const customerRecs = Array.isArray(customerInsights) ? customerInsights : [];
-    const topClients = customerRecs.slice(0, 3).map(c => ({
-        name: c.name,
-        revenue: c.total_revenue,
-        percentage: (c.total_revenue / totalRevenue) * 100
-    }));
-    const maxConcentration = topClients.length > 0 ? Math.max(...topClients.map(c => c.percentage)) : 0;
-
-    const riskyOverdue = (invoicesRes?.data || [])
-        .filter(inv => inv.status === 'overdue')
-        .map(inv => {
-            const dueDate = new Date(inv.dueDate);
-            const daysLate = Math.ceil((now - dueDate) / (1000 * 60 * 60 * 24));
-            return { invoiceNumber: inv.invoiceNumber, daysLate, total: inv.total };
-        })
-        .sort((a, b) => b.daysLate - a.daysLate);
-
-    const deepContext = {
-        liquidity: {
-            totalCash,
-            runwayMonths: runwayMonths > 99 ? '99+' : runwayMonths.toFixed(1),
-            burnRate: avgMonthlyExpenses.toFixed(0)
-        },
-        risk: {
-            maxConcentration: maxConcentration.toFixed(1),
-            topClients,
-            riskyOverdue: riskyOverdue.slice(0, 3)
-        },
-        growth: {
-            dormantClients: customerRecs
-                .filter(c => {
-                    if (!c.last_invoice_date) return true;
-                    const lastInv = new Date(c.last_invoice_date);
-                    return (now - lastInv) / (1000 * 60 * 60 * 24) > 90;
-                })
-                .map(c => c.name)
-                .slice(0, 3)
-        }
-    };
-
-    const realSettings = settingsRes?.data || {};
+    
     const currency = realSettings?.currency || 'INR';
     const planTier = realSettings?.plan_tier || req.user?.plan_tier || 'starter';
+    const businessType = persona || realSettings?.business_type || 'solopreneur';
 
-    const context = { 
+    return { 
         user: req.user,
         organizationId: req.user.organizationId,
         currency,
         planTier,
+        businessType,
         temporal: {
             currentTime: now.toISOString(),
             currentDay: dayOfWeek,
             fiscalYear: now.getMonth() >= 3 ? `${now.getFullYear()}-${now.getFullYear() + 1}` : `${now.getFullYear() - 1}-${now.getFullYear()}`
         },
-        invoices: Array.isArray(invoicesRes?.data) ? invoicesRes.data : [], 
-        customers: Array.isArray(customersRes?.data) ? customersRes.data : [], 
-        expenses: Array.isArray(expensesRes?.data) ? expensesRes.data : [], 
-        payments: Array.isArray(paymentsRes?.data) ? paymentsRes.data : [],
         settings: realSettings,
-        stats: stats || {}, 
-        safeToSpend: safeToSpend || {},
-        ageing,
-        growth: { momGrowth },
-        deepContext,
-        customerInsights: Array.isArray(customerInsights) ? customerInsights : [],
-        personaStats: personaStats || {},
-        revenueTrends: Array.isArray(revenueTrends) ? revenueTrends.slice(-12) : [], 
-        agentId, 
-        businessType: persona || realSettings?.business_type || 'solopreneur',
-        history: req.body.history || []
+        history: history || [],
+        agentId,
+        // Empty arrays/objects as placeholders so legacy destructuring doesn't break
+        // while we transition fully to tools.
+        invoices: [], 
+        customers: [], 
+        expenses: [], 
+        payments: [],
+        stats: {}, 
+        safeToSpend: {},
+        ageing: {},
+        growth: {},
+        deepContext: {},
+        customerInsights: [],
+        personaStats: {},
+        revenueTrends: []
     };
+};
 
+export const processChat = async (req, res) => {
+    const { query, agentId, persona, history, conversationId: incomingConvId } = req.body;
+
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        return res.json({
+            text: "🚀 **AI Credit Limit Reached**\n\nYou've used your assigned tokens for this period. Please upgrade to continue.",
+            is_limit_reached: true,
+            provider: 'system:billing_gate'
+        });
+    }
+
+    if (!query) throw new APIError('Query is required', 400);
+
+    const context = await getAIContext(req, persona, agentId, history);
     const response = await aiService.processQuery(query, context);
-    const modelUsed = response.provider?.split(':')?.[1] || 'gemini-3-flash-preview';
+
+    const modelUsed = response.provider?.split(':')?.[1] || 'gemini-2.5-flash';
     const { tokens, cost } = calculateAICost(response.usage, modelUsed);
 
     // [AUDIT] Log AI Request with precision data
@@ -255,9 +174,8 @@ export const processChat = async (req, res) => {
 
     // [HISTORY] Save User Message and AI Response
     try {
-        let conversationId = req.body.conversationId;
+        let conversationId = incomingConvId;
         
-        // 1. Create conversation if it doesn't exist
         if (!conversationId) {
             const { data: newConv, error: convError } = await supabase
                 .from('ai_conversations')
@@ -273,13 +191,11 @@ export const processChat = async (req, res) => {
             conversationId = newConv.id;
         }
 
-        // 2. Save Messages to Conversation
         await supabase.from('ai_chat_messages').insert([
             { organization_id: req.user.organizationId, user_id: req.user.id, conversation_id: conversationId, role: 'user', content: query },
             { organization_id: req.user.organizationId, user_id: req.user.id, conversation_id: conversationId, role: 'model', content: response.text, data: response.data || null }
         ]);
 
-        // 3. Attach conversationId to response for the UI to track
         response.conversationId = conversationId;
 
     } catch (histError) {
@@ -287,6 +203,124 @@ export const processChat = async (req, res) => {
     }
 
     res.json(response);
+};
+
+/**
+ * Streams AI response tokens to the client via Server-Sent Events (SSE).
+ * The frontend can read these incrementally using the EventSource API or fetch + ReadableStream.
+ *
+ * Event types sent:
+ *  - data: {"type":"token","text":"..."}   → incremental chunk
+ *  - data: {"type":"complete","text":"...",...}  → final payload after stream ends
+ *  - data: {"type":"error","message":"..."}  → on failure
+ */
+export const processChatStream = async (req, res) => {
+    const { query, agentId, persona, history, conversationId: incomingConvId } = req.body;
+
+    const creditStatus = await checkAICreditLimit(req);
+    if (!creditStatus.allowed) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.write(`data: ${JSON.stringify({ type: 'error', message: 'AI Credit Limit Reached. Please upgrade your plan.' })}\n\n`);
+        res.end();
+        return;
+    }
+
+    if (!query) {
+        res.status(400).json({ error: 'Query is required' });
+        return;
+    }
+
+    // ── SSE Headers ──────────────────────────────────────────────────────────
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering if used
+    res.flushHeaders();
+
+    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+    // Handle client disconnect
+    let aborted = false;
+    req.on('close', () => { aborted = true; });
+
+    try {
+        const context = await getAIContext(req, persona, agentId, history);
+        const stream = aiService.processQueryStream(query, context);
+
+        let fullText = '';
+
+        for await (const chunk of stream) {
+            if (aborted) break;
+
+            if (chunk.type === 'token') {
+                fullText += chunk.text;
+                send({ type: 'token', text: chunk.text });
+            } else if (chunk.type === 'gen_ui') {
+                send(chunk);
+            } else if (chunk.type === 'complete') {
+                // ── Post-stream: Audit + History ──────────────────────────────
+                const modelUsed = chunk.provider?.split(':')?.[1] || 'gemini-2.5-flash';
+                const { tokens, cost } = calculateAICost(chunk.usage, modelUsed);
+
+                try {
+                    await supabase.from('ai_requests').insert([{
+                        organization_id: req.user.organizationId,
+                        user_id: req.user.id,
+                        model: modelUsed,
+                        tokens,
+                        cost
+                    }]);
+                } catch (e) {
+                    console.error('Stream audit log failed:', e.message);
+                }
+
+                let conversationId = incomingConvId;
+                try {
+                    if (!conversationId) {
+                        const { data: newConv } = await supabase
+                            .from('ai_conversations')
+                            .insert([{
+                                organization_id: req.user.organizationId,
+                                user_id: req.user.id,
+                                title: query.length > 40 ? query.substring(0, 40) + '...' : query
+                            }])
+                            .select()
+                            .single();
+                        conversationId = newConv?.id;
+                    }
+
+                    if (conversationId) {
+                        await supabase.from('ai_chat_messages').insert([
+                            { organization_id: req.user.organizationId, user_id: req.user.id, conversation_id: conversationId, role: 'user', content: query },
+                            { organization_id: req.user.organizationId, user_id: req.user.id, conversation_id: conversationId, role: 'model', content: chunk.text }
+                        ]);
+                    }
+                } catch (histErr) {
+                    console.error('Stream history save failed:', histErr.message);
+                }
+
+                // Send final event with all metadata
+                send({
+                    type: 'complete',
+                    text: chunk.text,
+                    action: chunk.action,
+                    usage: chunk.usage,
+                    provider: chunk.provider,
+                    conversationId,
+                    budget: chunk.budget
+                });
+            }
+        }
+    } catch (error) {
+        console.error('processChatStream error:', error.message);
+        if (!aborted) {
+            send({ type: 'error', message: error.message || 'AI processing failed.' });
+        }
+    } finally {
+        res.end();
+    }
 };
 
 export const magicFill = async (req, res) => {

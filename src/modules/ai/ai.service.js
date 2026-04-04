@@ -1,6 +1,8 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
 import { formatCurrency, getCurrencySymbol } from '../../core/utils/formatting.js';
+import { supabase } from '../../core/database/supabase.js';
+import analyticsService from '../analytics/analytics.service.js';
 
 dotenv.config();
 
@@ -35,20 +37,20 @@ class AIService {
         };
 
         // ═══════════════════════════════════════════════════════
-        // RATE LIMITER — Token Bucket (5 RPM per model = 10 total)
+        // RATE LIMITER — Token Bucket (Enterprise Scaled)
         // ═══════════════════════════════════════════════════════
         this.rateBucket = {
-            tokens: 10,           // Start full (5 per model × 2 models)
-            maxTokens: 10,
-            refillRate: 10,       // 10 tokens per minute
+            tokens: 1000,          // 100x capacity increase for Paid Tier 1
+            maxTokens: 1000,
+            refillRate: 1000,      // 1000 tokens per minute
             lastRefill: Date.now(),
         };
 
         // ═══════════════════════════════════════════════════════
-        // DAILY BUDGET — 35 RPD (saving 5 as buffer from 40 total)
+        // DAILY SAFETY BUDGET — 10,000 PER PROJECT
         // ═══════════════════════════════════════════════════════
         this.dailyBudget = {
-            maxRequests: 35,
+            maxRequests: 10000,    // High safety ceiling for paid project
             used: 0,
             resetDate: this._getTodayPacific(),
             perUser: new Map(),   // userId → count
@@ -59,16 +61,32 @@ class AIService {
             this.genAI = null;
         } else {
             this.genAI = new GoogleGenerativeAI(apiKey);
-            // Only models with FREE TIER quota (verified from AI Studio dashboard)
-            this.models = [
-                'gemini-2.5-flash',       // 5 RPM, 250K TPM, 20 RPD ✅
-                'gemini-3-flash-preview',  // 5 RPM, 250K TPM, 20 RPD ✅
-            ];
-            this.modelMetadata = {
-                'gemini-2.5-flash': 'Flash 2.5',
-                'gemini-3-flash-preview': 'Flash 3.0',
+            
+            // ═══════════════════════════════════════════════════════
+            // ENTERPRISE MODEL ROUTING (Paid Tier 1 Optimized)
+            // ═══════════════════════════════════════════════════════
+            this.tiers = {
+                free: {
+                    models: ['gemini-2.5-flash', 'gemini-3-flash-preview'],
+                    limit: 100, // Increased buffer for onboarding
+                    label: 'Free'
+                },
+                solo: {
+                    models: ['gemini-2.5-flash', 'gemini-3.1-pro'],
+                    limit: 1000, // Massive expansion for paid users
+                    label: 'Solo'
+                },
+                solo_pro: {
+                    models: ['gemini-3.1-pro', 'gemini-2.5-flash'],
+                    limit: 10000, // High-Volume Enterprise limit
+                    label: 'Solo Pro'
+                }
             };
-            console.log('📡 AI Service Initialized — Free Tier Optimized (2 models, 40 RPD budget)');
+
+            // Defaults/Fallback
+            this.models = ['gemini-2.5-flash', 'gemini-3.1-pro'];
+            
+            console.log('📡 AI Service Activated — Enterprise Paid Tier Active (Baby-1 High Capacity)');
         }
     }
 
@@ -140,11 +158,48 @@ class AIService {
     }
 
     /**
-     * Check if the daily budget has been exceeded
+     * Check if the organization has exhausted their monthly plan budget
      */
+    async _checkPlanBudget(orgId) {
+        if (!orgId) return { allowed: true, limit: 999, used: 0 };
+
+        // 1. Get Organization Plan
+        const { data: org } = await supabase
+            .from('organizations')
+            .select('plan_tier')
+            .eq('id', orgId)
+            .single();
+        
+        const tierKey = org?.plan_tier || 'free';
+        const config = this.tiers[tierKey] || this.tiers.free;
+
+        // 2. Get Usage for current month
+        const firstOfMonth = new Date();
+        firstOfMonth.setDate(1);
+        firstOfMonth.setHours(0, 0, 0, 0);
+
+        const { count, error } = await supabase
+            .from('ai_requests')
+            .select('*', { count: 'exact', head: true })
+            .eq('organization_id', orgId)
+            .gte('createdAt', firstOfMonth.toISOString());
+
+        if (error) {
+            console.error('Budget check error:', error);
+            return { allowed: true, limit: config.limit, used: 0 }; // Fail open
+        }
+
+        return {
+            allowed: count < config.limit,
+            used: count,
+            limit: config.limit,
+            tier: config.label,
+            models: config.models
+        };
+    }
+
     _isDailyBudgetExhausted(userId) {
-        // Temporarily disabled: Usage limits lifted
-        return false;
+        return false; // Deprecated by monthly plan budget
     }
 
     /**
@@ -166,43 +221,160 @@ class AIService {
     /**
      * Get remaining budget info (exposed to frontend via API)
      */
-    getBudgetStatus(userId) {
-        const today = this._getTodayPacific();
-        if (this.dailyBudget.resetDate !== today) {
-            this.dailyBudget.used = 0;
-            this.dailyBudget.perUser.clear();
-            this.dailyBudget.resetDate = today;
-        }
-
-        const userUsed = this.dailyBudget.perUser.get(userId) || 0;
-        // Reporting infinite availability to the UI
+    async getBudgetStatus(userId, orgId) {
+        const budget = await this._checkPlanBudget(orgId);
+        
         return {
-            globalUsed: this.dailyBudget.used,
-            globalRemaining: 999,
-            globalMax: 999,
-            userUsed,
-            userRemaining: 999,
-            userMax: 999,
-            isExhausted: false,
+            userUsed: budget.used,
+            userMax: budget.limit,
+            userRemaining: Math.max(0, budget.limit - budget.used),
+            tier: budget.tier,
+            isExhausted: !budget.allowed,
         };
     }
 
     // ═══════════════════════════════════════════════════════════
-    // CORE MODEL HELPERS
+    // CORE MODEL HELPERS & TOOL REGISTRY
     // ═══════════════════════════════════════════════════════════
+
+    getToolDeclarations() {
+        return [
+            {
+                functionDeclarations: [
+                    {
+                        name: "get_financial_summary",
+                        description: "Fetch top-level metrics like total revenue, net profit, pending payments, safe-to-spend cash, tax reserves, and runway.",
+                    },
+                    {
+                        name: "get_overdue_invoices",
+                        description: "Fetch the aging report and a list of specific invoices that are currently overdue."
+                    },
+                    {
+                        name: "get_recent_transactions",
+                        description: "Fetch the most recent invoices, payments received, and expenses."
+                    },
+                    {
+                        name: "get_customer_insights",
+                        description: "Fetch customer health metrics like top clients, concentration risk, and dormant clients."
+                    }
+                ]
+            }
+        ];
+    }
 
     getModel(modelName, isJson = false) {
         if (!this.genAI) return null;
-        return this.genAI.getGenerativeModel({
+        
+        const config = {
             model: modelName,
             generationConfig: isJson ? {
                 maxOutputTokens: 800,
                 responseMimeType: "application/json"
             } : {
-                maxOutputTokens: 1500,  // Reduced from 2048 to save tokens
+                maxOutputTokens: 1500,
                 temperature: 0.7,
             }
+        };
+
+        // Inject tools if not in JSON mode
+        if (!isJson) {
+            config.tools = this.getToolDeclarations();
+        }
+
+        return this.genAI.getGenerativeModel(config);
+    }
+
+    /**
+     * Sanitise a Gemini history array:
+     * - Filter out entries with empty text
+     * - Drop leading 'model' turns (Gemini requires history to start with 'user')
+     */
+    _sanitiseHistory(history = []) {
+        const filtered = history.filter(h => {
+            const text = h?.parts?.[0]?.text || '';
+            return text.trim().length > 0;
         });
+        
+        const valid = [];
+        let expectedRole = 'user';
+        for (const h of filtered) {
+            if (h.role === expectedRole) {
+                valid.push(h);
+                expectedRole = expectedRole === 'user' ? 'model' : 'user';
+            }
+        }
+        
+        // Gemini requires history to end with 'model' if passing into startChat (so the next streamed prompt is 'user')
+        if (valid.length > 0 && valid[valid.length - 1].role === 'user') {
+            valid.pop();
+        }
+        
+        return valid;
+    }
+
+    /**
+     * Executes the local tool logic when Gemini yields a functionCall.
+     * Returns a JSON-serialisable object to send back to the AI.
+     */
+    async executeTool(funcCall, context) {
+        const name = funcCall.name;
+        const orgId = context.organizationId;
+        console.log(`🤖 Native Tool Call: ${name}`);
+
+        try {
+            switch (name) {
+                case "get_financial_summary": {
+                    const stats = await analyticsService.getDashboardStats(orgId).catch(() => ({}));
+                    const safeToSpend = await analyticsService.getSafeToSpend(orgId).catch(() => ({}));
+                    return { stats, safeToSpend };
+                }
+                
+                case "get_overdue_invoices": {
+                    // Fetch directly instead of relying on context
+                    const res = await supabase.from('invoices')
+                        .select('*')
+                        .eq('organization_id', orgId)
+                        .eq('status', 'overdue')
+                        .order('created_at', { ascending: false });
+                    
+                    const overdueInvoices = res.data || [];
+                    const now = new Date();
+                    const ageing = { current: 0, near: 0, critical: 0, totalOverdue: 0 };
+                    
+                    overdueInvoices.forEach(inv => {
+                        const diffDays = Math.ceil((now - new Date(inv.due_date)) / 86400000);
+                        ageing.totalOverdue += inv.total;
+                        if (diffDays <= 30) ageing.current += inv.total;
+                        else if (diffDays <= 60) ageing.near += inv.total;
+                        else ageing.critical += inv.total;
+                    });
+                    
+                    return { ageing, riskyInvoices: overdueInvoices.slice(0, 5) };
+                }
+
+                case "get_recent_transactions": {
+                    const invoices = await supabase.from('invoices').select('*').eq('organization_id', orgId).order('created_at', { ascending: false }).limit(5);
+                    const payments = await supabase.from('payments').select('*, customers(name)').eq('organization_id', orgId).order('date', { ascending: false }).limit(5);
+                    const expenses = await supabase.from('expenses').select('*').eq('organization_id', orgId).order('date', { ascending: false }).limit(5);
+                    return { 
+                        invoices: invoices.data || [], 
+                        payments: payments.data || [], 
+                        expenses: expenses.data || [] 
+                    };
+                }
+
+                case "get_customer_insights": {
+                    const insights = await analyticsService.getCustomerInsights(orgId).catch(() => []);
+                    return { customers: insights };
+                }
+
+                default:
+                    return { error: `Tool ${name} not implemented.` };
+            }
+        } catch (error) {
+            console.error(`Tool Execution Error (${name}):`, error);
+            return { error: `Failed to execute tool ${name}` };
+        }
     }
 
     isCircuitOpen() {
@@ -294,7 +466,9 @@ class AIService {
                     if (!modelInstance) continue;
 
                     const prompt = this.buildChatbotPrompt(query, context);
-                    const history = context.history || [];
+                    const rawHistory = context.history || [];
+                    // Gemini requires history[0].role === 'user' and no empty parts
+                    const history = this._sanitiseHistory(rawHistory);
                     
                     // Use startChat for multi-turn memory
                     const chat = modelInstance.startChat({ history });
@@ -337,6 +511,162 @@ class AIService {
 
             throw lastError || new Error('Cloud Busy: All AI models failed. Please try again.');
         });
+    }
+
+    /**
+     * Process queries with streaming support (ChatGPT style)
+     * Yields chunks of tokens to the client via a callback or generator
+     */
+    async *processQueryStream(query, context = {}) {
+        const userId = context.user?.id || 'anon';
+        const orgId = context.organizationId;
+        
+        const budget = await this._checkPlanBudget(orgId);
+        if (!budget.allowed) {
+            throw new Error(`You have reached your monthly limit of ${budget.limit} AI queries on the ${budget.tier} plan. Please upgrade to continue.`);
+        }
+        
+        if (!this.genAI || this.isCircuitOpen() || !this._canMakeRequest()) {
+            throw new Error(`Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.`);
+        }
+
+        const targetModels = budget.models || this.models;
+        let fullText = '';
+        let lastError = null;
+
+        for (const modelUsed of targetModels) {
+            try {
+                this._consumeToken();
+                const modelInstance = this.getModel(modelUsed);
+                if (!modelInstance) continue;
+
+                const prompt = this.buildChatbotPrompt(query, context);
+                const rawHistory = context.history || [];
+                // Gemini requires history[0].role === 'user' and no empty parts
+                const history = this._sanitiseHistory(rawHistory);
+                
+                const chat = modelInstance.startChat({ history });
+                let currentResult = await chat.sendMessageStream(prompt);
+                
+                let done = false;
+                let finalResponse = null;
+
+                while (!done) {
+                    let functionCallOccurred = false;
+                    for await (const chunk of currentResult.stream) {
+                        let funcCall = null;
+                        try {
+                            if (chunk.candidates?.length > 0) {
+                                const calls = typeof chunk.functionCalls === 'function' ? chunk.functionCalls() : [];
+                                funcCall = calls?.[0] || (typeof chunk.functionCall === 'function' ? chunk.functionCall() : null);
+                            }
+                        } catch (e) {
+                            // ignore empty or malformed candidates
+                        }
+                        
+                        if (funcCall) {
+                            functionCallOccurred = true;
+                            // Execute native tool
+                            const toolResult = await this.executeTool(funcCall, context);
+                            
+                            // Yield Generative UI Event to the Frontend stream immediately
+                            yield {
+                                type: 'gen_ui',
+                                component: funcCall.name,
+                                data: toolResult
+                            };
+                            
+                            // CRITICAL: Await the current stream's completion so Gemini SDK registers the model's functionCall turn internally.
+                            try {
+                                await currentResult.response;
+                            } catch (ignoreErr) { }
+                            
+                            // Feed result back into Gemini to get the final text response
+                            currentResult = await chat.sendMessageStream([{
+                                functionResponse: {
+                                    name: funcCall.name,
+                                    response: toolResult
+                                }
+                            }]);
+                            break; // Break inner loop, restart stream with new result
+                        } else if (chunk.text) {
+                            // Some chunks might just be empty parts, so check if text() is valid
+                            try {
+                                const chunkText = chunk.text();
+                                if (chunkText) {
+                                    fullText += chunkText;
+                                    yield { type: 'token', text: chunkText };
+                                }
+                            } catch (e) {
+                                // Ignore empty text chunks
+                            }
+                        }
+                    }
+                    
+                    if (!functionCallOccurred) {
+                        done = true;
+                        // Wait for the final usage metadata
+                        finalResponse = await currentResult.response;
+                    }
+                }
+
+                const action = this.extractAction(fullText, query);
+
+                this._recordUsage(userId);
+                
+                // Cache the full response for subsequent non-stream calls
+                const cacheKey = this._cacheKey('chat', query);
+                this._cacheSet(cacheKey, {
+                    text: fullText.trim(),
+                    action,
+                    data: action ? action.data : null,
+                    usage: finalResponse?.usageMetadata,
+                    provider: `cloud:${modelUsed}`,
+                    budget: this.getBudgetStatus(userId),
+                }, this.CACHE_TTL.chat);
+
+                yield { 
+                    type: 'complete', 
+                    text: fullText.trim(),
+                    action,
+                    usage: finalResponse?.usageMetadata,
+                    provider: `cloud:${modelUsed}`,
+                    budget: this.getBudgetStatus(userId)
+                };
+
+                return; // Stream succeeded, exit the generator successfully
+
+            } catch (error) {
+                lastError = error;
+                if (this.isRetryable(error)) {
+                    console.warn(`📡 [${modelUsed}] Stream Error (${error.status || 'N/A'}). Retrying with fallback...`);
+                    // reset accumulated text for the next model
+                    fullText = '';
+                    continue;
+                } else {
+                    console.error(`📡 [${modelUsed}] Fatal Stream Error:`, error.stack || error.message);
+                    break;
+                }
+            }
+        }
+
+        const isRetryable = this.isRetryable(lastError);
+        if (isRetryable && (lastError?.status === 429 || lastError?.statusCode === 429)) {
+            this.openCircuit(lastError);
+        }
+
+        if (lastError) {
+            const msg = lastError.message || '';
+            if (lastError.status === 503 || msg.includes('503')) {
+                throw new Error('Our AI models are experiencing unusually high demand. Please try again in a few moments.');
+            } else if (lastError.status === 429 || msg.includes('429') || msg.includes('quota')) {
+                throw new Error('You have exhausted your AI budget or rate limit. Please wait a minute before trying again.');
+            } else {
+                throw new Error('AI processing failed securely. Please modify your query and try again.');
+            }
+        }
+
+        throw new Error('Cloud Busy: All AI backup models failed.');
     }
 
     /**
@@ -401,19 +731,9 @@ class AIService {
 
     buildChatbotPrompt(query, context) {
         const { 
-            stats = {}, 
-            safeToSpend = {}, 
             businessType,
-            invoices = [],
-            payments = [],
-            expenses = [],
-            customerInsights = [],
-            revenueTrends = [],
             settings = {},
-            temporal = {},
-            ageing = {},
-            growth = {},
-            deepContext = {}
+            temporal = {}
         } = context;
 
         // Derive everything from real settings — no hardcoded defaults
@@ -421,7 +741,6 @@ class AIService {
         const businessName = settings?.business_name || settings?.businessName || 'your business';
         const businessSegment = businessType || settings?.business_type || settings?.businessType || 'freelancer';
         const ownerName = settings?.owner_name || settings?.full_name || null;
-        const isNewAccount = invoices.length === 0 && payments.length === 0 && expenses.length === 0;
 
         // Safe Date Helper
         const safeDateFormat = (dateStr) => {
@@ -430,7 +749,6 @@ class AIService {
             return isNaN(d.getTime()) ? 'N/A' : d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
         };
         
-        // ──── FINANCIAL SITREP (Situation Report) ──────────────────────────────────
         let contextBlock = `## SYSTEM CONTEXT\n`;
         contextBlock += `- **Current Time**: ${safeDateFormat(temporal.currentTime)} (${temporal.currentDay})\n`;
         contextBlock += `- **Fiscal Year**: ${temporal.fiscalYear}\n`;
@@ -438,92 +756,11 @@ class AIService {
         if (ownerName) contextBlock += `- **Owner**: ${ownerName}\n`;
         contextBlock += `- **Currency**: ${currency}\n\n`;
 
-        if (isNewAccount) {
-            contextBlock += `> [!NOTE]\n> This is a brand new account with no financial history. Focus on onboarding and setup.\n\n`;
-        }
-
-        contextBlock += `## 📊 CORE FINANCIAL HEALTH\n`;
-        contextBlock += `- **Total Revenue**: ${formatCurrency(stats?.total_revenue || 0, currency)}\n`;
-        contextBlock += `- **Net Profit**: ${formatCurrency(stats?.net_profit || 0, currency)} (${stats?.avg_margin || 0}% margin)\n`;
-        contextBlock += `- **MoM Growth**: ${growth.momGrowth?.toFixed(2) || 0}%\n`;
-        contextBlock += `- **Pending Receipts**: ${formatCurrency(stats?.pending_payments || 0, currency)}\n\n`;
-
-        contextBlock += `## 💧 LIQUIDITY & TAX RESERVES\n`;
-        contextBlock += `- **Safe-to-Spend**: ${formatCurrency(safeToSpend?.safeToSpend || 0, currency)}\n`;
-        contextBlock += `- **Total Bank Cash**: ${formatCurrency(safeToSpend?.totalRevenue || 0, currency)}\n`;
-        contextBlock += `- **Tax Provisions**: GST (${formatCurrency(safeToSpend?.reserves?.gst || 0, currency)}), Income Tax (${formatCurrency(safeToSpend?.reserves?.incomeTax || 0, currency)})\n`;
-        contextBlock += `- **Risk Provision**: ${formatCurrency(safeToSpend?.reserves?.atRisk || 0, currency)} (based on overdue ageing)\n\n`;
-
-        contextBlock += `## ⚠️ BILLING AGEING (OVERDUE RISK)\n`;
-        contextBlock += `- **Total Overdue**: ${formatCurrency(ageing.totalOverdue || 0, currency)}\n`;
-        contextBlock += `- **Current (0-30 days)**: ${formatCurrency(ageing.current || 0, currency)}\n`;
-        contextBlock += `- **Near-Late (31-60 days)**: ${formatCurrency(ageing.near || 0, currency)}\n`;
-        contextBlock += `- **Critical (61+ days)**: ${formatCurrency(ageing.critical || 0, currency)}\n\n`;
-
-        // 2. Recent Transactions (Invoices)
-        if (invoices.length > 0) {
-            contextBlock += `## RECENT INVOICES\n`;
-            invoices.slice(0, 5).forEach(inv => {
-                contextBlock += `- #${inv.invoiceNumber || 'INV'}: ${formatCurrency(inv.total || 0, currency)} to ${inv.customer_name || 'Unknown'} (Status: ${inv.status?.toUpperCase() || 'DRAFT'}, Due: ${safeDateFormat(inv.dueDate)})\n`;
-            });
-            contextBlock += `\n`;
-        }
-
-        // 3. Recent Payments
-        if (payments.length > 0) {
-            contextBlock += `## RECENT PAYMENTS\n`;
-            payments.slice(0, 5).forEach(p => {
-                contextBlock += `- ${formatCurrency(p.amount || 0, currency)} from ${p.customers?.name || 'Customer'} on ${safeDateFormat(p.date || p.createdAt)}\n`;
-            });
-            contextBlock += `\n`;
-        }
-
-        // 4. Recent Expenses
-        if (expenses.length > 0) {
-            contextBlock += `RECENT EXPENSES:\n`;
-            expenses.slice(0, 3).forEach(e => {
-                contextBlock += `- ${formatCurrency(e.amount, currency)} for ${e.category} (${e.description || 'No desc'})\n`;
-            });
-            contextBlock += `\n`;
-        }
-
-        // 5. Top Customers (with real data fields)
-        if (customerInsights.length > 0) {
-            contextBlock += `## TOP CUSTOMERS\n`;
-            customerInsights.slice(0, 5).forEach(c => {
-                const revenue = c.total_revenue ?? c.total_paid ?? c.revenue ?? 0;
-                const invoiceCount = c.invoice_count ?? c.total_invoices ?? 'N/A';
-                const lastSeen = c.last_invoice_date ? safeDateFormat(c.last_invoice_date) : 'N/A';
-                contextBlock += `- **${c.name}**: ${formatCurrency(revenue, currency)} revenue, ${invoiceCount} invoices, last active ${lastSeen}\n`;
-            });
-            contextBlock += `\n`;
-        }
-
-        // 6. Trends
-        if (revenueTrends.length > 0) {
-            contextBlock += `## REVENUE TREND (Last 6 Months)\n`;
-            revenueTrends.slice(-6).forEach(t => {
-                contextBlock += `- ${t.month || t.period}: ${formatCurrency(t.revenue, currency)}\n`;
-            });
-            contextBlock += `\n`;
-        }
-
-        // 7. STRATEGIC DEEP CONTEXT
-        if (deepContext.liquidity) {
-            contextBlock += `## 🧠 STRATEGIC SITUATION REPORT\n`;
-            contextBlock += `- **Cash Runway**: ${deepContext.liquidity.runwayMonths} months (Avg Burn: ${formatCurrency(deepContext.liquidity.burnRate, currency)}/mo)\n`;
-            contextBlock += `- **Revenue Risk**: Max Concentration ${deepContext.risk.maxConcentration}% (Top client dependency)\n`;
-            
-            if (deepContext.growth.dormantClients?.length > 0) {
-                contextBlock += `- **Growth Gaps**: ${deepContext.growth.dormantClients.length} clients inactive for >90 days (e.g., ${deepContext.growth.dormantClients.join(', ')}).\n`;
-            }
-            
-            if (deepContext.risk.riskyOverdue?.length > 0) {
-                const topRisk = deepContext.risk.riskyOverdue[0];
-                contextBlock += `- **Critical Action**: Invoice #${topRisk.invoiceNumber} is ${topRisk.daysLate} days late. Collect ${formatCurrency(topRisk.total, currency)} immediately.\n`;
-            }
-            contextBlock += `\n`;
-        }
+        contextBlock += `---\n`;
+        contextBlock += `## INSTRUCTIONS FOR NATIVE TOOL CALLING\n\n`;
+        contextBlock += `You do not have all the user's financial data by default. To answer questions about revenue, overdue invoices, cash flow, or recent transactions, you MUST use the provided tools.\n`;
+        contextBlock += `If the user asks "Who owes me?", run the get_overdue_invoices tool first.\n`;
+        contextBlock += `Always execute tools if needed before responding.\n\n`;
 
         contextBlock += `---\n`;
         contextBlock += `## RESPONSE FORMATTING RULES (YOU MUST FOLLOW)\n\n`;
@@ -533,17 +770,19 @@ class AIService {
         contextBlock += `- Start with a **1-sentence executive summary** — bold the key number or insight.\n`;
         contextBlock += `- Use \`## Heading\` for responses covering more than 2 topics.\n`;
         contextBlock += `- Use **bullet points** for any list of 3+ items. Never write lists as a comma sentence.\n`;
-        contextBlock += `- Use **markdown tables** when comparing clients, invoices, or multiple metrics.\n`;
         contextBlock += `- **Bold** every currency amount, percentage, and key metric.\n`;
         contextBlock += `- Use \`> ⚠️ ...\` for risks. Use \`> 🚀 ...\` for growth opportunities.\n`;
         contextBlock += `- End with **→ one clear next action** the user should take.\n\n`;
-        contextBlock += `**TABLE FORMAT FOR COMPARISONS** (use your real data — not this example):\n`;
-        contextBlock += `| Client | Revenue | Status |\n|--------|---------|--------|\n\n`;
         contextBlock += `**NEVER DO:**\n`;
         contextBlock += `- ❌ Walls of text — max 4 sentences per paragraph.\n`;
         contextBlock += `- ❌ Comma-separated lists when there are 3+ items.\n`;
+        contextBlock += `- ❌ Markdown Tables — NEVER use markdown tables (\`| ... |\`) as they are visually broken in this interface. Use tools instead.\n`;
         contextBlock += `- ❌ Filler phrases like "I can help with that" or "Great question!"\n`;
         contextBlock += `- ❌ Repeat the user's question back to them.\n\n`;
+        
+        contextBlock += `**CRITICAL — HIGH-FIDELITY TOOLS:**\n`;
+        contextBlock += `- **ALWAYS** use the \`get_financial_summary\` tool if the user asks for a summary of their business, revenue, profit, or cash flow. NEVER summarize metrics in text when the tool is available.\n`;
+        contextBlock += `- If a tool is unavailable, use clean bullet points, NOT tables.\n\n`;
         contextBlock += `**User's Question:** "${query}"`;
 
         return contextBlock;

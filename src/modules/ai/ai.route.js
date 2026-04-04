@@ -28,6 +28,7 @@ const metaLimiter = rateLimit({
 
 // Routes
 router.post('/ai/chat', aiLimiter, asyncHandler(aiController.processChat));
+router.post('/ai/chat/stream', aiLimiter, aiController.processChatStream); // SSE — no asyncHandler (manages its own response lifecycle)
 router.post('/ai/magic-fill', aiLimiter, asyncHandler(aiController.magicFill));
 router.get('/ai/insights', aiLimiter, asyncHandler(aiController.getInsights));
 router.get('/ai/predict-revenue', aiLimiter, asyncHandler(aiController.predictRevenue));

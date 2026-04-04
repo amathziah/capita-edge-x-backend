@@ -19,9 +19,9 @@ class AnalyticsService {
 
         const { data: invoices, error } = await supabase
             .from('invoices')
-            .select('createdAt, status, total')
+            .select('created_at, status, total')
             .eq('organization_id', organizationId)
-            .gte('createdAt', oneYearAgo.toISOString());
+            .gte('created_at', oneYearAgo.toISOString());
 
         if (error) throw new Error(error.message);
 
@@ -66,7 +66,7 @@ class AnalyticsService {
         };
 
         invoices.forEach(inv => {
-            const key = getKey(inv.createdAt);
+            const key = getKey(inv.created_at);
             initKey(key);
 
             trends[key].invoice_count++;
@@ -107,7 +107,7 @@ class AnalyticsService {
 
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('id, customer_id, status, total, createdAt')
+            .select('id, customer_id, status, total, created_at')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -140,8 +140,8 @@ class AnalyticsService {
                     stats.pending_amount += inv.total;
                 }
 
-                if (!stats.last_invoice_date || new Date(inv.createdAt) > new Date(stats.last_invoice_date)) {
-                    stats.last_invoice_date = inv.createdAt;
+                if (!stats.last_invoice_date || new Date(inv.created_at) > new Date(stats.last_invoice_date)) {
+                    stats.last_invoice_date = inv.created_at;
                 }
             }
         });
@@ -171,7 +171,7 @@ class AnalyticsService {
         // Invoices
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('status, total, createdAt')
+            .select('status, total, created_at')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -192,7 +192,7 @@ class AnalyticsService {
         invoices.forEach(inv => {
             if (inv.status === 'paid') {
                 total_received += inv.total;
-                if (new Date(inv.createdAt) >= thirtyDaysAgo) {
+                if (new Date(inv.created_at) >= thirtyDaysAgo) {
                     monthly_revenue += inv.total;
                 }
             } else if (['sent', 'overdue'].includes(inv.status)) {
@@ -286,19 +286,19 @@ class AnalyticsService {
             case 'invoices':
                 const { data: invoices } = await supabase
                     .from('invoices')
-                    .select('invoiceNumber, buyer, total, status, createdAt, dueDate')
+                    .select('invoice_number, buyer, total, status, created_at, due_date')
                     .eq('organization_id', organizationId)
-                    .order('createdAt', { ascending: false });
+                    .order('created_at', { ascending: false });
 
                 data = invoices;
                 headers = ['Invoice Number', 'Customer', 'Total', 'Status', 'Created', 'Due Date'];
                 data = data.map(row => [
-                    row.invoiceNumber,
+                    row.invoice_number,
                     (typeof row.buyer === 'string' ? JSON.parse(row.buyer).name : row.buyer?.name) || '',
                     row.total,
                     row.status,
-                    row.createdAt,
-                    row.dueDate
+                    row.created_at,
+                    row.due_date
                 ]);
                 break;
 
@@ -455,16 +455,16 @@ class AnalyticsService {
         // 1. Fetch Recent Activity (Global)
         const { data: activities } = await supabase
             .from('invoices')
-            .select('invoiceNumber, buyer, total, status, createdAt')
+            .select('invoice_number, buyer, total, status, created_at')
             .eq('organization_id', organizationId)
-            .order('createdAt', { ascending: false })
+            .order('created_at', { ascending: false })
             .limit(5);
 
         stats.recentActivity = (activities || []).map(a => ({
             type: 'invoice',
-            title: `Invoice #${a.invoiceNumber} ${a.status}`,
+            title: `Invoice #${a.invoice_number} ${a.status}`,
             description: `${typeof a.buyer === 'string' ? JSON.parse(a.buyer).name : a.buyer?.name || 'Customer'} - ₹${a.total}`,
-            timestamp: a.createdAt
+            timestamp: a.created_at
         }));
 
         // 2. Fetch Persona Specific Metrics
@@ -517,7 +517,7 @@ class AnalyticsService {
                     .from('invoices')
                     .select('*', { count: 'exact', head: true })
                     .eq('organization_id', organizationId)
-                    .gte('createdAt', new Date(now.setHours(0, 0, 0, 0)).toISOString());
+                    .gte('created_at', new Date(now.setHours(0, 0, 0, 0)).toISOString());
 
                 stats.metrics = {
                     dailyOrders: dailyOrders || 0,

@@ -302,30 +302,37 @@ export const signUp = async (req, res) => {
         if (userError) {
             // Handle existing user (Industry Practice)
             if (userError.message.includes('already registered') || userError.message.includes('already exists')) {
-                // Find user blindness by email via admin API (Enhanced pagination)
-                const existingUser = await findUserByEmail(email);
+                console.log(`[Auth] User conflict detected for ${email}. Testing for unconfirmed status...`);
+                
+                // Native approach: Try resending confirmation. 
+                // If it succeeds, the user is unconfirmed.
+                const { error: resendError } = await supabase.auth.admin.resendConfirmationEmail(email);
 
-                if (existingUser && !existingUser.email_confirmed_at) {
-                    // Resend OTP for unconfirmed accounts
+                // If no error or not 'already confirmed', user is unconfirmed
+                if (!resendError || !resendError.message.toLowerCase().includes('already confirmed')) {
+                    console.log(`[Auth] Resumption triggered for ${email}. Sending fresh OTP.`);
+                    
                     const otp = generateOTP();
                     const otpHash = hashOTP(otp);
                     const expiresAt = new Date(Date.now() + DEFAULTS.OTP_EXPIRY_MS).toISOString();
 
-                    await supabase.from('otp_verifications').insert([{
-                        user_id: existingUser.id,
-                        email: email,
+                    // Upsert metadata
+                    await supabase.from('email_otps').upsert({
+                        email: email.trim().toLowerCase(),
                         otp_hash: otpHash,
-                        expires_at: expiresAt
-                    }]);
+                        expires_at: expiresAt,
+                        metadata: { type: 'signup', password: password, companyName: companyName }
+                    }, { onConflict: 'email' });
 
                     await emailService.sendOtpEmail(email, otp);
-
+                    
                     return res.status(200).json({
                         success: true,
-                        message: 'This email is already registered but not verified. A new 6-digit code has been sent.'
+                        message: 'Welcome back! Your account setup was interrupted. A fresh 6-digit code has been sent.'
                     });
                 } else {
-                    throw new APIError('This email is already registered. Please sign in.', 400);
+                    console.log(`[Auth] User ${email} is confirmed. Redirecting to sign in.`);
+                    throw new APIError('This email is already registered and verified. Please sign in.', 400);
                 }
             }
             throw new APIError(userError.message, 400);

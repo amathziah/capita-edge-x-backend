@@ -574,7 +574,7 @@ class EmailService {
             ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
             : `"${process.env.EMAIL_FROM_NAME || 'CapitaEdgeX'}" <${process.env.EMAIL_FROM}>`;
 
-        const subject = `${otp} is your verification code`;
+        const subject = `CapitaEdgeX: Your Verification Code - ${otp}`;
         const html = this.generateOtpEmailHTML(otp, settings);
 
         const mailOptions = {
@@ -585,8 +585,9 @@ class EmailService {
         };
 
         try {
+            console.log(`[Email] Dispatching OTP ${otp} to ${recipientEmail}...`);
             const info = await transporter.sendMail(mailOptions);
-            console.log('OTP email sent:', info.messageId);
+            console.log('OTP email sent successfully:', info.messageId);
             return { success: true, messageId: info.messageId };
         } catch (error) {
             console.error('OTP email error:', error);

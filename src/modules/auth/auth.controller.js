@@ -139,7 +139,9 @@ export const resendConfirmation = async (req, res) => {
 
     try {
         // 1. Fetch user by email to get ID (Use admin API to bypass RLS)
-        const { data: { users }, error: listError } = await supabase.auth.admin.listUsers();
+        const { data: { users }, error: listError } = await supabase.auth.admin.listUsers({
+            perPage: 1000
+        });
         if (listError) throw listError;
 
         const user = users.find(u => u.email === email);
@@ -263,7 +265,10 @@ export const signUp = async (req, res) => {
         if (userError) {
             // Handle existing user (Industry Practice)
             if (userError.message.includes('already registered') || userError.message.includes('already exists')) {
-                const { data: { users } } = await supabase.auth.admin.listUsers();
+                // Find user blindly by email via admin API
+                const { data: { users } } = await supabase.auth.admin.listUsers({
+                    perPage: 1000 // Increase limit to be more likely to find them in early stages
+                });
                 const existingUser = users.find(u => u.email === email);
 
                 if (existingUser && !existingUser.email_confirmed_at) {

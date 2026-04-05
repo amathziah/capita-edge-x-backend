@@ -39,7 +39,6 @@ export const defaultActions = [
     { label: 'Business health', icon: 'Zap', query: 'Give me a business health summary', tag: 'OVERVIEW' },
     { label: 'Top customers', icon: 'Users', query: 'Who are my top customers?', tag: 'CRM' },
     { label: 'Net cash flow', icon: 'Activity', query: 'What is my current net cash flow?', tag: 'CASH' },
-    { label: 'Audit Invoice', icon: 'ShieldCheck', query: 'Audit my most recent invoice for risks', tag: 'AUDIT' },
 ];
 
 export const personaActions = {
@@ -48,7 +47,6 @@ export const personaActions = {
         { label: 'Tax Reserves', icon: 'Zap', query: 'Show me my GST and Income Tax reserve breakdown', tag: 'TAX' },
         { label: 'Client Trust', icon: 'Users', query: 'Who are my most reliable clients and who is late?', tag: 'CRM' },
         { label: 'Revenue Risk', icon: 'AlertTriangle', query: 'Am I too dependent on a single client for revenue?', tag: 'RISK' },
-        { label: 'Audit Invoice', icon: 'ShieldCheck', query: 'Audit my last invoice for GST/Tax errors', tag: 'AUDIT' },
     ],
     subscription: [
         { label: 'Check MRR', icon: 'TrendingUp', query: 'What is my current Monthly Recurring Revenue?', tag: 'MRR' },

@@ -36,11 +36,11 @@ const calculateAICost = (usage, model = 'gemini-2.0-flash') => {
 const getAIUsageData = async (organizationId) => {
     const { data, error } = await supabase
         .from('ai_requests')
-        .select('tokens')
+        .select('total_tokens')
         .eq('organization_id', organizationId);
 
     if (error) return 0;
-    return data.reduce((sum, req) => sum + (req.tokens || 0), 0);
+    return data.reduce((sum, req) => sum + (req.total_tokens || 0), 0);
 };
 
 const checkAICreditLimit = async (req) => {
@@ -163,8 +163,8 @@ export const processChat = async (req, res) => {
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: modelUsed,
-        tokens,
+        model_name: modelUsed,
+        total_tokens: tokens,
         cost
     }]);
 
@@ -212,13 +212,16 @@ export const processChat = async (req, res) => {
  */
 export const processChatStream = async (req, res) => {
     const { query, agentId, persona, history, conversationId: incomingConvId } = req.body;
+    let aborted = false;
 
-    try {
-        // Batch the credit check and context loading in parallel
-        const [creditStatus, context] = await Promise.all([
-            checkAICreditLimit(req),
-            getAIContext(req, persona, agentId, history)
-        ]);
+        const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+        try {
+            // Batch the credit check and context loading in parallel
+            const [creditStatus, context] = await Promise.all([
+                checkAICreditLimit(req),
+                getAIContext(req, persona, agentId, history)
+            ]);
 
         if (!creditStatus.allowed) {
             res.setHeader('Content-Type', 'text/event-stream');
@@ -241,10 +244,7 @@ export const processChatStream = async (req, res) => {
         res.setHeader('X-Accel-Buffering', 'no');
         res.flushHeaders();
 
-        const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-
         // Handle client disconnect
-        let aborted = false;
         req.on('close', () => { aborted = true; });
 
         const stream = aiService.processQueryStream(query, context);
@@ -268,8 +268,8 @@ export const processChatStream = async (req, res) => {
                     await supabase.from('ai_requests').insert([{
                         organization_id: req.user.organizationId,
                         user_id: req.user.id,
-                        model: modelUsed,
-                        tokens,
+                        model_name: modelUsed,
+                        total_tokens: tokens,
                         cost
                     }]);
                 } catch (e) {
@@ -347,8 +347,8 @@ export const magicFill = async (req, res) => {
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: modelUsed,
-        tokens,
+        model_name: modelUsed,
+        total_tokens: tokens,
         cost
     }]);
 
@@ -375,8 +375,8 @@ export const auditInvoice = async (req, res) => {
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: modelUsed,
-        tokens,
+        model_name: modelUsed,
+        total_tokens: tokens,
         cost
     }]);
 
@@ -460,8 +460,8 @@ export const getInsights = async (req, res) => {
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-2.0-flash',
-        tokens,
+        model_name: 'gemini-2.0-flash',
+        total_tokens: tokens,
         cost
     }]);
 
@@ -472,16 +472,16 @@ export const predictRevenue = async (req, res) => {
     // 1. Get historical invoice data
     const { data: invoices } = await supabase
         .from('invoices')
-        .select('total, created_at, status')
+        .select('total, createdAt, status')
         .eq('organization_id', req.user.organizationId)
-        .order('created_at', { ascending: true });
+        .order('createdAt', { ascending: true });
 
     // Null guard: if the Supabase query fails, invoices will be null
     const safeInvoices = invoices || [];
 
     // 2. Format for AI analysis
     const historicalData = safeInvoices.reduce((acc, inv) => {
-        const month = new Date(inv.created_at).toISOString().slice(0, 7); // YYYY-MM
+        const month = new Date(inv.createdAt).toISOString().slice(0, 7); // YYYY-MM
         acc[month] = (acc[month] || 0) + inv.total;
         return acc;
     }, {});
@@ -520,8 +520,8 @@ export const negotiateSettlement = async (req, res) => {
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         customer_id: invoice.customer_id,
-        model: 'gemini-2.0-flash',
-        tokens,
+        model_name: 'gemini-2.0-flash',
+        total_tokens: tokens,
         cost
     }]);
 
@@ -549,8 +549,8 @@ export const processCommand = async (req, res) => {
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model: 'gemini-2.0-flash',
-        tokens,
+        model_name: 'gemini-2.0-flash',
+        total_tokens: tokens,
         cost
     }]);
 
@@ -590,8 +590,8 @@ export const generateCollectionDraft = async (req, res) => {
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         customer_id: invoice.customer_id,
-        model: 'gemini-2.0-flash',
-        tokens,
+        model_name: 'gemini-2.0-flash',
+        total_tokens: tokens,
         cost
     }]);
 

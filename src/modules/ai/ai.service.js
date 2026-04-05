@@ -48,12 +48,15 @@ class AIService {
         };
 
         // ═══════════════════════════════════════════════════════
-        // TIER CONFIG — Derived from tierConfig.js (single source of truth)
-        // Model routing per tier — limits come from PLAN_TIERS at runtime
+        // TIER CONFIG — Same model quality for ALL tiers.
+        // Strategy: Gate by FEATURES + QUERY COUNT, not model intelligence.
+        // Free users get amazing answers → converts to paid.
+        // With a target of 25 early customers, we can confidently run
+        // the newest 'gemini-3-flash' model (10K RPD limit) for everyone.
         // ═══════════════════════════════════════════════════════
         this.tierModels = {
             starter: ['gemini-2.5-flash'],
-            free:    ['gemini-2.5-flash'],            // alias for starter
+            free:    ['gemini-2.5-flash'],
             solo:    ['gemini-2.5-flash'],
             solo_pro: ['gemini-2.5-flash'],
             enterprise: ['gemini-2.5-flash'],
@@ -61,6 +64,31 @@ class AIService {
 
         // Defaults/Fallback
         this.models = ['gemini-2.5-flash'];
+
+        // ═══════════════════════════════════════════════════════
+        // FEATURE GATING — Tools available per plan tier
+        // ALL features are available to ALL tiers. Strategy is to 
+        // give the best possible experience, and only limit by 
+        // the number of allowed queries per month.
+        // ═══════════════════════════════════════════════════════
+        this.tierToolAccess = {
+            starter: ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
+            free:    ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
+            solo:    ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
+            solo_pro: ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
+            enterprise: ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
+        };
+
+        this.tierUpgradeMessages = {
+            get_customer_insights: {
+                requiredTier: 'Solo',
+                message: 'Customer Analytics is a Solo plan feature. Upgrade to unlock top client rankings, portfolio health scores, and revenue attribution across your entire customer base.'
+            },
+            get_customer_details: {
+                requiredTier: 'Solo',
+                message: 'Customer Intelligence is a Solo plan feature. Upgrade to unlock churn risk prediction, health scoring, and next-purchase date forecasting for individual customers.'
+            },
+        };
 
         if (!apiKey || apiKey === 'your_gemini_api_key_here') {
             console.warn('⚠️  Gemini API key not configured. AI features will use fallback logic.');
@@ -167,11 +195,15 @@ class AIService {
         if (!orgId) return { allowed: true, limit: 999, used: 0 };
 
         // 1. Get Organization Plan
-        const { data: org } = await supabase
+        const { data: org, error: orgError } = await supabase
             .from('organizations')
             .select('plan_tier')
             .eq('id', orgId)
             .single();
+        
+        if (orgError) {
+            console.error('Plan Budget Error (Org Lookup):', orgError);
+        }
         
         const rawTier = org?.plan_tier || 'starter';
         const tierKey = this._normalizeTierKey(rawTier);
@@ -186,12 +218,12 @@ class AIService {
 
         const { count, error } = await supabase
             .from('ai_requests')
-            .select('*', { count: 'exact', head: true })
+            .select('id', { count: 'exact' })
             .eq('organization_id', orgId)
             .gte('createdAt', firstOfMonth.toISOString());
 
         if (error) {
-            console.error('Budget check error:', error);
+            console.error('Plan Budget Error (Usage Query):', error);
             return { allowed: true, limit: queryLimit, used: 0 }; // Fail open
         }
 
@@ -323,7 +355,24 @@ class AIService {
     async executeTool(funcCall, context) {
         const name = funcCall.name;
         const orgId = context.organizationId;
-        console.log(`🤖 Native Tool Call: ${name}`);
+        const tierKey = this._normalizeTierKey(context.planTier || 'starter');
+        console.log(`🤖 Native Tool Call: ${name} (tier: ${tierKey})`);
+
+        // ── Feature Gate: Check if this tool is available on the user's plan ──
+        const allowedTools = this.tierToolAccess[tierKey] || this.tierToolAccess.starter;
+        if (!allowedTools.includes(name)) {
+            const upgradeInfo = this.tierUpgradeMessages[name] || {
+                requiredTier: 'Solo',
+                message: `This feature requires an upgraded plan.`
+            };
+            console.log(`🔒 Tool ${name} gated for tier: ${tierKey}`);
+            return {
+                gated: true,
+                required_plan: upgradeInfo.requiredTier,
+                message: upgradeInfo.message,
+                upgrade_url: '/dashboard/pricing'
+            };
+        }
 
         try {
             switch (name) {
@@ -355,7 +404,7 @@ class AIService {
                         .eq('organization_id', orgId)
                         .eq('status', 'pending')
                         .lt('dueDate', new Date().toISOString())
-                        .order('createdAt', { ascending: false });
+                        .order('created_at', { ascending: false });
                     
                     const overdueInvoices = res.data || [];
                     const now = new Date();
@@ -374,7 +423,7 @@ class AIService {
                 }
 
                 case "get_recent_transactions": {
-                    const invoices = await supabase.from('invoices').select('*').eq('organization_id', orgId).order('createdAt', { ascending: false }).limit(5);
+                    const invoices = await supabase.from('invoices').select('*').eq('organization_id', orgId).order('created_at', { ascending: false }).limit(5);
                     const payments = await supabase.from('payments').select('*, customers(name)').eq('organization_id', orgId).order('date', { ascending: false }).limit(5);
                     const expenses = await supabase.from('expenses').select('*').eq('organization_id', orgId).order('date', { ascending: false }).limit(5);
                     return { 
@@ -517,8 +566,9 @@ class AIService {
                     
                     // Handle potential function calls in non-streaming mode
                     let iterations = 0;
-                    while (response.candidates?.[0]?.content?.parts?.[0]?.functionCall && iterations < 5) {
-                        const funcCall = response.candidates[0].content.parts[0].functionCall;
+                    let pendingCalls = (typeof response.functionCalls === 'function' ? response.functionCalls() : null) || [];
+                    while (pendingCalls.length > 0 && iterations < 5) {
+                        const funcCall = pendingCalls[0];
                         const toolResult = await this.executeTool(funcCall, context);
                         
                         result = await chat.sendMessage([{
@@ -528,6 +578,7 @@ class AIService {
                             }
                         }]);
                         response = await result.response;
+                        pendingCalls = (typeof response.functionCalls === 'function' ? response.functionCalls() : null) || [];
                         iterations++;
                     }
 
@@ -615,7 +666,7 @@ class AIService {
                         try {
                             if (chunk.candidates?.length > 0) {
                                 const calls = typeof chunk.functionCalls === 'function' ? chunk.functionCalls() : [];
-                                funcCall = calls?.[0] || (typeof chunk.functionCall === 'function' ? chunk.functionCall() : null);
+                                funcCall = calls?.[0] || null;
                             }
                         } catch (e) {
                             // ignore empty or malformed candidates
@@ -821,6 +872,10 @@ class AIService {
         contextBlock += `You do not have all the user's financial data by default. To answer questions about revenue, overdue invoices, cash flow, or recent transactions, you MUST use the provided tools.\n`;
         contextBlock += `If the user asks "Who owes me?", run the get_overdue_invoices tool first.\n`;
         contextBlock += `Always execute tools if needed before responding.\n\n`;
+        contextBlock += `**CRITICAL ANTI-HALLUCINATION RULE:**\n`;
+        contextBlock += `- You have ZERO financial data in your training. ALL numbers MUST come from tool results.\n`;
+        contextBlock += `- If a tool call fails or you cannot call tools, say: "I'm unable to fetch your data right now. Please try again."\n`;
+        contextBlock += `- NEVER fabricate amounts, counts, percentages, or dates. Every number you output must come from a tool response.\n\n`;
 
         contextBlock += `---\n`;
         contextBlock += `## RESPONSE FORMATTING RULES (YOU MUST FOLLOW)\n\n`;
@@ -847,7 +902,8 @@ class AIService {
         contextBlock += `- **COUNTING CLIENTS**: If asked for client count, use the \`total_clients\` field from the financial summary tool. NEVER sum invoice counts to estimate clients.\n`;
         contextBlock += `- **ISOLATION**: You are strictly locked to data for **${businessName}**. Reassure the user you only see their data.\n`;
         contextBlock += `- If the user asks about a SPECIFIC customer, use \`get_customer_insights\` to find their ID first, then use \`get_customer_details\` to get their risk/health metrics.\n`;
-        contextBlock += `- If a tool is unavailable, use clean bullet points, NOT tables.\n\n`;
+        contextBlock += `- If a tool is unavailable, use clean bullet points, NOT tables.\n`;
+        contextBlock += `- **UPGRADE NUDGES**: If a tool returns a \`gated: true\` response, it means the feature requires a plan upgrade. Communicate the upgrade message naturally and warmly. Include the upgrade URL (/dashboard/pricing) as a suggestion. Do NOT try to answer with fabricated data — only relay the upgrade message.\n\n`;
         contextBlock += `**User's Question:** "${query}"`;
 
         return contextBlock;

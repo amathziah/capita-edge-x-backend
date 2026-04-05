@@ -188,7 +188,7 @@ class AIService {
             .from('ai_requests')
             .select('*', { count: 'exact', head: true })
             .eq('organization_id', orgId)
-            .gte('created_at', firstOfMonth.toISOString());
+            .gte('createdAt', firstOfMonth.toISOString());
 
         if (error) {
             console.error('Budget check error:', error);
@@ -248,7 +248,18 @@ class AIService {
                     },
                     {
                         name: "get_customer_insights",
-                        description: "Fetch customer health metrics like top clients, concentration risk, and dormant clients."
+                        description: "Fetch high-level customer stats like top clients and general health across the portfolio."
+                    },
+                    {
+                        name: "get_customer_details",
+                        description: "Fetch deep intelligence for a specific customer including churn risk, health score, and next predicted purchase date. Requires customer_id.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                customer_id: { type: "string", description: "The UUID of the customer" }
+                            },
+                            required: ["customer_id"]
+                        }
                     }
                 ]
             }
@@ -319,7 +330,22 @@ class AIService {
                 case "get_financial_summary": {
                     const stats = await analyticsService.getDashboardStats(orgId).catch(() => ({}));
                     const safeToSpend = await analyticsService.getSafeToSpend(orgId).catch(() => ({}));
-                    return { stats, safeToSpend };
+                    
+                    // Pre-calculate derived business metrics to avoid AI hallucination
+                    const totalRevenue = stats.total_revenue || 0;
+                    const totalExpenses = stats.total_expenses || 0;
+                    const netProfit = totalRevenue - totalExpenses;
+                    const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+
+                    return { 
+                        stats: {
+                            ...stats,
+                            total_clients: stats.total_customers || 0, // Explicit mapping
+                            net_profit: netProfit,
+                            profit_margin: profitMargin.toFixed(2) + '%'
+                        }, 
+                        safeToSpend 
+                    };
                 }
                 
                 case "get_overdue_invoices": {
@@ -327,15 +353,17 @@ class AIService {
                     const res = await supabase.from('invoices')
                         .select('*')
                         .eq('organization_id', orgId)
-                        .eq('status', 'overdue')
-                        .order('created_at', { ascending: false });
+                        .eq('status', 'pending')
+                        .lt('dueDate', new Date().toISOString())
+                        .order('createdAt', { ascending: false });
                     
                     const overdueInvoices = res.data || [];
                     const now = new Date();
                     const ageing = { current: 0, near: 0, critical: 0, totalOverdue: 0 };
                     
                     overdueInvoices.forEach(inv => {
-                        const diffDays = Math.ceil((now - new Date(inv.due_date)) / 86400000);
+                        const dueDate = inv.dueDate || inv.due_date; // Backwards compatibility if any
+                        const diffDays = Math.ceil((now - new Date(dueDate)) / 86400000);
                         ageing.totalOverdue += inv.total;
                         if (diffDays <= 30) ageing.current += inv.total;
                         else if (diffDays <= 60) ageing.near += inv.total;
@@ -346,7 +374,7 @@ class AIService {
                 }
 
                 case "get_recent_transactions": {
-                    const invoices = await supabase.from('invoices').select('*').eq('organization_id', orgId).order('created_at', { ascending: false }).limit(5);
+                    const invoices = await supabase.from('invoices').select('*').eq('organization_id', orgId).order('createdAt', { ascending: false }).limit(5);
                     const payments = await supabase.from('payments').select('*, customers(name)').eq('organization_id', orgId).order('date', { ascending: false }).limit(5);
                     const expenses = await supabase.from('expenses').select('*').eq('organization_id', orgId).order('date', { ascending: false }).limit(5);
                     return { 
@@ -359,6 +387,13 @@ class AIService {
                 case "get_customer_insights": {
                     const insights = await analyticsService.getCustomerInsights(orgId).catch(() => []);
                     return { customers: insights };
+                }
+
+                case "get_customer_details": {
+                    const customerId = funcCall.args?.customer_id;
+                    if (!customerId) return { error: "Customer ID is required." };
+                    const intelligence = await analyticsService.getCustomerIntelligence(customerId, orgId).catch(() => ({}));
+                    return { intelligence };
                 }
 
                 default:
@@ -477,8 +512,25 @@ class AIService {
                     
                     // Use startChat for multi-turn memory
                     const chat = modelInstance.startChat({ history });
-                    const result = await chat.sendMessage(prompt);
-                    const response = await result.response;
+                    let result = await chat.sendMessage(prompt);
+                    let response = await result.response;
+                    
+                    // Handle potential function calls in non-streaming mode
+                    let iterations = 0;
+                    while (response.candidates?.[0]?.content?.parts?.[0]?.functionCall && iterations < 5) {
+                        const funcCall = response.candidates[0].content.parts[0].functionCall;
+                        const toolResult = await this.executeTool(funcCall, context);
+                        
+                        result = await chat.sendMessage([{
+                            functionResponse: {
+                                name: funcCall.name,
+                                response: toolResult
+                            }
+                        }]);
+                        response = await result.response;
+                        iterations++;
+                    }
+
                     const text = response.text();
                     const action = this.extractAction(text, query);
 
@@ -694,7 +746,7 @@ class AIService {
                 systemPrompt = `You are a strict, efficient Auto-Reminder Agent. Overdue: ${formatCurrency(stats.pendingPayments, currency)}. QUERY: "${query}"`;
                 break;
             case 'agent_settlement':
-                systemPrompt = `You are a strict Settlement Agent. Overdue Invoices: ${JSON.stringify(invoices.filter(i => i.status === 'overdue').slice(0, 3))}. QUERY: "${query}"`;
+                systemPrompt = `You are a strict Settlement Agent. Overdue Invoices: ${JSON.stringify(invoices.filter(i => i.status === 'pending' && new Date(i.dueDate) < new Date()).slice(0, 3))}. QUERY: "${query}"`;
                 break;
             default:
                 systemPrompt = `You are a financial AI agent. QUERY: "${query}"`;
@@ -779,6 +831,8 @@ class AIService {
         contextBlock += `- Use \`## Heading\` for responses covering more than 2 topics.\n`;
         contextBlock += `- Use **bullet points** for any list of 3+ items. Never write lists as a comma sentence.\n`;
         contextBlock += `- **Bold** every currency amount, percentage, and key metric.\n`;
+        contextBlock += `- **DEFINITION: PROFIT** - In this system, "Profit" is specifically "Total Revenue (Paid Invoices) minus Total Expenses".\n`;
+        contextBlock += `- **DEFINITION: OVERDUE** - An invoice is "Overdue" ONLY if its status is 'pending' AND its dueDate is in the past.\n`;
         contextBlock += `- Use \`> ⚠️ ...\` for risks. Use \`> 🚀 ...\` for growth opportunities.\n`;
         contextBlock += `- End with **→ one clear next action** the user should take.\n\n`;
         contextBlock += `**NEVER DO:**\n`;
@@ -789,7 +843,10 @@ class AIService {
         contextBlock += `- ❌ Repeat the user's question back to them.\n\n`;
         
         contextBlock += `**CRITICAL — HIGH-FIDELITY TOOLS:**\n`;
-        contextBlock += `- **ALWAYS** use the \`get_financial_summary\` tool if the user asks for a summary of their business, revenue, profit, or cash flow. NEVER summarize metrics in text when the tool is available.\n`;
+        contextBlock += `- **ALWAYS** use the \`get_financial_summary\` tool if the user asks for a summary of their business.\n`;
+        contextBlock += `- **COUNTING CLIENTS**: If asked for client count, use the \`total_clients\` field from the financial summary tool. NEVER sum invoice counts to estimate clients.\n`;
+        contextBlock += `- **ISOLATION**: You are strictly locked to data for **${businessName}**. Reassure the user you only see their data.\n`;
+        contextBlock += `- If the user asks about a SPECIFIC customer, use \`get_customer_insights\` to find their ID first, then use \`get_customer_details\` to get their risk/health metrics.\n`;
         contextBlock += `- If a tool is unavailable, use clean bullet points, NOT tables.\n\n`;
         contextBlock += `**User's Question:** "${query}"`;
 

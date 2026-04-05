@@ -40,7 +40,7 @@ export const LIMITS = {
     MAX_NOTIFICATIONS: 10,
     MAX_COMPLIANCE_NOTIFICATIONS: 3,
     DEFAULT_PAGE_LIMIT: 20,
-    MAX_PAGE_LIMIT: 100,
+    MAX_PAGE_LIMIT: 1000,
 };
 
 // ─── Analytics: Business Health Score ────────────────────────────────────────

@@ -83,11 +83,11 @@ export const provisionOrganization = async (req, res) => {
         const orgId = existingOrg[0].organization_id;
 
         // Ensure profile has this organizationId and businessType (Self-healing)
-        const profileUpdate = { organization_id: orgId };
+        const profileUpdate = { id: userId, organization_id: orgId };
         if (businessType) {
             profileUpdate.business_type = businessType;
         }
-        await supabase.from('profiles').update(profileUpdate).eq('id', userId);
+        await supabase.from('profiles').upsert(profileUpdate);
 
         return res.status(200).json({
             success: true,

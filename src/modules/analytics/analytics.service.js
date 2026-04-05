@@ -1,5 +1,5 @@
 import { supabase } from '../../core/database/supabase.js';
-import { DEFAULTS, HEALTH_SCORE, TAX_RESERVES, PLACEHOLDERS } from '../../core/config/constants.js';
+import { DEFAULTS, HEALTH_SCORE, TAX_RESERVES, PLACEHOLDERS, CUSTOMER_HEALTH } from '../../core/config/constants.js';
 
 /**
  * Analytics Service
@@ -19,9 +19,9 @@ class AnalyticsService {
 
         const { data: invoices, error } = await supabase
             .from('invoices')
-            .select('created_at, status, total')
+            .select('createdAt, status, total, dueDate')
             .eq('organization_id', organizationId)
-            .gte('created_at', oneYearAgo.toISOString());
+            .gte('createdAt', oneYearAgo.toISOString());
 
         if (error) throw new Error(error.message);
 
@@ -66,14 +66,15 @@ class AnalyticsService {
         };
 
         invoices.forEach(inv => {
-            const key = getKey(inv.created_at);
+            const key = getKey(inv.createdAt);
             initKey(key);
 
             trends[key].invoice_count++;
             if (inv.status === 'paid') {
                 trends[key].revenue += inv.total;
-            } else if (['sent', 'overdue', 'draft'].includes(inv.status)) { // aggregated pending
-                if (inv.status === 'overdue') {
+            } else if (['pending', 'draft'].includes(inv.status)) { // aggregated pending
+                const isOverdue = inv.status === 'pending' && new Date(inv.dueDate) < new Date();
+                if (isOverdue) {
                     trends[key].overdue += inv.total;
                     trends[key].pending += inv.total;
                 } else {
@@ -107,7 +108,7 @@ class AnalyticsService {
 
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('id, customer_id, status, total, created_at')
+            .select('id, customer_id, status, total, createdAt, dueDate')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -136,20 +137,131 @@ class AnalyticsService {
 
                 if (inv.status === 'paid') {
                     stats.total_revenue += inv.total;
-                } else if (['sent', 'overdue'].includes(inv.status)) {
+                } else if (inv.status === 'pending') {
                     stats.pending_amount += inv.total;
                 }
 
-                if (!stats.last_invoice_date || new Date(inv.created_at) > new Date(stats.last_invoice_date)) {
-                    stats.last_invoice_date = inv.created_at;
+                if (!stats.last_invoice_date || new Date(inv.createdAt) > new Date(stats.last_invoice_date)) {
+                    stats.last_invoice_date = inv.createdAt;
                 }
             }
         });
 
-        return Object.values(customerStats).map(s => ({
-            ...s,
-            avg_invoice_value: s.total_invoices > 0 ? s._total_value_for_avg / s.total_invoices : 0
-        })).sort((a, b) => b.total_revenue - a.total_revenue);
+        return Object.values(customerStats).map(s => {
+            const avgInterval = CUSTOMER_HEALTH.DEFAULT_AVG_INTERVAL_DAYS;
+            
+            // Basic bulk intelligence (simplified for performance)
+            let churnRisk = 0;
+            if (s.last_invoice_date) {
+                const daysSinceLast = (new Date().getTime() - new Date(s.last_invoice_date).getTime()) / (1000 * 60 * 60 * 24);
+                churnRisk = Math.min(100, Math.round((daysSinceLast / (avgInterval * 3)) * 100));
+            }
+
+            let healthScore = CUSTOMER_HEALTH.BASELINE;
+            if (s.total_invoices > CUSTOMER_HEALTH.INVOICE_BONUS_THRESHOLD) healthScore += CUSTOMER_HEALTH.INVOICE_BONUS;
+            if (s.total_revenue > CUSTOMER_HEALTH.REVENUE_BONUS_THRESHOLD) healthScore += CUSTOMER_HEALTH.REVENUE_BONUS;
+            healthScore -= (churnRisk / 5);
+
+            let healthLabel = 'Regular';
+            if (healthScore >= CUSTOMER_HEALTH.VIP_THRESHOLD) healthLabel = 'VIP';
+            else if (healthScore >= CUSTOMER_HEALTH.ACTIVE_THRESHOLD) healthLabel = 'Active';
+            else if (healthScore < CUSTOMER_HEALTH.AT_RISK_THRESHOLD) healthLabel = 'At Risk';
+
+            return {
+                ...s,
+                avg_invoice_value: s.total_invoices > 0 ? s._total_value_for_avg / s.total_invoices : 0,
+                health_label: healthLabel,
+                churn_risk: churnRisk
+            };
+        }).sort((a, b) => b.total_revenue - a.total_revenue);
+    }
+
+    /**
+     * Get advanced intelligence for a specific customer
+     * (Churn Risk, Next Purchase, Health Score)
+     */
+    async getCustomerIntelligence(customerId, organizationId) {
+        if (!customerId || !organizationId) throw new Error('Customer/Org ID required');
+
+        const { data: invoices, error } = await supabase
+            .from('invoices')
+            .select('*')
+            .eq('customer_id', customerId)
+            .eq('organization_id', organizationId)
+            .order('createdAt', { ascending: true });
+
+        if (error) throw new Error(error.message);
+
+        const totalInvoices = invoices.length;
+        const totalRevenue = invoices.reduce((acc, inv) => acc + (inv.total || 0), 0);
+        const lastInvoice = invoices.length > 0 ? invoices[invoices.length - 1] : null;
+        const lastTransactionDate = lastInvoice ? lastInvoice.createdAt : null;
+
+        const breakdown = {
+            paid: invoices.filter(i => i.status === 'paid').length,
+            pending: invoices.filter(i => i.status === 'pending').length,
+            overdue: invoices.filter(i => i.status === 'pending' && new Date(i.dueDate) < new Date()).length,
+            draft: invoices.filter(i => i.status === 'draft').length,
+        };
+
+        // 1. Recurrence Math
+        const intervals = invoices
+            .map((inv, i, arr) => i > 0 ? (new Date(inv.createdAt).getTime() - new Date(arr[i-1].createdAt).getTime()) / (1000 * 60 * 60 * 24) : null)
+            .filter(d => d !== null);
+
+        const avgInterval = intervals.length > 0 
+            ? Math.round(intervals.reduce((a, b) => a + b, 0) / intervals.length) 
+            : CUSTOMER_HEALTH.DEFAULT_AVG_INTERVAL_DAYS;
+
+        // 2. Churn Risk %
+        let churnRisk = 0;
+        if (lastTransactionDate) {
+            const daysSinceLast = (new Date().getTime() - new Date(lastTransactionDate).getTime()) / (1000 * 60 * 60 * 24);
+            churnRisk = Math.min(100, Math.round((daysSinceLast / (avgInterval * 3)) * 100));
+            if (breakdown.overdue > 0) churnRisk = Math.min(100, churnRisk + 25);
+        }
+
+        // 3. Next Purchase Prediction
+        let nextPurchase = "Insufficient data";
+        if (lastTransactionDate && totalInvoices >= 2) {
+            const nextDate = new Date(new Date(lastTransactionDate).getTime() + (avgInterval * 24 * 60 * 60 * 1000));
+            const diff = Math.round((nextDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+            if (diff < 0) nextPurchase = `Overdue by ${Math.abs(diff)} days`;
+            else if (diff === 0) nextPurchase = "Expected today";
+            else nextPurchase = `Expected in ~${diff} days`;
+        }
+
+        // 4. Health Score Logic
+        let healthScore = CUSTOMER_HEALTH.BASELINE;
+        if (totalInvoices > CUSTOMER_HEALTH.INVOICE_BONUS_THRESHOLD) healthScore += CUSTOMER_HEALTH.INVOICE_BONUS;
+        if (totalRevenue > CUSTOMER_HEALTH.REVENUE_BONUS_THRESHOLD) healthScore += CUSTOMER_HEALTH.REVENUE_BONUS;
+        if (breakdown.overdue > 0) healthScore -= CUSTOMER_HEALTH.OVERDUE_PENALTY;
+        healthScore -= (churnRisk / 5);
+
+        let healthLabel = 'Regular';
+        if (healthScore >= CUSTOMER_HEALTH.VIP_THRESHOLD) healthLabel = 'VIP';
+        else if (healthScore >= CUSTOMER_HEALTH.ACTIVE_THRESHOLD) healthLabel = 'Active';
+        else if (healthScore < CUSTOMER_HEALTH.AT_RISK_THRESHOLD) healthLabel = 'At Risk';
+        if (totalInvoices === 0) healthLabel = 'New';
+
+        // 5. Recommended Action
+        let recommendedAction = "Continue regular engagement.";
+        if (churnRisk > CUSTOMER_HEALTH.CRITICAL_RISK_THRESHOLD) recommendedAction = "CRITICAL: Schedule retention call.";
+        else if (churnRisk > CUSTOMER_HEALTH.MODERATE_RISK_THRESHOLD) recommendedAction = "MODERATE RISK: Send a check-in email.";
+        else if (breakdown.overdue > 0) recommendedAction = "Follow-up on overdue payments.";
+
+        return {
+            totalInvoices,
+            totalRevenue,
+            lastTransactionDate,
+            invoiceStatusBreakdown: breakdown,
+            healthScore: Math.min(100, Math.max(0, Math.round(healthScore))),
+            healthLabel,
+            churnRisk,
+            nextPurchase,
+            recommendedAction,
+            avgInterval
+        };
     }
 
     /**
@@ -171,7 +283,7 @@ class AnalyticsService {
         // Invoices
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('status, total, created_at')
+            .select('status, total, createdAt, dueDate')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -192,10 +304,10 @@ class AnalyticsService {
         invoices.forEach(inv => {
             if (inv.status === 'paid') {
                 total_received += inv.total;
-                if (new Date(inv.created_at) >= thirtyDaysAgo) {
+                if (new Date(inv.createdAt) >= thirtyDaysAgo) {
                     monthly_revenue += inv.total;
                 }
-            } else if (['sent', 'overdue'].includes(inv.status)) {
+            } else if (inv.status === 'pending') {
                 total_pending += inv.total;
             }
         });
@@ -222,7 +334,7 @@ class AnalyticsService {
         // Fetch base data
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('id, status, total')
+            .select('id, status, total, dueDate')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -252,16 +364,18 @@ class AnalyticsService {
             pending_payments: 0,
             overdue_revenue: 0,
             total_customers: customerCount || 0,
+            total_clients: customerCount || 0, // Explicitly named for AI clarity
         };
 
         invoices.forEach(inv => {
             if (inv.status === 'paid') {
                 stats.paid_invoices++;
                 stats.total_revenue += inv.total;
-            } else if (['sent', 'overdue'].includes(inv.status)) {
+            } else if (inv.status === 'pending') {
                 stats.pending_invoices++;
                 stats.pending_payments += inv.total;
-                if (inv.status === 'overdue') {
+                const isOverdue = new Date(inv.dueDate) < new Date();
+                if (isOverdue) {
                     stats.overdue_invoices++;
                     stats.overdue_revenue += inv.total;
                 }
@@ -286,19 +400,19 @@ class AnalyticsService {
             case 'invoices':
                 const { data: invoices } = await supabase
                     .from('invoices')
-                    .select('invoice_number, buyer, total, status, created_at, due_date')
+                    .select('invoiceNumber, buyer, total, status, createdAt, dueDate')
                     .eq('organization_id', organizationId)
-                    .order('created_at', { ascending: false });
+                    .order('createdAt', { ascending: false });
 
                 data = invoices;
                 headers = ['Invoice Number', 'Customer', 'Total', 'Status', 'Created', 'Due Date'];
                 data = data.map(row => [
-                    row.invoice_number,
+                    row.invoiceNumber,
                     (typeof row.buyer === 'string' ? JSON.parse(row.buyer).name : row.buyer?.name) || '',
                     row.total,
                     row.status,
-                    row.created_at,
-                    row.due_date
+                    row.createdAt,
+                    row.dueDate
                 ]);
                 break;
 
@@ -415,7 +529,8 @@ class AnalyticsService {
             .from('invoices')
             .select('total')
             .eq('organization_id', organizationId)
-            .eq('status', 'overdue');
+            .eq('status', 'pending')
+            .lt('dueDate', new Date().toISOString());
 
         const overdueTotal = overdueInvoices?.reduce((sum, inv) => sum + inv.total, 0) || 0;
         const atRiskAmount = overdueTotal * TAX_RESERVES.OVERDUE_RISK_FACTOR;
@@ -455,16 +570,16 @@ class AnalyticsService {
         // 1. Fetch Recent Activity (Global)
         const { data: activities } = await supabase
             .from('invoices')
-            .select('invoice_number, buyer, total, status, created_at')
+            .select('invoiceNumber, buyer, total, status, createdAt')
             .eq('organization_id', organizationId)
-            .order('created_at', { ascending: false })
+            .order('createdAt', { ascending: false })
             .limit(5);
 
         stats.recentActivity = (activities || []).map(a => ({
             type: 'invoice',
-            title: `Invoice #${a.invoice_number} ${a.status}`,
+            title: `Invoice #${a.invoiceNumber} ${a.status}`,
             description: `${typeof a.buyer === 'string' ? JSON.parse(a.buyer).name : a.buyer?.name || 'Customer'} - ₹${a.total}`,
-            timestamp: a.created_at
+            timestamp: a.createdAt
         }));
 
         // 2. Fetch Persona Specific Metrics
@@ -503,7 +618,7 @@ class AnalyticsService {
                     .select('status')
                     .eq('organization_id', organizationId);
 
-                const active = agencyInvoices?.filter(i => ['sent', 'overdue'].includes(i.status)).length || 0;
+                const active = agencyInvoices?.filter(i => i.status === 'pending').length || 0;
 
                 stats.metrics = {
                     activeProjects: active,
@@ -517,7 +632,7 @@ class AnalyticsService {
                     .from('invoices')
                     .select('*', { count: 'exact', head: true })
                     .eq('organization_id', organizationId)
-                    .gte('created_at', new Date(now.setHours(0, 0, 0, 0)).toISOString());
+                    .gte('createdAt', new Date(now.setHours(0, 0, 0, 0)).toISOString());
 
                 stats.metrics = {
                     dailyOrders: dailyOrders || 0,

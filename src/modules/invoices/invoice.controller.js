@@ -761,6 +761,16 @@ export const getInvoiceByShareToken = async (req, res) => {
         return res.status(404).send('Invalid or expired share token');
     }
 
+    // Record the first viewed timestamp (SaaS Tracking Standard)
+    if (!invoice.share_viewed_at) {
+        // Run async without blocking the PDF download response
+        supabase.from('invoices')
+            .update({ share_viewed_at: new Date().toISOString() })
+            .eq('share_token', token)
+            .then(() => console.log(`[Invoice] Tracked first open for ${invoice.invoiceNumber}`));
+    }
+
+
     // 2. Get organization configs for branding
     const { data: settingsObj } = await supabase
         .from('organization_configs')

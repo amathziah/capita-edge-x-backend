@@ -7,6 +7,8 @@ import { PLAN_TIERS } from '../../core/config/tierConfig.js';
 
 dotenv.config();
 
+const AI_ACCESS_EXHAUSTED_MESSAGE = 'AI access is temporarily unavailable for this workspace right now. Upgrade or wait for the next usage cycle to continue.';
+
 /**
  * AI Service using Google Gemini API
  * 
@@ -536,7 +538,7 @@ class AIService {
             console.log(`📡 Local fallback: ${reason} (user: ${userId})`);
             
             if (!budget.allowed) {
-                throw new Error(`You have reached your monthly limit of ${budget.limit} AI queries on the ${budget.tier} plan. Please upgrade to continue.`);
+                throw new Error(AI_ACCESS_EXHAUSTED_MESSAGE);
             }
             
             throw new Error(`Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.`);
@@ -631,7 +633,7 @@ class AIService {
         
         const budget = await this._checkPlanBudget(orgId);
         if (!budget.allowed) {
-            throw new Error(`You have reached your monthly limit of ${budget.limit} AI queries on the ${budget.tier} plan. Please upgrade to continue.`);
+            throw new Error(AI_ACCESS_EXHAUSTED_MESSAGE);
         }
         
         if (!this.genAI || this.isCircuitOpen() || !this._canMakeRequest()) {

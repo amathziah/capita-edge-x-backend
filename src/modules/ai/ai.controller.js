@@ -53,6 +53,8 @@ const checkAICreditLimit = async (req) => {
     };
 };
 
+const AI_ACCESS_EXHAUSTED_MESSAGE = 'AI access is temporarily unavailable for this workspace right now. Upgrade or wait for the next usage cycle to continue.';
+
 export const getAIUsageStatus = async (req, res) => {
     const [usage, { data: org }] = await Promise.all([
         getAIUsageData(req.user.organizationId),
@@ -145,7 +147,7 @@ export const processChat = async (req, res) => {
     const creditStatus = await checkAICreditLimit(req);
     if (!creditStatus.allowed) {
         return res.json({
-            text: "🚀 **AI Credit Limit Reached**\n\nYou've used your assigned tokens for this period. Please upgrade to continue.",
+            text: AI_ACCESS_EXHAUSTED_MESSAGE,
             is_limit_reached: true,
             provider: 'system:billing_gate'
         });
@@ -227,7 +229,7 @@ export const processChatStream = async (req, res) => {
             res.setHeader('Content-Type', 'text/event-stream');
             res.setHeader('Cache-Control', 'no-cache');
             res.setHeader('Connection', 'keep-alive');
-            res.write(`data: ${JSON.stringify({ type: 'error', message: 'AI Credit Limit Reached. Please upgrade your plan.' })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'error', message: AI_ACCESS_EXHAUSTED_MESSAGE })}\n\n`);
             res.end();
             return;
         }
@@ -330,9 +332,9 @@ export const magicFill = async (req, res) => {
     const creditStatus = await checkAICreditLimit(req);
     if (!creditStatus.allowed) {
         return res.status(200).json({
-            error: "AI Credit Limit Reached",
+            error: "AI access unavailable",
             is_limit_reached: true,
-            text: "Upgrade your plan to use Magic Fill.",
+            text: AI_ACCESS_EXHAUSTED_MESSAGE,
             provider: 'system:billing_gate'
         });
     }
@@ -392,7 +394,7 @@ export const getInsights = async (req, res) => {
         return res.json({
             data: [],
             is_limit_reached: true,
-            text: "Please upgrade your plan to generate business insights.",
+            text: AI_ACCESS_EXHAUSTED_MESSAGE,
             provider: 'system:billing_gate'
         });
     }
@@ -496,9 +498,9 @@ export const negotiateSettlement = async (req, res) => {
     const creditStatus = await checkAICreditLimit(req);
     if (!creditStatus.allowed) {
         return res.json({
-            error: "AI Credit Limit Reached",
+            error: "AI access unavailable",
             is_limit_reached: true,
-            text: "Please upgrade your plan to use AI negotiation features.",
+            text: AI_ACCESS_EXHAUSTED_MESSAGE,
             provider: 'system:billing_gate'
         });
     }
@@ -534,9 +536,9 @@ export const processCommand = async (req, res) => {
     const creditStatus = await checkAICreditLimit(req);
     if (!creditStatus.allowed) {
         return res.json({
-            error: "AI Credit Limit Reached",
+            error: "AI access unavailable",
             is_limit_reached: true,
-            text: "Please upgrade your plan to use AI command processing.",
+            text: AI_ACCESS_EXHAUSTED_MESSAGE,
             provider: 'system:billing_gate'
         });
     }
@@ -563,9 +565,9 @@ export const generateCollectionDraft = async (req, res) => {
     const creditStatus = await checkAICreditLimit(req);
     if (!creditStatus.allowed) {
         return res.json({
-            error: "AI Credit Limit Reached",
+            error: "AI access unavailable",
             is_limit_reached: true,
-            text: "Please upgrade your plan to generate AI collection drafts.",
+            text: AI_ACCESS_EXHAUSTED_MESSAGE,
             provider: 'system:billing_gate'
         });
     }

@@ -518,15 +518,7 @@ class AIService {
             return this.processStructuredAgentQuery(query, context.agentId, context);
         }
 
-        // 1. Check cache first (FREE — no API call)
-        const cacheKey = this._cacheKey('chat', query);
-        const cached = this._cacheGet(cacheKey);
-        if (cached) {
-            console.log(`📡 Cache HIT for chat query: "${query.slice(0, 30)}..."`);
-            return { ...cached, provider: cached.provider + ':cached' };
-        }
-
-        // 2. Check budget + rate limits before calling API
+        // 1. Check budget + rate limits before calling API
         const orgId = context.organizationId;
         const budget = await this._checkPlanBudget(orgId);
         
@@ -596,9 +588,6 @@ class AIService {
                         provider: `cloud:${modelName}`,
                         budget: budgetStatus,
                     };
-
-                    // Cache the response
-                    this._cacheSet(cacheKey, responseData, this.CACHE_TTL.chat);
 
                     return responseData;
                 } catch (error) {
@@ -723,17 +712,6 @@ class AIService {
                 const action = this.extractAction(fullText, query);
                 const budgetStatus = await this.getBudgetStatus(userId, orgId);
                 
-                // Cache the full response for subsequent non-stream calls
-                const cacheKey = this._cacheKey('chat', query);
-                this._cacheSet(cacheKey, {
-                    text: fullText.trim(),
-                    action,
-                    data: action ? action.data : null,
-                    usage: finalResponse?.usageMetadata,
-                    provider: `cloud:${modelUsed}`,
-                    budget: budgetStatus,
-                }, this.CACHE_TTL.chat);
-
                 yield { 
                     type: 'complete', 
                     text: fullText.trim(),
@@ -890,6 +868,7 @@ class AIService {
         contextBlock += `- **Bold** every currency amount, percentage, and key metric.\n`;
         contextBlock += `- **DEFINITION: PROFIT** - In this system, "Profit" is specifically "Total Revenue (Paid Invoices) minus Total Expenses".\n`;
         contextBlock += `- **DEFINITION: OVERDUE** - An invoice is "Overdue" ONLY if its status is 'pending' AND its dueDate is in the past.\n`;
+        contextBlock += `- **DEFINITION: TOTAL INVOICES** - This includes drafts, pending invoices, and paid invoices unless explicitly stated otherwise.\n`;
         contextBlock += `- Use \`> ⚠️ ...\` for risks. Use \`> 🚀 ...\` for growth opportunities.\n`;
         contextBlock += `- End with **→ one clear next action** the user should take.\n\n`;
         contextBlock += `**NEVER DO:**\n`;

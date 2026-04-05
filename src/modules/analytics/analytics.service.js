@@ -357,8 +357,10 @@ class AnalyticsService {
 
 
         const stats = {
+            total_invoices: 0,
             paid_invoices: 0,
             pending_invoices: 0,
+            draft_invoices: 0,
             overdue_invoices: 0,
             total_revenue: 0,
             pending_payments: 0,
@@ -368,6 +370,8 @@ class AnalyticsService {
         };
 
         invoices.forEach(inv => {
+            stats.total_invoices++;
+
             if (inv.status === 'paid') {
                 stats.paid_invoices++;
                 stats.total_revenue += inv.total;
@@ -379,6 +383,8 @@ class AnalyticsService {
                     stats.overdue_invoices++;
                     stats.overdue_revenue += inv.total;
                 }
+            } else if (inv.status === 'draft') {
+                stats.draft_invoices++;
             }
         });
 

@@ -41,7 +41,7 @@ class PDFService {
                 await this.addPaymentInfo(doc, invoice, settings);
 
                 // Footer
-                this.addFooter(doc, settings);
+                this.addFooter(doc, settings, invoice);
 
                 doc.end();
 
@@ -302,8 +302,27 @@ class PDFService {
     /**
      * Add footer
      */
-    addFooter(doc, settings) {
+    addFooter(doc, settings, invoice = {}) {
         const bottomY = 750;
+
+        if (invoice?.seller?.includeSignature) {
+            const signatureName = invoice?.seller?.signatureName || invoice?.seller?.name || 'Authorised Signatory';
+            doc.fontSize(14)
+                .font('Helvetica-Oblique')
+                .fillColor('#444444')
+                .text(signatureName, 390, bottomY - 60, { width: 140, align: 'center' });
+
+            doc.strokeColor('#999999')
+                .lineWidth(1)
+                .moveTo(400, bottomY - 28)
+                .lineTo(520, bottomY - 28)
+                .stroke();
+
+            doc.fontSize(8)
+                .font('Helvetica')
+                .fillColor('#666666')
+                .text('Authorised Signature', 390, bottomY - 20, { width: 140, align: 'center' });
+        }
 
         // Notes
         if (settings.invoiceNotes) {

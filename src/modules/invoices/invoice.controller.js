@@ -8,6 +8,63 @@ import { calculateInvoiceTax } from './tax.service.js';
 import { getStateFromGstin } from '../../core/lib/gstUtils.js';
 import { parsePagination } from '../../core/utils/pagination.js';
 
+const escapeLikePattern = (value = '') => value.replace(/[%_]/g, '\\$&');
+
+const getOrCreateOrganizationConfig = async (organizationId) => {
+    const { data: existingConfig, error: configError } = await supabase
+        .from('organization_configs')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .maybeSingle();
+
+    if (configError) {
+        throw new APIError(configError.message, 500);
+    }
+
+    if (existingConfig) {
+        return existingConfig;
+    }
+
+    const { data: organization, error: organizationError } = await supabase
+        .from('organizations')
+        .select('name')
+        .eq('id', organizationId)
+        .single();
+
+    if (organizationError) {
+        throw new APIError(organizationError.message, 500);
+    }
+
+    const { data: profile } = await supabase
+        .from('profiles')
+        .select('business_type')
+        .eq('organization_id', organizationId)
+        .limit(1)
+        .maybeSingle();
+
+    const fallbackConfig = {
+        organization_id: organizationId,
+        business_name: organization?.name || 'Your Business',
+        currency: 'INR',
+        tax_label: 'GST',
+        invoice_prefix: 'INV-',
+        business_type: profile?.business_type || 'solopreneur',
+        default_due_days: 30,
+    };
+
+    const { data: insertedConfig, error: insertError } = await supabase
+        .from('organization_configs')
+        .upsert(fallbackConfig)
+        .select()
+        .single();
+
+    if (insertError) {
+        throw new APIError(insertError.message, 500);
+    }
+
+    return insertedConfig;
+};
+
 export const getInvoices = async (req, res) => {
     let query = supabase
         .from('invoices')
@@ -39,59 +96,81 @@ export const getNextInvoiceNumber = async (req, res) => {
     res.json({ nextNumber });
 };
 
+const findNextInvoiceNumberPreview = async (organizationId) => {
+    const config = await getOrCreateOrganizationConfig(organizationId);
+    const invoicePrefix = config?.invoice_prefix || 'INV-';
+
+    const { data: latest, error } = await supabase
+        .from('invoices')
+        .select('invoiceNumber')
+        .eq('organization_id', organizationId)
+        .like('invoiceNumber', `${escapeLikePattern(invoicePrefix)}%`)
+        .order('invoiceNumber', { ascending: false })
+        .limit(1);
+
+    if (error || !latest?.length || !latest[0]?.invoiceNumber) {
+        return `${invoicePrefix}0001`;
+    }
+
+    const prefixRegex = new RegExp(`^${invoicePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)$`);
+    const match = latest[0].invoiceNumber.match(prefixRegex);
+
+    if (!match) {
+        return `${invoicePrefix}0001`;
+    }
+
+    const nextValue = parseInt(match[1], 10) + 1;
+    return `${invoicePrefix}${nextValue.toString().padStart(4, '0')}`;
+};
+
+export const getInvoiceDraftDefaults = async (req, res) => {
+    const config = await getOrCreateOrganizationConfig(req.user.organizationId);
+    const settings = mapConfigToFrontend(config);
+    const nextNumber = await findNextInvoiceNumberPreview(req.user.organizationId);
+
+    res.json({
+        nextNumber,
+        defaults: {
+            fromName: settings.businessName || '',
+            fromAddress: settings.address || '',
+            fromPan: settings.pan || settings.companyTaxId || '',
+            fromGstin: settings.gstin || '',
+            notes: settings.invoiceNotes || '',
+            terms: settings.paymentTerms || '',
+            currencyCode: settings.currency || 'INR',
+            taxLabel: settings.taxLabel || settings.tax_label || 'GST',
+            dueDays: Number(settings.defaultDueDays || 30),
+            isGstRegistered: Boolean(settings.gstin),
+            businessType: settings.businessType || 'solopreneur',
+        }
+    });
+};
+
 const findNextAvailableNumber = async (organizationId) => {
+    const config = await getOrCreateOrganizationConfig(organizationId);
+    const invoicePrefix = config?.invoice_prefix || 'INV-';
+
     try {
         // 1. Try atomic database sequence (Massive Concurrency Mode)
-        const { data: rpcNumber, error: rpcError } = await supabase.rpc('generate_next_invoice_number', {
-            p_organization_id: organizationId
-        });
+        if (invoicePrefix === 'INV-') {
+            const { data: rpcNumber, error: rpcError } = await supabase.rpc('generate_next_invoice_number', {
+                p_organization_id: organizationId
+            });
 
-        if (!rpcError && rpcNumber) {
-            return rpcNumber;
+            if (!rpcError && rpcNumber) {
+                return rpcNumber;
+            }
         }
     } catch (e) {
         // Fallback to legacy logic
     }
 
-    // 2. Legacy Logic: Find latest and increment (Subject to collisions under load)
-    const { data: latest, error } = await supabase
-        .from('invoices')
-        .select('invoiceNumber')
-        .eq('organization_id', organizationId)
-        .order('invoiceNumber', { ascending: false })
-        .limit(1);
-
-    if (error) return `INV-${Date.now().toString().slice(-6)}`;
-
-    let nextNumber = 'INV-0001';
-    if (latest && latest.length > 0 && latest[0].invoiceNumber) {
-        const match = latest[0].invoiceNumber.match(/INV-(\d+)/);
-        if (match) {
-            const num = parseInt(match[1], 10) + 1;
-            nextNumber = `INV-${num.toString().padStart(4, '0')}`;
-        } else {
-            // If existing doesn't match format, try to find the latest with that format
-            const { data: latestPattern } = await supabase
-                .from('invoices')
-                .select('invoiceNumber')
-                .eq('organization_id', organizationId)
-                .like('invoiceNumber', 'INV-%')
-                .order('invoiceNumber', { ascending: false })
-                .limit(1);
-
-            if (latestPattern && latestPattern.length > 0) {
-                const match2 = latestPattern[0].invoiceNumber.match(/INV-(\d+)/);
-                if (match2) {
-                    const num = parseInt(match2[1], 10) + 1;
-                    nextNumber = `INV-${num.toString().padStart(4, '0')}`;
-                }
-            }
-        }
-    }
-    return nextNumber;
+    return findNextInvoiceNumberPreview(organizationId);
 };
 
 export const createInvoice = async (req, res) => {
+    await getOrCreateOrganizationConfig(req.user.organizationId);
+
     let {
         buyer, items, dueDate, notes, taxRate, taxAmount,
         subtotal, total, invoiceNumber, status, date,
@@ -662,7 +741,7 @@ export const sendInvoiceEmail = async (req, res) => {
     }
 
     try {
-        const result = await emailService.sendPaymentReminder(invoice, to, settingsObj, pdfBuffer || tempPath);
+        const result = await emailService.sendInvoice(invoice, pdfBuffer || tempPath, to, settingsObj);
 
         // Update status
         if (invoice.status === 'draft') {
@@ -749,11 +828,7 @@ export const getInvoiceByShareToken = async (req, res) => {
     // 1. Get invoice by token
     const { data: invoice, error } = await supabase
         .from('invoices')
-        .select(`
-            *,
-            buyer:customers(name, email, phone, address),
-            organization:organizations(name)
-        `)
+        .select(`*, items:invoice_items(*)`)
         .eq('share_token', token)
         .single();
 
@@ -798,4 +873,59 @@ export const getInvoiceByShareToken = async (req, res) => {
         if (tempPath) pdfService.cleanupPDF(tempPath);
         throw new APIError(err.message, 500);
     }
+};
+
+export const getInvoiceShareDetails = async (req, res) => {
+    const { token } = req.params;
+
+    const { data: invoice, error } = await supabase
+        .from('invoices')
+        .select(`*, items:invoice_items(*)`)
+        .eq('share_token', token)
+        .single();
+
+    if (error || !invoice) {
+        throw new APIError('Invalid or expired share token', 404);
+    }
+
+    if (!invoice.share_viewed_at) {
+        supabase
+            .from('invoices')
+            .update({ share_viewed_at: new Date().toISOString() })
+            .eq('share_token', token)
+            .then(() => console.log(`[Invoice] Tracked first open for ${invoice.invoiceNumber}`))
+            .catch((viewErr) => console.error('[Invoice] Share view tracking failed:', viewErr));
+    }
+
+    const { data: config } = await supabase
+        .from('organization_configs')
+        .select('*')
+        .eq('organization_id', invoice.organization_id)
+        .maybeSingle();
+
+    const { data: organization } = await supabase
+        .from('organizations')
+        .select('name')
+        .eq('id', invoice.organization_id)
+        .maybeSingle();
+
+    const settings = mapConfigToFrontend(config || {});
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+
+    res.json({
+        invoice,
+        settings: {
+            businessName: settings.businessName || organization?.name || 'Your Business',
+            email: settings.email || '',
+            phone: settings.phone || '',
+            address: settings.address || '',
+            paymentInstructions: settings.paymentInstructions || '',
+            upiId: settings.upiId || '',
+            bankDetails: settings.bankDetails || '',
+            logoUrl: settings.logoFilename ? `${baseUrl}/api/uploads/logos/${settings.logoFilename}` : null,
+        },
+        actions: {
+            downloadUrl: `${baseUrl}/api/invoices/share/${token}`,
+        }
+    });
 };

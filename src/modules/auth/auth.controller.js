@@ -354,6 +354,13 @@ export const signUp = async (req, res) => {
         }
 
         // 2. Generate and store OTP for new user
+        await supabase
+            .from('profiles')
+            .upsert({
+                id: userData.user.id,
+                business_type: businessType || 'solopreneur'
+            });
+
         const otp = generateOTP();
         const otpHash = hashOTP(otp);
         const expiresAt = new Date(Date.now() + DEFAULTS.OTP_EXPIRY_MS).toISOString();

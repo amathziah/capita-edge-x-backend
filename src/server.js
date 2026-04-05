@@ -34,6 +34,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../uploads');
 
 // Security middleware
 app.use(helmet());
@@ -72,6 +73,7 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 app.use(sanitizeInput);
+app.use('/api/uploads', express.static(UPLOAD_DIR));
 
 // Health Check Endpoint (For Render/Platform Monitoring)
 app.get('/health', (req, res) => {
@@ -109,6 +111,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/system', systemRoutes);
+app.use('/api', systemRoutes);
 
 app.use('/api/reports', reportRoutes);
 

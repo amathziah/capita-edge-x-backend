@@ -62,9 +62,9 @@ export const validateInvoice = [
     body('seller').optional().isObject().withMessage('Seller must be an object'),
     body('shipTo').optional().isObject().withMessage('ShipTo must be an object'),
     body('taxType').optional().isString().withMessage('Tax type must be a string'),
-    body('taxRate').optional().isFloat({ min: 0 }).withMessage('Tax rate must be positive'),
-    body('discount').optional().isFloat({ min: 0 }).withMessage('Discount must be positive'),
-    body('shipping').optional().isFloat({ min: 0 }).withMessage('Shipping must be positive'),
+    body('taxRate').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Tax rate must be zero or positive'),
+    body('discount').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Discount must be zero or positive'),
+    body('shipping').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Shipping must be zero or positive'),
     body('notes').optional().isString().withMessage('Notes must be a string'),
     body('status').optional().isIn(['draft', 'sent', 'paid', 'overdue', 'cancelled']).withMessage('Invalid status'),
     handleValidationErrors

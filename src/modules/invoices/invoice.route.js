@@ -4,7 +4,7 @@ import { validateId, validateInvoice, validateEmail } from '../../core/middlewar
 import { 
   getInvoices, getInvoiceById, createInvoice, updateInvoice,
   deleteInvoice, generatePdf, sendInvoiceEmail, bulkReminders,
-  getInvoiceByShareToken, getNextInvoiceNumber
+  getInvoiceByShareToken, getInvoiceShareDetails, getNextInvoiceNumber, getInvoiceDraftDefaults
 } from './invoice.controller.js';
 
 import { checkAndSendFollowUps } from './followUp.service.js';
@@ -13,8 +13,10 @@ const router = express.Router();
 
 // Routes
 router.get('/', asyncHandler(getInvoices));
+router.get('/defaults', asyncHandler(getInvoiceDraftDefaults));
 router.get('/next-number', asyncHandler(getNextInvoiceNumber));
 router.post('/', validateInvoice, asyncHandler(createInvoice));
+router.get('/share/:token/details', asyncHandler(getInvoiceShareDetails));
 router.get('/share/:token', asyncHandler(getInvoiceByShareToken));
 router.get('/:id', validateId, asyncHandler(getInvoiceById));
 router.put('/:id', validateId, asyncHandler(updateInvoice));

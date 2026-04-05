@@ -25,37 +25,33 @@ const findUserByEmail = async (email) => {
     const searchEmail = email.trim().toLowerCase();
     
     try {
-        console.log(`[Auth] Probing status for: ${searchEmail} using "Link Discovery"...`);
+        console.log(`[Auth] Searching for user: ${searchEmail} using admin listUsers...`);
         
-        // Use generateLink('signup') to detect unverified users
-        // This is the most reliable way to check unconfirmed state without list permissions
-        const { data: signupResult, error: signupError } = await supabase.auth.admin.generateLink({
-            type: 'signup',
-            email: searchEmail,
-        });
+        // Paginated search through the user directory (non-mutating)
+        let page = 1;
+        while (true) {
+            const { data: { users, nextPageToken }, error } = await supabase.auth.admin.listUsers({
+                page,
+                perPage: 100 // Maximize capture per request
+            });
 
-        if (signupResult && signupResult.user) {
-            console.log('[Auth] Detected: UNCONFIRMED existing user via signup link discovery.');
-            return signupResult.user;
-        }
+            if (error) throw error;
 
-        // If 'signup' fails, the user is either confirmed or doesn't exist.
-        // We try a dummy signin to see if they exist at all.
-        const { error: inviteError } = await supabase.auth.admin.generateLink({
-            type: 'magiclink',
-            email: searchEmail,
-        });
+            const foundUser = users.find(u => u.email?.toLowerCase() === searchEmail);
+            if (foundUser) {
+                console.log('[Auth] Found user via admin listUsers');
+                return foundUser;
+            }
 
-        if (!inviteError || !inviteError.message.toLowerCase().includes('not found')) {
-            console.log('[Auth] Detected: CONFIRMED existing user via magiclink probe.');
-            return { email: searchEmail, email_confirmed_at: new Date().toISOString() };
+            if (!nextPageToken) break;
+            page++;
         }
 
         console.log('[Auth] Detected: NEITHER (New User).');
         return null;
 
     } catch (err) {
-        console.error('[Auth] Link Discovery probe exception:', err);
+        console.error('[Auth] User lookup exception:', err);
         return null;
     }
 };
@@ -96,6 +92,7 @@ export const provisionOrganization = async (req, res) => {
         });
     }
 
+    let createdOrgId = null;
     try {
         // Use businessType from body, fallback to metadata (Fix Bug 2 & 8)
         const selectedPersona = businessType || req.user.user_metadata?.business_type || DEFAULTS.DEFAULT_PERSONA;
@@ -111,7 +108,8 @@ export const provisionOrganization = async (req, res) => {
             .select()
             .single();
 
-        if (orgError) throw new Error(`Org Creation Failed: ${orgError.message}`);
+        if (orgError) throw new Error(`Organization initialization failed: ${orgError.message}`);
+        createdOrgId = org.id;
 
         // 3. Link User as Owner
         const { error: linkError } = await supabase
@@ -122,9 +120,9 @@ export const provisionOrganization = async (req, res) => {
                 role: 'owner'
             }]);
 
-        if (linkError) throw new Error(`User Linking Failed: ${linkError.message}`);
+        if (linkError) throw new Error(`User linking failed: ${linkError.message}`);
 
-        // 4. Create User Profile (Fix Bug 3 & Redirect Loop)
+        // 4. Create User Profile
         const { error: profileError } = await supabase
             .from('profiles')
             .upsert({
@@ -134,10 +132,10 @@ export const provisionOrganization = async (req, res) => {
                 role: 'member'
             });
 
-        if (profileError) throw new Error(`Profile creation failed: ${profileError.message}`);
+        if (profileError) throw new Error(`Profile synchronization failed: ${profileError.message}`);
 
         // 5. Seed Default Configs
-        await supabase.from('organization_configs').insert([
+        const { error: configError } = await supabase.from('organization_configs').insert([
             {
                 organization_id: org.id,
                 business_name: companyName,
@@ -147,9 +145,10 @@ export const provisionOrganization = async (req, res) => {
                 business_type: selectedPersona
             }
         ]);
+        if (configError) throw new Error(`Configuration seeding failed: ${configError.message}`);
 
-        // 6. Seed Invoice Sequences (Fix Bug 4)
-        await supabase.from('invoice_sequences').insert([
+        // 6. Seed Invoice Sequences
+        const { error: seqError } = await supabase.from('invoice_sequences').insert([
             {
                 organization_id: org.id,
                 last_number: 0,
@@ -158,6 +157,8 @@ export const provisionOrganization = async (req, res) => {
                 reset_annually: true
             }
         ]);
+        if (seqError) throw new Error(`Sequence initialization failed: ${seqError.message}`);
+
         res.status(201).json({
             success: true,
             organization: org
@@ -165,6 +166,26 @@ export const provisionOrganization = async (req, res) => {
 
     } catch (error) {
         console.error('[Provisioning Error]:', error);
+        
+        // ROLLBACK: If we have an orphaned org, remove it so user can retry cleanly
+        if (createdOrgId) {
+            console.log(`[Rollback] Cleaning up orphaned organization: ${createdOrgId}`);
+            await supabase.from('organizations').delete().eq('id', createdOrgId);
+        }
+        
+        // Final fallback: log the error for audit if rollback failed or seeding broke
+        try {
+            await supabase.from('provision_errors').insert([{
+                user_id: userId,
+                email: email,
+                orphaned_org_id: createdOrgId,
+                failed_step: error.message?.split(':')[0] ?? 'unknown',
+                error_message: error.message
+            }]);
+        } catch (logErr) {
+            console.error('[Provision] Failed to log error to audit table:', logErr);
+        }
+        
         throw new APIError(error.message || 'Provisioning failed', 500);
     }
 };
@@ -304,12 +325,19 @@ export const signUp = async (req, res) => {
             if (userError.message.includes('already registered') || userError.message.includes('already exists')) {
                 console.log(`[Auth] Conflict for ${email}. Overriding with automatic resume...`);
                 
+                // FIX: Retrieve existing user to get their ID for the OTP record
+                const existingUser = await findUserByEmail(email);
+                if (!existingUser || !existingUser.id) {
+                    throw new APIError('Could not locate existing account. Please contact support.', 404);
+                }
+
                 const otp = generateOTP();
                 const otpHash = hashOTP(otp);
                 const expiresAt = new Date(Date.now() + DEFAULTS.OTP_EXPIRY_MS).toISOString();
 
-                // 2. Store in otp_verifications
+                // 2. Store in otp_verifications (Now including user_id)
                 await supabase.from('otp_verifications').upsert({
+                    user_id: existingUser.id,
                     email: email.trim().toLowerCase(),
                     otp_hash: otpHash,
                     expires_at: expiresAt

@@ -6,13 +6,11 @@ import { APIError } from '../../core/middleware/errorHandler.js';
 import { LIMITS } from '../../core/config/constants.js';
 import { PERSONA_META, DEFAULT_META, defaultActions, personaActions } from '../../core/config/personas.js';
 
-// Cache for insights
-// Cache for insights
 import { AI_PRICING, EXCHANGE_RATE, getTierLimit } from '../../core/config/tierConfig.js';
 
 // Cache for insights
 const insightsCache = new Map(); // Key: orgId, Value: { data, timestamp }
-const CACHE_TTL = LIMITS.AI_CACHE_TTL_MS; // Moved to constants
+const CACHE_TTL = LIMITS.AI_CACHE_TTL_MS;
 
 /**
  * Helper to calculate cost in INR
@@ -215,36 +213,40 @@ export const processChat = async (req, res) => {
 export const processChatStream = async (req, res) => {
     const { query, agentId, persona, history, conversationId: incomingConvId } = req.body;
 
-    const creditStatus = await checkAICreditLimit(req);
-    if (!creditStatus.allowed) {
+    try {
+        // Batch the credit check and context loading in parallel
+        const [creditStatus, context] = await Promise.all([
+            checkAICreditLimit(req),
+            getAIContext(req, persona, agentId, history)
+        ]);
+
+        if (!creditStatus.allowed) {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.write(`data: ${JSON.stringify({ type: 'error', message: 'AI Credit Limit Reached. Please upgrade your plan.' })}\n\n`);
+            res.end();
+            return;
+        }
+
+        if (!query) {
+            res.status(400).json({ error: 'Query is required' });
+            return;
+        }
+
+        // ── SSE Headers ─────────────────────────────────────────────────────
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
-        res.write(`data: ${JSON.stringify({ type: 'error', message: 'AI Credit Limit Reached. Please upgrade your plan.' })}\n\n`);
-        res.end();
-        return;
-    }
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders();
 
-    if (!query) {
-        res.status(400).json({ error: 'Query is required' });
-        return;
-    }
+        const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-    // ── SSE Headers ──────────────────────────────────────────────────────────
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx buffering if used
-    res.flushHeaders();
+        // Handle client disconnect
+        let aborted = false;
+        req.on('close', () => { aborted = true; });
 
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-
-    // Handle client disconnect
-    let aborted = false;
-    req.on('close', () => { aborted = true; });
-
-    try {
-        const context = await getAIContext(req, persona, agentId, history);
         const stream = aiService.processQueryStream(query, context);
 
         let fullText = '';
@@ -290,10 +292,11 @@ export const processChatStream = async (req, res) => {
                     }
 
                     if (conversationId) {
-                        await supabase.from('ai_chat_messages').insert([
+                        // Fire-and-forget: don't delay the SSE stream for history persistence
+                        supabase.from('ai_chat_messages').insert([
                             { organization_id: req.user.organizationId, user_id: req.user.id, conversation_id: conversationId, role: 'user', content: query },
                             { organization_id: req.user.organizationId, user_id: req.user.id, conversation_id: conversationId, role: 'model', content: chunk.text }
-                        ]);
+                        ]).then(() => {}).catch(e => console.error('Stream history save failed:', e.message));
                     }
                 } catch (histErr) {
                     console.error('Stream history save failed:', histErr.message);
@@ -473,8 +476,11 @@ export const predictRevenue = async (req, res) => {
         .eq('organization_id', req.user.organizationId)
         .order('created_at', { ascending: true });
 
+    // Null guard: if the Supabase query fails, invoices will be null
+    const safeInvoices = invoices || [];
+
     // 2. Format for AI analysis
-    const historicalData = invoices.reduce((acc, inv) => {
+    const historicalData = safeInvoices.reduce((acc, inv) => {
         const month = new Date(inv.created_at).toISOString().slice(0, 7); // YYYY-MM
         acc[month] = (acc[month] || 0) + inv.total;
         return acc;
@@ -685,7 +691,8 @@ export const getConversationMessages = async (req, res) => {
         if (id === 'legacy') {
             query = query.is('conversation_id', null).eq('user_id', req.user.id);
         } else {
-            query = query.eq('conversation_id', id);
+            query = query.eq('conversation_id', id)
+                        .eq('organization_id', req.user.organizationId);
         }
 
         const { data, error } = await query;
@@ -750,6 +757,7 @@ export const deleteChatHistory = async (req, res) => {
 
 export const getBudget = async (req, res) => {
     const userId = req.user?.id || 'anon';
-    const budget = aiService.getBudgetStatus(userId);
+    const orgId = req.user?.organizationId;
+    const budget = await aiService.getBudgetStatus(userId, orgId);
     res.json(budget);
 };

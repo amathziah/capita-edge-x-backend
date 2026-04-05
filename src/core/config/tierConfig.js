@@ -166,12 +166,22 @@ export const PLAN_TIERS = {
     },
 };
 
+// Alias: 'free' maps to 'starter' for consistent lookups
+PLAN_TIERS.free = PLAN_TIERS.starter;
+
+/**
+ * Normalize tier key: handles common aliases
+ */
+const normalizeTierKey = (tier) => {
+    if (!tier || tier === 'free') return 'starter';
+    return tier;
+};
 
 /**
  * Get config for a specific tier. Falls back to 'starter' for unknown tiers.
  */
 export const getTierConfig = (tier) => {
-    return PLAN_TIERS[tier] || PLAN_TIERS.starter;
+    return PLAN_TIERS[normalizeTierKey(tier)] || PLAN_TIERS.starter;
 };
 
 /**

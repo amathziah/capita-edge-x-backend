@@ -2,6 +2,7 @@
  * Error Handler Middleware
  * Centralized error handling for consistent API responses
  */
+import fs from 'fs';
 
 /**
  * Custom API Error class
@@ -21,11 +22,11 @@ export class APIError extends Error {
 export const errorHandler = (err, req, res, next) => {
     console.error('Error:', err);
 
-    // [DEBUG] Log to file
-    import('fs').then(fs => {
-        const log = `[${new Date().toISOString()}] ${err.stack || err.message}\n`;
-        fs.appendFileSync('./error.log', log);
-    }).catch(e => console.error('Failed to write log', e));
+    // Log to file (async, non-blocking)
+    const log = `[${new Date().toISOString()}] ${err.stack || err.message}\n`;
+    fs.appendFile('./error.log', log, (writeErr) => {
+        if (writeErr) console.error('Failed to write error log:', writeErr);
+    });
 
     // Default error response
     let statusCode = err.statusCode || 500;

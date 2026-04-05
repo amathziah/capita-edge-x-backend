@@ -3,18 +3,18 @@ import dotenv from 'dotenv';
 import { formatCurrency, getCurrencySymbol } from '../../core/utils/formatting.js';
 import { supabase } from '../../core/database/supabase.js';
 import analyticsService from '../analytics/analytics.service.js';
+import { PLAN_TIERS } from '../../core/config/tierConfig.js';
 
 dotenv.config();
 
 /**
  * AI Service using Google Gemini API
- * Optimized for Free Tier: 20 users on 40 RPD budget
  * 
  * Strategy:
- * 1. Only use models with free-tier quota (2.5-flash, 3-flash)
- * 2. TTL-based response cache (3-5x RPD multiplier)
- * 3. Per-user daily AI budget (fair share)
- * 4. Proactive rate limiter (token bucket, prevents 429s)
+ * 1. Tier-aware model routing (limits from tierConfig.js — single source of truth)
+ * 2. TTL-based LRU response cache
+ * 3. Monthly plan budget (enforced via Supabase ai_requests table)
+ * 4. Token bucket rate limiter (prevents Gemini 429s)
  * 5. Rule-based insights (zero API calls)
  * 6. Request deduplication + circuit breaker
  */
@@ -26,9 +26,10 @@ class AIService {
         this.circuitStatus = { open: false, until: 0 };
 
         // ═══════════════════════════════════════════════════════
-        // RESPONSE CACHE — TTL-based, in-memory
+        // RESPONSE CACHE — TTL-based, LRU eviction
         // ═══════════════════════════════════════════════════════
         this.cache = new Map(); // key → { data, expiresAt }
+        this.CACHE_MAX_SIZE = 200;
         this.CACHE_TTL = {
             chat: 5 * 60 * 1000,       // 5 minutes for chat
             insights: 30 * 60 * 1000,   // 30 minutes for insights
@@ -37,56 +38,36 @@ class AIService {
         };
 
         // ═══════════════════════════════════════════════════════
-        // RATE LIMITER — Token Bucket (Enterprise Scaled)
+        // RATE LIMITER — Token Bucket
         // ═══════════════════════════════════════════════════════
         this.rateBucket = {
-            tokens: 1000,          // 100x capacity increase for Paid Tier 1
-            maxTokens: 1000,
-            refillRate: 1000,      // 1000 tokens per minute
+            tokens: 60,
+            maxTokens: 60,
+            refillRate: 15,        // 15 tokens per minute (Gemini free-tier safe)
             lastRefill: Date.now(),
         };
 
         // ═══════════════════════════════════════════════════════
-        // DAILY SAFETY BUDGET — 10,000 PER PROJECT
+        // TIER CONFIG — Derived from tierConfig.js (single source of truth)
+        // Model routing per tier — limits come from PLAN_TIERS at runtime
         // ═══════════════════════════════════════════════════════
-        this.dailyBudget = {
-            maxRequests: 10000,    // High safety ceiling for paid project
-            used: 0,
-            resetDate: this._getTodayPacific(),
-            perUser: new Map(),   // userId → count
+        this.tierModels = {
+            starter: ['gemini-2.5-flash'],
+            free:    ['gemini-2.5-flash'],            // alias for starter
+            solo:    ['gemini-2.5-flash'],
+            solo_pro: ['gemini-2.5-flash'],
+            enterprise: ['gemini-2.5-flash'],
         };
+
+        // Defaults/Fallback
+        this.models = ['gemini-2.5-flash'];
 
         if (!apiKey || apiKey === 'your_gemini_api_key_here') {
             console.warn('⚠️  Gemini API key not configured. AI features will use fallback logic.');
             this.genAI = null;
         } else {
             this.genAI = new GoogleGenerativeAI(apiKey);
-            
-            // ═══════════════════════════════════════════════════════
-            // ENTERPRISE MODEL ROUTING (Paid Tier 1 Optimized)
-            // ═══════════════════════════════════════════════════════
-            this.tiers = {
-                free: {
-                    models: ['gemini-2.5-flash', 'gemini-3-flash-preview'],
-                    limit: 25, // Synchronized with tierConfig.js (was 100)
-                    label: 'Free'
-                },
-                solo: {
-                    models: ['gemini-2.5-flash', 'gemini-3.1-pro'],
-                    limit: 1000, // Massive expansion for paid users
-                    label: 'Solo'
-                },
-                solo_pro: {
-                    models: ['gemini-3.1-pro', 'gemini-2.5-flash'],
-                    limit: 10000, // High-Volume Enterprise limit
-                    label: 'Solo Pro'
-                }
-            };
-
-            // Defaults/Fallback
-            this.models = ['gemini-2.5-flash', 'gemini-3.1-pro'];
-            
-            console.log('📡 AI Service Activated — Enterprise Paid Tier Active (Baby-1 High Capacity)');
+            console.log('📡 AI Service Activated — Tier-aware routing enabled');
         }
     }
 
@@ -112,17 +93,24 @@ class AIService {
             this.cache.delete(key);
             return null;
         }
+        // LRU: move to end of Map iteration order on access
+        this.cache.delete(key);
+        this.cache.set(key, entry);
         return entry.data;
     }
 
     /**
-     * Set cache entry with TTL
+     * Set cache entry with TTL (LRU eviction when full)
      */
     _cacheSet(key, data, ttlMs) {
-        // Prevent cache from growing unbounded (max 200 entries)
-        if (this.cache.size > 200) {
-            const oldest = this.cache.keys().next().value;
-            this.cache.delete(oldest);
+        // If key already exists, delete first to update insertion order
+        if (this.cache.has(key)) {
+            this.cache.delete(key);
+        }
+        // Evict least-recently-used entries if at capacity
+        while (this.cache.size >= this.CACHE_MAX_SIZE) {
+            const lruKey = this.cache.keys().next().value;
+            this.cache.delete(lruKey);
         }
         this.cache.set(key, { data, expiresAt: Date.now() + ttlMs });
     }
@@ -132,11 +120,17 @@ class AIService {
     // ═══════════════════════════════════════════════════════════
 
     /**
-     * Check if we can make a request without hitting RPM limits
+     * Refill tokens based on elapsed time, then check if we have capacity
      */
     _canMakeRequest() {
-        // Temporarily disabled: Always allow requests
-        return true;
+        const now = Date.now();
+        const elapsed = (now - this.rateBucket.lastRefill) / 60000; // minutes
+        const refill = Math.floor(elapsed * this.rateBucket.refillRate);
+        if (refill > 0) {
+            this.rateBucket.tokens = Math.min(this.rateBucket.maxTokens, this.rateBucket.tokens + refill);
+            this.rateBucket.lastRefill = now;
+        }
+        return this.rateBucket.tokens > 0;
     }
 
     /**
@@ -158,7 +152,16 @@ class AIService {
     }
 
     /**
-     * Check if the organization has exhausted their monthly plan budget
+     * Normalize tier key: handles both 'starter' and 'free' → canonical key
+     */
+    _normalizeTierKey(key) {
+        if (!key || key === 'free') return 'starter';
+        return key;
+    }
+
+    /**
+     * Check if the organization has exhausted their monthly plan budget.
+     * Limits are sourced from PLAN_TIERS (tierConfig.js) — single source of truth.
      */
     async _checkPlanBudget(orgId) {
         if (!orgId) return { allowed: true, limit: 999, used: 0 };
@@ -170,8 +173,11 @@ class AIService {
             .eq('id', orgId)
             .single();
         
-        const tierKey = org?.plan_tier || 'free';
-        const config = this.tiers[tierKey] || this.tiers.free;
+        const rawTier = org?.plan_tier || 'starter';
+        const tierKey = this._normalizeTierKey(rawTier);
+        const planConfig = PLAN_TIERS[tierKey] || PLAN_TIERS.starter;
+        const queryLimit = planConfig.ai.queriesPerMonth;
+        const models = this.tierModels[tierKey] || this.models;
 
         // 2. Get Usage for current month
         const firstOfMonth = new Date();
@@ -182,24 +188,20 @@ class AIService {
             .from('ai_requests')
             .select('*', { count: 'exact', head: true })
             .eq('organization_id', orgId)
-            .gte('createdAt', firstOfMonth.toISOString());
+            .gte('created_at', firstOfMonth.toISOString());
 
         if (error) {
             console.error('Budget check error:', error);
-            return { allowed: true, limit: config.limit, used: 0 }; // Fail open
+            return { allowed: true, limit: queryLimit, used: 0 }; // Fail open
         }
 
         return {
-            allowed: count < config.limit,
+            allowed: count < queryLimit,
             used: count,
-            limit: config.limit,
-            tier: config.label,
-            models: config.models
+            limit: queryLimit,
+            tier: planConfig.name,
+            models
         };
-    }
-
-    _isDailyBudgetExhausted(userId) {
-        return false; // Deprecated by monthly plan budget
     }
 
     /**
@@ -207,15 +209,6 @@ class AIService {
      */
     _sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    /**
-     * Record a successful API call against the budget
-     */
-    _recordUsage(userId) {
-        this.dailyBudget.used++;
-        const userUsed = this.dailyBudget.perUser.get(userId) || 0;
-        this.dailyBudget.perUser.set(userId, userUsed + 1);
     }
 
     /**
@@ -378,8 +371,12 @@ class AIService {
     }
 
     isCircuitOpen() {
-        // Temporarily disabled: Always try cloud brain first
-        return false;
+        if (!this.circuitStatus.open) return false;
+        if (Date.now() > this.circuitStatus.until) {
+            this.circuitStatus.open = false;
+            return false;
+        }
+        return true;
     }
 
     openCircuit(error) {
@@ -462,11 +459,12 @@ class AIService {
         }
 
         const lockKey = `chat_${userId}_${query.slice(0, 20)}`;
+        const targetModels = budget.models || this.models;
 
         return this.executeWithLock(lockKey, async () => {
             let lastError = null;
             
-            for (const modelName of this.models) {
+            for (const modelName of targetModels) {
                 try {
                     this._consumeToken();
                     const modelInstance = this.getModel(modelName);
@@ -484,17 +482,17 @@ class AIService {
                     const text = response.text();
                     const action = this.extractAction(text, query);
 
+                    const budgetStatus = await this.getBudgetStatus(userId, orgId);
                     const responseData = {
                         text: text.trim(),
                         action,
                         data: action ? action.data : null,
                         usage: response.usageMetadata,
                         provider: `cloud:${modelName}`,
-                        budget: this.getBudgetStatus(userId),
+                        budget: budgetStatus,
                     };
 
-                    // Record usage & cache
-                    this._recordUsage(userId);
+                    // Cache the response
                     this._cacheSet(cacheKey, responseData, this.CACHE_TTL.chat);
 
                     return responseData;
@@ -618,8 +616,7 @@ class AIService {
                 }
 
                 const action = this.extractAction(fullText, query);
-
-                this._recordUsage(userId);
+                const budgetStatus = await this.getBudgetStatus(userId, orgId);
                 
                 // Cache the full response for subsequent non-stream calls
                 const cacheKey = this._cacheKey('chat', query);
@@ -629,7 +626,7 @@ class AIService {
                     data: action ? action.data : null,
                     usage: finalResponse?.usageMetadata,
                     provider: `cloud:${modelUsed}`,
-                    budget: this.getBudgetStatus(userId),
+                    budget: budgetStatus,
                 }, this.CACHE_TTL.chat);
 
                 yield { 
@@ -638,7 +635,7 @@ class AIService {
                     action,
                     usage: finalResponse?.usageMetadata,
                     provider: `cloud:${modelUsed}`,
-                    budget: this.getBudgetStatus(userId)
+                    budget: budgetStatus
                 };
 
                 return; // Stream succeeded, exit the generator successfully
@@ -705,8 +702,9 @@ class AIService {
         }
 
         let lastError = null;
-        for (let i = 0; i < this.models.length; i++) {
-            const modelName = this.models[i];
+        const targetModels = budget.models || this.models;
+        for (let i = 0; i < targetModels.length; i++) {
+            const modelName = targetModels[i];
             try {
                 this._consumeToken();
                 const modelInstance = this.getModel(modelName, true);
@@ -715,18 +713,18 @@ class AIService {
                 const result = await modelInstance.generateContent(systemPrompt);
                 const response = await result.response;
                 
-                this._recordUsage(userId);
+                const budgetStatus = await this.getBudgetStatus(userId, orgId);
                 
                 return {
                     text: response.text().trim(),
                     usage: response.usageMetadata,
                     provider: `cloud:${modelName}:json`,
-                    budget: this.getBudgetStatus(userId),
+                    budget: budgetStatus,
                 };
             } catch (error) {
                 lastError = error;
                 // If there's another model to try, wait briefly to avoid rapid-fire 429s
-                if (i < this.models.length - 1 && this.isRetryable(error)) {
+                if (i < targetModels.length - 1 && this.isRetryable(error)) {
                     console.log(`📡 [${modelName}] Retryable error, cooling down for 1s...`);
                     await this._sleep(1200);
                     continue;
@@ -736,7 +734,7 @@ class AIService {
         }
 
         // If all models fail, throw a Cloud Busy error instead of falling back to local mode
-        throw new Error(`Cloud Busy: All AI models (${this.models.join(', ')}) are currently rate-limited or unavailable. Please try again in a few seconds.`);
+        throw new Error(`Cloud Busy: All AI models (${targetModels.join(', ')}) are currently rate-limited or unavailable. Please try again in a few seconds.`);
     }
 
     buildChatbotPrompt(query, context) {
@@ -825,7 +823,7 @@ class AIService {
                 return { ...cached, provider: cached.provider + ':cached' };
             }
 
-            if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+            if (!this.genAI || !this._canMakeRequest()) {
                 throw new Error('Cloud Busy: Unable to parse invoice using cloud models.');
             }
 
@@ -839,8 +837,7 @@ class AIService {
                     const jsonText = response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
                     const parsed = JSON.parse(jsonText);
                     
-                    this._recordUsage(userId);
-                    const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:magic`, budget: this.getBudgetStatus(userId) };
+                    const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:magic` };
                     this._cacheSet(cacheKey, responseData, this.CACHE_TTL.invoice);
                     
                     return responseData;
@@ -861,7 +858,7 @@ class AIService {
         const cached = this._cacheGet(cacheKey);
         if (cached) return { ...cached, provider: cached.provider + ':cached' };
 
-        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+        if (!this.genAI || !this._canMakeRequest()) {
             throw new Error('Cloud Busy: AI Audit is currently unavailable.');
         }
 
@@ -883,10 +880,7 @@ class AIService {
                     suggestions: parsed.suggestions ?? ["Looks perfect!"],
                     usage: response.usageMetadata,
                     provider: `cloud:${modelName}:audit`,
-                    budget: this.getBudgetStatus(userId)
                 };
-
-                this._recordUsage(userId);
                 this._cacheSet(cacheKey, data, this.CACHE_TTL.invoice);
                 return data;
             } catch (error) {
@@ -936,7 +930,7 @@ class AIService {
             return { ...cached, provider: cached.provider + ':cached' };
         }
 
-        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+        if (!this.genAI || !this._canMakeRequest()) {
             throw new Error('Cloud Busy: Unable to generate collection draft using cloud models.');
         }
 
@@ -949,8 +943,7 @@ class AIService {
                 const response = await result.response;
                 const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
                 
-                this._recordUsage(userId);
-                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:draft`, budget: this.getBudgetStatus(userId) };
+                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:draft` };
                 this._cacheSet(cacheKey, responseData, this.CACHE_TTL.draft);
                 
                 return responseData;
@@ -970,7 +963,7 @@ class AIService {
             return { ...cached, provider: cached.provider + ':cached' };
         }
 
-        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+        if (!this.genAI || !this._canMakeRequest()) {
             throw new Error('Cloud Busy: Unable to generate settlement offer using cloud models.');
         }
         
@@ -983,8 +976,7 @@ class AIService {
                 const response = await result.response;
                 const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
                 
-                this._recordUsage(userId);
-                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:settle`, budget: this.getBudgetStatus(userId) };
+                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:settle` };
                 this._cacheSet(cacheKey, responseData, this.CACHE_TTL.draft);
                 
                 return responseData;
@@ -998,7 +990,7 @@ class AIService {
     }
 
     async parseCommand(text, userId = 'anon') {
-        if (!this.genAI || this._isDailyBudgetExhausted(userId) || !this._canMakeRequest()) {
+        if (!this.genAI || !this._canMakeRequest()) {
             throw new Error('Cloud Busy: AI Command Parser is temporarily unavailable.');
         }
         
@@ -1011,8 +1003,7 @@ class AIService {
                 const response = await result.response;
                 const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
                 
-                this._recordUsage(userId);
-                return { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:cmd`, budget: this.getBudgetStatus(userId) };
+                return { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:cmd` };
             } catch (error) {
                 if (this.isRetryable(error)) continue;
                 break;

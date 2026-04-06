@@ -66,7 +66,7 @@ export const validateInvoice = [
     body('discount').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Discount must be zero or positive'),
     body('shipping').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Shipping must be zero or positive'),
     body('notes').optional().isString().withMessage('Notes must be a string'),
-    body('status').optional().isIn(['draft', 'sent', 'paid', 'overdue', 'cancelled']).withMessage('Invalid status'),
+    body('status').optional().isIn(['draft', 'sent', 'partially_paid', 'paid', 'overdue', 'cancelled', 'void', 'write_off']).withMessage('Invalid status'),
     handleValidationErrors
 ];
 

@@ -4,6 +4,8 @@ import { formatCurrency, getCurrencySymbol } from '../../core/utils/formatting.j
 import { supabase } from '../../core/database/supabase.js';
 import analyticsService from '../analytics/analytics.service.js';
 import { PLAN_TIERS } from '../../core/config/tierConfig.js';
+import { brandProfile } from '../../core/config/brandProfile.js';
+import { getInvoiceAmounts, resolveInvoiceStatus } from '../invoices/invoiceStatus.service.js';
 
 dotenv.config();
 
@@ -400,25 +402,27 @@ class AIService {
                 }
                 
                 case "get_overdue_invoices": {
-                    // Fetch directly instead of relying on context
                     const res = await supabase.from('invoices')
                         .select('*')
                         .eq('organization_id', orgId)
-                        .eq('status', 'pending')
-                        .lt('dueDate', new Date().toISOString())
-                        .order('created_at', { ascending: false });
-                    
-                    const overdueInvoices = res.data || [];
+                        .order('date', { ascending: false });
+
+                    if (res.error) {
+                        throw res.error;
+                    }
+
+                    const overdueInvoices = (res.data || []).filter(inv => resolveInvoiceStatus(inv) === 'overdue');
                     const now = new Date();
                     const ageing = { current: 0, near: 0, critical: 0, totalOverdue: 0 };
                     
                     overdueInvoices.forEach(inv => {
                         const dueDate = inv.dueDate || inv.due_date; // Backwards compatibility if any
                         const diffDays = Math.ceil((now - new Date(dueDate)) / 86400000);
-                        ageing.totalOverdue += inv.total;
-                        if (diffDays <= 30) ageing.current += inv.total;
-                        else if (diffDays <= 60) ageing.near += inv.total;
-                        else ageing.critical += inv.total;
+                        const { balanceDue } = getInvoiceAmounts(inv);
+                        ageing.totalOverdue += balanceDue;
+                        if (diffDays <= 30) ageing.current += balanceDue;
+                        else if (diffDays <= 60) ageing.near += balanceDue;
+                        else ageing.critical += balanceDue;
                     });
                     
                     return { ageing, riskyInvoices: overdueInvoices.slice(0, 5) };
@@ -947,6 +951,12 @@ class AIService {
         contextBlock += `- For stable concept questions like "What is IGST?" or "What are GST rules in India?", answer directly in persona.\n`;
         contextBlock += `- For law, thresholds, rates, or compliance rules that may change over time, give a careful high-level answer and tell the user to verify the latest rule with a CA or the official portal if precision matters.\n`;
         contextBlock += `- NEVER say you lack general tax knowledge. Only say you lack the user's private business data when tools were not used.\n\n`;
+        contextBlock += `**CAPITAEDGEX IDENTITY POLICY:**\n`;
+        contextBlock += `- If the user asks who you are, who built this, what the company does, what the team believes, why ${brandProfile.name} exists, or any personal/identity question about the assistant, answer from the perspective of the **${brandProfile.teamVoice}**.\n`;
+        contextBlock += `- Use first-person plural for company questions: "we", "our", "us". Do NOT answer like an individual founder unless the user names a real person and that fact is actually available in context.\n`;
+        contextBlock += `- The ${brandProfile.name} mission is: "${brandProfile.mission}"\n`;
+        contextBlock += `- When asked about motive or purpose, explain: "${brandProfile.purpose}"\n`;
+        contextBlock += `- For brand/company answers, stay supportive, clear, and human. Do not invent biographies, team history, funding claims, office locations, or legal claims that were not provided.\n\n`;
 
         contextBlock += `---\n`;
         contextBlock += `## RESPONSE FORMATTING RULES (YOU MUST FOLLOW)\n\n`;

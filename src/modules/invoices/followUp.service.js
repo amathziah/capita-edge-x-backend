@@ -1,6 +1,7 @@
 import { supabase } from '../../core/database/supabase.js';
 import emailService from '../../core/services/email.service.js';
 import { DEFAULTS } from '../../core/config/constants.js';
+import { isCollectibleInvoice } from './invoiceStatus.service.js';
 
 export const checkAndSendFollowUps = async () => {
   const now = new Date();
@@ -14,13 +15,15 @@ export const checkAndSendFollowUps = async () => {
         id, name, email
       )
     `)
-    .in('status', ['sent', 'overdue'])
+    .in('status', ['sent', 'partially_paid', 'overdue'])
     .lt('follow_up_count', 3)
     .not('customers.email', 'is', null);
 
   if (error || !invoices) return;
 
   for (const invoice of invoices) {
+    if (!isCollectibleInvoice(invoice)) continue;
+
     // Try to fetch org config for custom days
     const { data: config } = await supabase
       .from('organization_configs')
@@ -98,8 +101,7 @@ Thank you.
       // Update follow-up tracking
       const updateData = {
         follow_up_count: followUpNumber,
-        follow_up_last_sent_at: now.toISOString(),
-        status: 'overdue'
+        follow_up_last_sent_at: now.toISOString()
       };
 
       if (followUpNumber === 1) {

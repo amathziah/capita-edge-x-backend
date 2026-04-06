@@ -4,7 +4,7 @@ import { validateId, validateInvoice, validateEmail } from '../../core/middlewar
 import { 
   getInvoices, getInvoiceById, createInvoice, updateInvoice,
   deleteInvoice, generatePdf, sendInvoiceEmail, bulkReminders,
-  getInvoiceByShareToken, getInvoiceShareDetails, getNextInvoiceNumber, getInvoiceDraftDefaults
+  getInvoiceByShareToken, getInvoiceShareDetails, getNextInvoiceNumber, getInvoiceDraftDefaults, shareInvoice
 } from './invoice.controller.js';
 
 import { checkAndSendFollowUps } from './followUp.service.js';
@@ -24,6 +24,7 @@ router.delete('/:id', validateId, asyncHandler(deleteInvoice));
 
 // Actions
 router.get('/:id/pdf', validateId, asyncHandler(generatePdf));
+router.post('/:id/share', validateId, asyncHandler(shareInvoice));
 router.post('/:id/send', validateId, validateEmail, asyncHandler(sendInvoiceEmail));
 router.post('/:id/reminder', validateId, validateEmail, asyncHandler(sendInvoiceEmail)); // Alias for reminders
 

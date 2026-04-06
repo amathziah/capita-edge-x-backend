@@ -36,7 +36,8 @@ export const exportData = async (req, res) => {
     const type = req.query.type || 'invoices';
     const csv = await analyticsService.exportToCSV(type, {}, req.user.organizationId);
 
-    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.setHeader('Content-Disposition', `attachment; filename=${type}-export.csv`);
     res.send(csv);
 };

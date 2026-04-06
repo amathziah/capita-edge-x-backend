@@ -1,5 +1,6 @@
 import { supabase } from '../../core/database/supabase.js';
 import { DEFAULTS, HEALTH_SCORE, TAX_RESERVES, PLACEHOLDERS, CUSTOMER_HEALTH } from '../../core/config/constants.js';
+import { getInvoiceAmounts, resolveInvoiceStatus } from '../invoices/invoiceStatus.service.js';
 
 /**
  * Analytics Service
@@ -19,7 +20,7 @@ class AnalyticsService {
 
         const { data: invoices, error } = await supabase
             .from('invoices')
-            .select('createdAt, status, total, dueDate')
+            .select('createdAt, status, total, net_receivable, amount_paid, dueDate')
             .eq('organization_id', organizationId)
             .gte('createdAt', oneYearAgo.toISOString());
 
@@ -68,17 +69,16 @@ class AnalyticsService {
         invoices.forEach(inv => {
             const key = getKey(inv.createdAt);
             initKey(key);
+            const resolvedStatus = resolveInvoiceStatus(inv);
+            const { balanceDue } = getInvoiceAmounts(inv);
 
             trends[key].invoice_count++;
-            if (inv.status === 'paid') {
+            if (resolvedStatus === 'paid') {
                 trends[key].revenue += inv.total;
-            } else if (['pending', 'draft'].includes(inv.status)) { // aggregated pending
-                const isOverdue = inv.status === 'pending' && new Date(inv.dueDate) < new Date();
-                if (isOverdue) {
-                    trends[key].overdue += inv.total;
-                    trends[key].pending += inv.total;
-                } else {
-                    trends[key].pending += inv.total;
+            } else if (resolvedStatus === 'sent' || resolvedStatus === 'partially_paid' || resolvedStatus === 'overdue') {
+                trends[key].pending += balanceDue;
+                if (resolvedStatus === 'overdue') {
+                    trends[key].overdue += balanceDue;
                 }
             }
         });
@@ -108,7 +108,7 @@ class AnalyticsService {
 
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('id, customer_id, status, total, createdAt, dueDate')
+            .select('id, customer_id, status, total, net_receivable, amount_paid, createdAt, dueDate')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -132,13 +132,15 @@ class AnalyticsService {
         invoices.forEach(inv => {
             if (customerStats[inv.customer_id]) {
                 const stats = customerStats[inv.customer_id];
+                const resolvedStatus = resolveInvoiceStatus(inv);
+                const { totalAmount, balanceDue } = getInvoiceAmounts(inv);
                 stats.total_invoices++;
-                stats._total_value_for_avg += inv.total;
+                stats._total_value_for_avg += totalAmount;
 
-                if (inv.status === 'paid') {
-                    stats.total_revenue += inv.total;
-                } else if (inv.status === 'pending') {
-                    stats.pending_amount += inv.total;
+                if (resolvedStatus === 'paid') {
+                    stats.total_revenue += totalAmount;
+                } else if (resolvedStatus === 'sent' || resolvedStatus === 'partially_paid' || resolvedStatus === 'overdue') {
+                    stats.pending_amount += balanceDue;
                 }
 
                 if (!stats.last_invoice_date || new Date(inv.createdAt) > new Date(stats.last_invoice_date)) {
@@ -198,10 +200,10 @@ class AnalyticsService {
         const lastTransactionDate = lastInvoice ? lastInvoice.createdAt : null;
 
         const breakdown = {
-            paid: invoices.filter(i => i.status === 'paid').length,
-            pending: invoices.filter(i => i.status === 'pending').length,
-            overdue: invoices.filter(i => i.status === 'pending' && new Date(i.dueDate) < new Date()).length,
-            draft: invoices.filter(i => i.status === 'draft').length,
+            paid: invoices.filter(i => resolveInvoiceStatus(i) === 'paid').length,
+            pending: invoices.filter(i => ['sent', 'partially_paid'].includes(resolveInvoiceStatus(i))).length,
+            overdue: invoices.filter(i => resolveInvoiceStatus(i) === 'overdue').length,
+            draft: invoices.filter(i => resolveInvoiceStatus(i) === 'draft').length,
         };
 
         // 1. Recurrence Math
@@ -283,7 +285,7 @@ class AnalyticsService {
         // Invoices
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('status, total, createdAt, dueDate')
+            .select('status, total, net_receivable, amount_paid, createdAt, dueDate')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -302,13 +304,22 @@ class AnalyticsService {
         let monthly_revenue = 0;
 
         invoices.forEach(inv => {
-            if (inv.status === 'paid') {
-                total_received += inv.total;
+            const resolvedStatus = resolveInvoiceStatus(inv);
+            const { totalAmount, totalPaid, balanceDue } = getInvoiceAmounts(inv);
+
+            if (resolvedStatus === 'paid') {
+                total_received += totalAmount;
                 if (new Date(inv.createdAt) >= thirtyDaysAgo) {
-                    monthly_revenue += inv.total;
+                    monthly_revenue += totalAmount;
                 }
-            } else if (inv.status === 'pending') {
-                total_pending += inv.total;
+            } else if (resolvedStatus === 'partially_paid') {
+                total_received += totalPaid;
+                total_pending += balanceDue;
+                if (new Date(inv.createdAt) >= thirtyDaysAgo) {
+                    monthly_revenue += totalPaid;
+                }
+            } else if (resolvedStatus === 'sent' || resolvedStatus === 'overdue') {
+                total_pending += balanceDue;
             }
         });
 
@@ -334,7 +345,7 @@ class AnalyticsService {
         // Fetch base data
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
-            .select('id, status, total, dueDate')
+            .select('id, status, total, net_receivable, amount_paid, dueDate')
             .eq('organization_id', organizationId);
 
         if (invError) throw new Error(invError.message);
@@ -370,20 +381,21 @@ class AnalyticsService {
         };
 
         invoices.forEach(inv => {
+            const resolvedStatus = resolveInvoiceStatus(inv);
+            const { totalAmount, balanceDue } = getInvoiceAmounts(inv);
             stats.total_invoices++;
 
-            if (inv.status === 'paid') {
+            if (resolvedStatus === 'paid') {
                 stats.paid_invoices++;
-                stats.total_revenue += inv.total;
-            } else if (inv.status === 'pending') {
+                stats.total_revenue += totalAmount;
+            } else if (resolvedStatus === 'sent' || resolvedStatus === 'partially_paid' || resolvedStatus === 'overdue') {
                 stats.pending_invoices++;
-                stats.pending_payments += inv.total;
-                const isOverdue = new Date(inv.dueDate) < new Date();
-                if (isOverdue) {
+                stats.pending_payments += balanceDue;
+                if (resolvedStatus === 'overdue') {
                     stats.overdue_invoices++;
-                    stats.overdue_revenue += inv.total;
+                    stats.overdue_revenue += balanceDue;
                 }
-            } else if (inv.status === 'draft') {
+            } else if (resolvedStatus === 'draft') {
                 stats.draft_invoices++;
             }
         });
@@ -404,31 +416,48 @@ class AnalyticsService {
 
         switch (type) {
             case 'invoices':
-                const { data: invoices } = await supabase
+                const { data: invoices, error: invoicesError } = await supabase
                     .from('invoices')
-                    .select('invoiceNumber, buyer, total, status, createdAt, dueDate')
+                    .select('invoiceNumber, buyer, total, net_receivable, amount_paid, status, createdAt, dueDate')
                     .eq('organization_id', organizationId)
                     .order('createdAt', { ascending: false });
 
-                data = invoices;
-                headers = ['Invoice Number', 'Customer', 'Total', 'Status', 'Created', 'Due Date'];
+                if (invoicesError) throw new Error(invoicesError.message);
+
+                data = invoices || [];
+                headers = ['Invoice Number', 'Customer', 'Total', 'Paid', 'Balance Due', 'Status', 'Created', 'Due Date'];
                 data = data.map(row => [
                     row.invoiceNumber,
-                    (typeof row.buyer === 'string' ? JSON.parse(row.buyer).name : row.buyer?.name) || '',
+                    (() => {
+                        if (!row.buyer) return '';
+                        if (typeof row.buyer === 'string') {
+                            try {
+                                return JSON.parse(row.buyer).name || '';
+                            } catch {
+                                return row.buyer;
+                            }
+                        }
+                        return row.buyer?.name || '';
+                    })(),
                     row.total,
-                    row.status,
+                    Number(row.amount_paid || 0),
+                    getInvoiceAmounts(row).balanceDue,
+                    resolveInvoiceStatus(row),
                     row.createdAt,
                     row.dueDate
                 ]);
                 break;
 
             case 'customers':
-                const { data: customers } = await supabase
+                const { data: customers, error: customersError } = await supabase
                     .from('customers')
                     .select('name, email, phone, address')
                     .eq('organization_id', organizationId)
                     .order('name');
-                data = customers;
+
+                if (customersError) throw new Error(customersError.message);
+
+                data = customers || [];
                 headers = ['Name', 'Email', 'Phone', 'Address'];
                 data = data.map(row => [row.name, row.email, row.phone, row.address]);
                 break;
@@ -437,7 +466,7 @@ class AnalyticsService {
                 return ''; // Inventory removed
 
             case 'payments':
-                const { data: payments } = await supabase
+                const { data: payments, error: paymentsError } = await supabase
                     .from('payments')
                     .select(`
                         amount, date, method,
@@ -445,7 +474,10 @@ class AnalyticsService {
                     `)
                     .eq('organization_id', organizationId) // Direct filter safer than join filter for RLS
                     .order('date', { ascending: false });
-                data = payments;
+
+                if (paymentsError) throw new Error(paymentsError.message);
+
+                data = payments || [];
                 headers = ['Amount', 'Date', 'Method', 'Invoice'];
                 data = data.map(row => [
                     row.amount,

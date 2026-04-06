@@ -5,6 +5,11 @@ import pdfService from '../invoices/pdf.service.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
 import { mapConfigToFrontend } from '../../core/utils/configUtils.js';
 import { parsePagination } from '../../core/utils/pagination.js';
+import {
+    getInvoiceAmounts,
+    normalizeStoredInvoiceStatus,
+    resolveStoredStatusForPersistence
+} from '../invoices/invoiceStatus.service.js';
 
 export const getPayments = async (req, res) => {
     let query = supabase
@@ -63,24 +68,28 @@ export const createPayment = async (req, res) => {
 
         const { data: invoice } = await supabase
             .from('invoices')
-            .select('id, total, invoiceNumber, organization_id')
+            .select('id, total, net_receivable, amount_paid, status, customer_id, invoiceNumber, organization_id')
             .eq('id', invoiceId)
             .single();
 
         if (invoice) {
-            if (invoice.status === 'draft') {
+            if (normalizeStoredInvoiceStatus(invoice.status) === 'draft') {
                 throw new Error('Cannot record payment for a draft invoice. Please send or view the invoice first.');
             }
 
             // [LEDGER] Record the transaction
             await ledgerService.recordPayment(payment, invoice);
 
-            if (totalPaid >= invoice.total) {
-                await supabase
-                    .from('invoices')
-                    .update({ status: 'paid' })
-                    .eq('id', invoiceId);
-            }
+            const invoiceWithPayments = { ...invoice, amount_paid: totalPaid };
+            const { balanceDue } = getInvoiceAmounts(invoiceWithPayments);
+            await supabase
+                .from('invoices')
+                .update({
+                    amount_paid: totalPaid,
+                    status: resolveStoredStatusForPersistence(invoiceWithPayments),
+                    updatedAt: new Date().toISOString()
+                })
+                .eq('id', invoiceId);
 
             // Trigger Capita client intelligence update
             if (invoice.customer_id) {
@@ -166,24 +175,28 @@ export const reconcilePayment = async (req, res) => {
 
     const { data: invoice } = await supabase
         .from('invoices')
-        .select('id, total, invoiceNumber, organization_id')
+        .select('id, total, net_receivable, amount_paid, status, customer_id, invoiceNumber, organization_id')
         .eq('id', payment.invoiceId)
         .single();
 
     if (invoice) {
-        if (invoice.status === 'draft') {
+        if (normalizeStoredInvoiceStatus(invoice.status) === 'draft') {
             throw new Error('Cannot reconcile payment for a draft invoice.');
         }
 
         // [LEDGER] Record the transaction
         await ledgerService.recordPayment(payment, invoice);
 
-        if (totalPaid >= invoice.total) {
-            await supabase
-                .from('invoices')
-                .update({ status: 'paid' })
-                .eq('id', payment.invoiceId);
-        }
+        const invoiceWithPayments = { ...invoice, amount_paid: totalPaid };
+        const { balanceDue } = getInvoiceAmounts(invoiceWithPayments);
+        await supabase
+            .from('invoices')
+            .update({
+                amount_paid: totalPaid,
+                status: resolveStoredStatusForPersistence(invoiceWithPayments),
+                updatedAt: new Date().toISOString()
+            })
+            .eq('id', payment.invoiceId);
     }
 
     res.json({ success: true, payment });

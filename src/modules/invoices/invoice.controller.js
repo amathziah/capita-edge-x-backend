@@ -7,6 +7,10 @@ import { mapConfigToFrontend } from '../../core/utils/configUtils.js';
 import { calculateInvoiceTax } from './tax.service.js';
 import { getStateFromGstin } from '../../core/lib/gstUtils.js';
 import { parsePagination } from '../../core/utils/pagination.js';
+import {
+    attachResolvedInvoiceStatus,
+    normalizeStoredInvoiceStatus
+} from './invoiceStatus.service.js';
 
 const escapeLikePattern = (value = '') => value.replace(/[%_]/g, '\\$&');
 
@@ -65,6 +69,51 @@ const getOrCreateOrganizationConfig = async (organizationId) => {
     return insertedConfig;
 };
 
+const markInvoiceAsShared = async (invoiceId, organizationId) => {
+    const timestamp = new Date().toISOString();
+    const { data: invoice, error } = await supabase
+        .from('invoices')
+        .select(`
+            *,
+            customers!invoices_customer_id_fkey (*),
+            items: invoice_items (*)
+        `)
+        .eq('id', invoiceId)
+        .eq('organization_id', organizationId)
+        .single();
+
+    if (error || !invoice) {
+        throw new APIError('Invoice not found', 404);
+    }
+
+    const updates = { updatedAt: timestamp };
+    if (normalizeStoredInvoiceStatus(invoice.status) === 'draft') {
+        updates.status = 'sent';
+    }
+    const shouldUpdate = Object.keys(updates).some((key) => key !== 'updatedAt');
+    if (!shouldUpdate) {
+        return attachResolvedInvoiceStatus(invoice);
+    }
+
+    const { data: updatedInvoice, error: updateError } = await supabase
+        .from('invoices')
+        .update(updates)
+        .eq('id', invoiceId)
+        .eq('organization_id', organizationId)
+        .select(`
+            *,
+            customers!invoices_customer_id_fkey (*),
+            items: invoice_items (*)
+        `)
+        .single();
+
+    if (updateError) {
+        throw new APIError(updateError.message, 500);
+    }
+
+    return attachResolvedInvoiceStatus(updatedInvoice || { ...invoice, ...updates });
+};
+
 export const getInvoices = async (req, res) => {
     let query = supabase
         .from('invoices')
@@ -88,7 +137,7 @@ export const getInvoices = async (req, res) => {
     if (error) throw new APIError(error.message, 500);
 
     res.setHeader('X-Total-Count', count || 0);
-    res.json(invoices);
+    res.json((invoices || []).map(attachResolvedInvoiceStatus));
 };
 
 export const getNextInvoiceNumber = async (req, res) => {
@@ -308,7 +357,7 @@ export const createInvoice = async (req, res) => {
                 amount_paid: amount_paid || 0,
                 shipping: shipping || 0,
                 total: taxResult.grand_total,
-                status: status || 'draft',
+                status: normalizeStoredInvoiceStatus(status || 'draft'),
                 invoiceNumber: finalInvoiceNumber,
                 organization_id: req.user.organizationId,
                 project_name: projectName || null,
@@ -399,8 +448,7 @@ export const createInvoice = async (req, res) => {
         throw new APIError('Failed to create invoice items', 500);
     }
 
-
-    res.status(201).json(invoice);
+    res.status(201).json(attachResolvedInvoiceStatus(invoice));
 
     // Update Capita client intelligence
     if (customer_id) {
@@ -425,7 +473,7 @@ export const getInvoiceById = async (req, res) => {
         .single();
 
     if (error || !invoice) throw new APIError('Invoice not found', 404);
-    res.json(invoice);
+    res.json(attachResolvedInvoiceStatus(invoice));
 };
 
 export const updateInvoice = async (req, res) => {
@@ -573,6 +621,10 @@ export const updateInvoice = async (req, res) => {
         }
     }
 
+    if (supabaseUpdates.status !== undefined) {
+        supabaseUpdates.status = normalizeStoredInvoiceStatus(supabaseUpdates.status);
+    }
+
     // 5. Perform the update in Supabase
     const { data: updated, error: updateError } = await supabase
         .from('invoices')
@@ -649,7 +701,7 @@ export const updateInvoice = async (req, res) => {
         `)
         .eq('id', id)
         .single();
-    res.json(fullInvoice || updated);
+    res.json(attachResolvedInvoiceStatus(fullInvoice || updated));
 };
 
 export const deleteInvoice = async (req, res) => {
@@ -761,7 +813,7 @@ export const sendInvoiceEmail = async (req, res) => {
         const result = await emailService.sendInvoice(invoice, pdfBuffer || tempPath, to, settingsObj);
 
         // Update status
-        if (invoice.status === 'draft') {
+        if (normalizeStoredInvoiceStatus(invoice.status) === 'draft') {
             await supabase.from('invoices').update({ status: 'sent', updatedAt: new Date() }).eq('id', invoiceId);
         }
 
@@ -769,6 +821,15 @@ export const sendInvoiceEmail = async (req, res) => {
     } finally {
         if (tempPath) pdfService.cleanupPDF(tempPath);
     }
+};
+
+export const shareInvoice = async (req, res) => {
+    const invoice = await markInvoiceAsShared(req.params.id, req.user.organizationId);
+    res.json({
+        success: true,
+        invoice,
+        shareToken: invoice.share_token,
+    });
 };
 
 export const bulkReminders = async (req, res) => {
@@ -933,7 +994,7 @@ export const getInvoiceShareDetails = async (req, res) => {
     const baseUrl = `${req.protocol}://${req.get('host')}`;
 
     res.json({
-        invoice,
+        invoice: attachResolvedInvoiceStatus(invoice),
         settings: {
             businessName: settings.businessName || organization?.name || 'Your Business',
             ownerName: settings.owner_name || '',

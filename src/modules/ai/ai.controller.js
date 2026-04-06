@@ -8,6 +8,7 @@ import emailService from '../../core/services/email.service.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
 import { LIMITS } from '../../core/config/constants.js';
 import { PERSONA_META, DEFAULT_META, defaultActions, personaActions } from '../../core/config/personas.js';
+import { mapConfigToFrontend } from '../../core/utils/configUtils.js';
 
 import { AI_PRICING, EXCHANGE_RATE, getTierLimit } from '../../core/config/tierConfig.js';
 
@@ -72,6 +73,28 @@ const checkAICreditLimit = async (req) => {
 
 const AI_ACCESS_EXHAUSTED_MESSAGE = 'AI access is temporarily unavailable for this workspace right now. Upgrade or wait for the next usage cycle to continue.';
 
+const getOrganizationSettings = async (organizationId) => {
+    const { data: config, error } = await supabase
+        .from('organization_configs')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .maybeSingle();
+
+    if (error) {
+        throw error;
+    }
+
+    const mapped = mapConfigToFrontend(config || {});
+
+    return {
+        raw: config || {},
+        mapped,
+        currency: mapped?.currency || 'INR',
+        planTier: config?.plan_tier || mapped?.plan_tier || 'starter',
+        businessType: mapped?.businessType || mapped?.business_type || 'solopreneur'
+    };
+};
+
 export const getAIUsageStatus = async (req, res) => {
     const [usage, budget, { data: org }] = await Promise.all([
         getAIUsageData(req.user.organizationId),
@@ -112,16 +135,16 @@ export const getConfig = async (req, res) => {
  * Heavy data fetching is now deferred to Gemini Native Tools (Function Calling).
  */
 const getAIContext = async (req, persona, agentId, history) => {
-    // Only fetch basic org settings
-    let realSettings = {};
+    let orgSettings = {
+        raw: {},
+        mapped: {},
+        currency: 'INR',
+        planTier: req.user?.plan_tier || 'starter',
+        businessType: 'solopreneur'
+    };
+
     try {
-        const settingsRes = await supabase.from('settings')
-            .select('*')
-            .eq('organization_id', req.user.organizationId)
-            .maybeSingle();
-        if (settingsRes?.data) {
-            realSettings = settingsRes.data;
-        }
+        orgSettings = await getOrganizationSettings(req.user.organizationId);
     } catch (err) {
         console.error('AI Context Error (Settings):', err); 
     }
@@ -129,9 +152,9 @@ const getAIContext = async (req, persona, agentId, history) => {
     const now = new Date();
     const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
     
-    const currency = realSettings?.currency || 'INR';
-    const planTier = realSettings?.plan_tier || req.user?.plan_tier || 'starter';
-    const businessType = persona || realSettings?.business_type || 'solopreneur';
+    const currency = orgSettings.currency;
+    const planTier = orgSettings.planTier || req.user?.plan_tier || 'starter';
+    const businessType = persona || orgSettings.businessType || 'solopreneur';
 
     return { 
         user: req.user,
@@ -144,7 +167,7 @@ const getAIContext = async (req, persona, agentId, history) => {
             currentDay: dayOfWeek,
             fiscalYear: now.getMonth() >= 3 ? `${now.getFullYear()}-${now.getFullYear() + 1}` : `${now.getFullYear() - 1}-${now.getFullYear()}`
         },
-        settings: realSettings,
+        settings: orgSettings.mapped,
         history: history || [],
         agentId,
         conversationId: req.body?.conversationId || null,
@@ -438,7 +461,7 @@ export const getInsights = async (req, res) => {
     const [
         invoicesRes,
         customersRes,
-        settingsRes,
+        settingsBundle,
         stats,
         revenueTrends,
         customerInsights,
@@ -448,7 +471,7 @@ export const getInsights = async (req, res) => {
     ] = await Promise.all([
         Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
         Promise.resolve(supabase.from('customers').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
-        Promise.resolve(supabase.from('settings').select('*').eq('organization_id', req.user.organizationId).maybeSingle()).catch(() => ({ data: {} })),
+        Promise.resolve(getOrganizationSettings(req.user.organizationId)).catch(() => ({ raw: {}, mapped: {}, currency: 'INR' })),
         analyticsService.getDashboardStats(req.user.organizationId).catch(() => ({})),
         analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(() => ([])),
         analyticsService.getCustomerInsights(req.user.organizationId).catch(() => ([])),
@@ -462,8 +485,8 @@ export const getInsights = async (req, res) => {
         organizationId: orgId,
         invoices: invoicesRes?.data || [],
         customers: customersRes?.data || [],
-        settings: settingsRes?.data || {},
-        currency: settingsRes?.data?.currency || 'INR',
+        settings: settingsBundle?.mapped || {},
+        currency: settingsBundle?.currency || 'INR',
         stats: stats || {},
         safeToSpend: safeToSpend || {},
         personaStats: personaStats || {},
@@ -639,10 +662,10 @@ export const sendCollectionReminder = async (req, res) => {
     // 1. Get invoice and organization settings
     const [
         { data: invoice, error: invError },
-        { data: settings, error: setError }
+        settingsBundle
     ] = await Promise.all([
         supabase.from('invoices').select('*, customers(email, name)').eq('id', invoiceId).eq('organization_id', req.user.organizationId).single(),
-        supabase.from('settings').select('*').eq('organization_id', req.user.organizationId).single()
+        getOrganizationSettings(req.user.organizationId)
     ]);
 
     if (invError || !invoice) throw new APIError('Invoice not found', 404);
@@ -657,7 +680,7 @@ export const sendCollectionReminder = async (req, res) => {
         recipientEmail,
         subject,
         `<html><body>${htmlBody}</body></html>`,
-        settings || {}
+        settingsBundle?.raw || {}
     );
 
     // 4. Log the activity (optional but good)

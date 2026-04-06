@@ -3,25 +3,25 @@ export const PERSONA_META = {
         label: 'SOLO', color: '#34d399', colorDim: '#34d39960',
         colorBg: '#34d39912', colorBorder: '#34d39935', colorGlow: '#34d39930',
         robotColor: '#34d399', robotEye: '#ecfdf5', robotBg: '#064e3b',
-        greeting: "Hey! I'm **Capita** — your AI CFO. I've analyzed your cash flow, tax reserves, and client reliability. What should we tackle first?"
+        greeting: "Hey! I'm **Capita**. I can work directly with your invoices, payments, expenses, and compliance data. What do you want to inspect?"
     },
     subscription: {
         label: 'SaaS', color: '#818cf8', colorDim: '#818cf860',
         colorBg: '#818cf812', colorBorder: '#818cf835', colorGlow: '#818cf830',
         robotColor: '#818cf8', robotEye: '#eef2ff', robotBg: '#1e1b4b',
-        greeting: "Systems nominal. **Capita** online — tracking MRR, churn, and subscription health in real time. Ready for your metrics?"
+        greeting: "Systems nominal. **Capita** online with live invoice, payment, expense, and compliance data. Which workspace do you want to open?"
     },
     services_firm: {
         label: 'AGENCY', color: '#fbbf24', colorDim: '#fbbf2460',
         colorBg: '#fbbf2412', colorBorder: '#fbbf2435', colorGlow: '#fbbf2430',
         robotColor: '#fbbf24', robotEye: '#fefce8', robotBg: '#451a03',
-        greeting: "Hello! **Capita** here — monitoring retainers, billable hours, and project margins. How can I help today?"
+        greeting: "Hello! **Capita** here with live invoice, payment, expense, and compliance visibility. What should I break down?"
     },
     ecommerce: {
         label: 'COMMERCE', color: '#f472b6', colorDim: '#f472b660',
         colorBg: '#f472b612', colorBorder: '#f472b635', colorGlow: '#f472b630',
         robotColor: '#f472b6', robotEye: '#fdf2f8', robotBg: '#500724',
-        greeting: "Sales active. **Capita** online — tracking revenue, orders, and collections. What do you need?"
+        greeting: "Sales active. **Capita** online with live invoice, payment, expense, and compliance visibility. What do you need?"
     },
 };
 
@@ -29,41 +29,39 @@ export const DEFAULT_META = {
     label: 'AI', color: '#34d399', colorDim: '#34d39960',
     colorBg: '#34d39912', colorBorder: '#34d39935', colorGlow: '#34d39930',
     robotColor: '#34d399', robotEye: '#ecfdf5', robotBg: '#064e3b',
-    greeting: "Hey! I'm **Capita**, your financial copilot. Ask about revenue, invoices, cash flow, or anything about your business. I'm ready."
+    greeting: "Hey! I'm **Capita**. Ask about invoices, payments, expenses, or compliance and I'll answer from your live workspace data."
 };
 
 export const defaultActions = [
-    { label: 'Revenue today', icon: 'TrendingUp', query: 'What is my total revenue?', tag: 'FINANCE' },
-    { label: 'Recent expenses', icon: 'CreditCard', query: 'Show me my last 5 expenses', tag: 'SPEND' },
-    { label: 'Draft invoice', icon: 'FileText', query: 'Help me create a new invoice', tag: 'ACTION' },
-    { label: 'Business health', icon: 'Zap', query: 'Give me a business health summary', tag: 'OVERVIEW' },
-    { label: 'Top customers', icon: 'Users', query: 'Who are my top customers?', tag: 'CRM' },
-    { label: 'Net cash flow', icon: 'Activity', query: 'What is my current net cash flow?', tag: 'CASH' },
+    { label: 'Invoice health', icon: 'FileText', query: 'Show me my invoice workspace summary', tag: 'INVOICES' },
+    { label: 'Payment health', icon: 'CreditCard', query: 'Show me my payments workspace summary', tag: 'PAYMENTS' },
+    { label: 'Expense health', icon: 'Activity', query: 'Show me my expenses workspace summary', tag: 'EXPENSES' },
+    { label: 'Compliance health', icon: 'ShieldCheck', query: 'Show me my compliance workspace summary', tag: 'COMPLIANCE' },
 ];
 
 export const personaActions = {
     solopreneur: [
-        { label: 'Safe to Spend', icon: 'Activity', query: 'How much cash is safe to spend after taxes and risk?', tag: 'LIQUIDITY' },
-        { label: 'Tax Reserves', icon: 'Zap', query: 'Show me my GST and Income Tax reserve breakdown', tag: 'TAX' },
-        { label: 'Client Trust', icon: 'Users', query: 'Who are my most reliable clients and who is late?', tag: 'CRM' },
-        { label: 'Revenue Risk', icon: 'AlertTriangle', query: 'Am I too dependent on a single client for revenue?', tag: 'RISK' },
+        { label: 'Invoice health', icon: 'FileText', query: 'Which invoices need attention right now?', tag: 'INVOICES' },
+        { label: 'Payments', icon: 'CreditCard', query: 'What payments came in recently?', tag: 'PAYMENTS' },
+        { label: 'Expenses', icon: 'Activity', query: 'What are my biggest recent expenses?', tag: 'EXPENSES' },
+        { label: 'Compliance', icon: 'ShieldCheck', query: 'Which compliance tasks are due this week?', tag: 'COMPLIANCE' },
     ],
     subscription: [
-        { label: 'Check MRR', icon: 'TrendingUp', query: 'What is my current Monthly Recurring Revenue?', tag: 'MRR' },
-        { label: 'Churn report', icon: 'Users', query: 'Analyze my customer churn', tag: 'CHURN' },
-        { label: 'Growth rate', icon: 'Activity', query: 'What is my revenue growth month-over-month?', tag: 'GROWTH' },
-        { label: 'LTV analysis', icon: 'Zap', query: 'What is the average customer lifetime value?', tag: 'LTV' },
+        { label: 'Invoices', icon: 'FileText', query: 'Show me my invoice pipeline and overdue invoices', tag: 'INVOICES' },
+        { label: 'Payments', icon: 'CreditCard', query: 'Show me recent payment collections', tag: 'PAYMENTS' },
+        { label: 'Expenses', icon: 'Activity', query: 'Show me recent expenses and top categories', tag: 'EXPENSES' },
+        { label: 'Compliance', icon: 'ShieldCheck', query: 'Show me open compliance work', tag: 'COMPLIANCE' },
     ],
     services_firm: [
-        { label: 'Project profit', icon: 'TrendingUp', query: 'Which projects are most profitable?', tag: 'P&L' },
-        { label: 'Unbilled work', icon: 'Clock', query: 'Show me all unbilled hours', tag: 'HOURS' },
-        { label: 'Retainer risks', icon: 'AlertTriangle', query: 'Are any client retainers nearly empty?', tag: 'RISK' },
-        { label: 'Burn rate', icon: 'Activity', query: 'What is our current monthly burn rate?', tag: 'BURN' },
+        { label: 'Invoices', icon: 'FileText', query: 'Show me invoice performance and overdue accounts', tag: 'INVOICES' },
+        { label: 'Payments', icon: 'CreditCard', query: 'Show me the latest payments and pending collections', tag: 'PAYMENTS' },
+        { label: 'Expenses', icon: 'Activity', query: 'Which expenses are driving spend right now?', tag: 'EXPENSES' },
+        { label: 'Compliance', icon: 'ShieldCheck', query: 'Show me pending compliance tasks', tag: 'COMPLIANCE' },
     ],
     ecommerce: [
-        { label: 'Revenue today', icon: 'TrendingUp', query: 'What is my total revenue today?', tag: 'REVENUE' },
-        { label: 'Overdue orders', icon: 'AlertTriangle', query: 'Show me all overdue invoices', tag: 'RISK' },
-        { label: 'Top customers', icon: 'Users', query: 'Who are my top customers by revenue?', tag: 'CRM' },
-        { label: 'Cash flow', icon: 'Activity', query: 'What is my current net cash flow?', tag: 'CASH' },
+        { label: 'Invoices', icon: 'FileText', query: 'Show me current invoice and receivable status', tag: 'INVOICES' },
+        { label: 'Payments', icon: 'CreditCard', query: 'Show me recent incoming payments', tag: 'PAYMENTS' },
+        { label: 'Expenses', icon: 'Activity', query: 'Show me current expense pressure', tag: 'EXPENSES' },
+        { label: 'Compliance', icon: 'ShieldCheck', query: 'Show me compliance deadlines and risk', tag: 'COMPLIANCE' },
     ],
 };

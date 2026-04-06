@@ -1,6 +1,7 @@
 import { supabase } from '../../core/database/supabase.js';
 import { DEFAULTS, HEALTH_SCORE, TAX_RESERVES, PLACEHOLDERS, CUSTOMER_HEALTH } from '../../core/config/constants.js';
 import { getInvoiceAmounts, resolveInvoiceStatus } from '../invoices/invoiceStatus.service.js';
+import { mapConfigToFrontend } from '../../core/utils/configUtils.js';
 
 /**
  * Analytics Service
@@ -551,12 +552,12 @@ class AnalyticsService {
         const [
             { data: payments, error: payError },
             { data: expenses, error: expError },
-            { data: settings, error: settingsError },
+            { data: config, error: settingsError },
             { data: overdueInvoices, error: overdueError }
         ] = await Promise.all([
             supabase.from('payments').select('amount').eq('organization_id', organizationId),
             supabase.from('expenses').select('amount').eq('organization_id', organizationId),
-            supabase.from('settings').select('companyTaxId, defaultGstRate, default_gst_rate, currency').eq('organization_id', organizationId).maybeSingle(),
+            supabase.from('organization_configs').select('*').eq('organization_id', organizationId).maybeSingle(),
             supabase
                 .from('invoices')
                 .select('status, total, net_receivable, amount_paid, dueDate, due_date, document_status, payment_status, balance_due')
@@ -571,9 +572,10 @@ class AnalyticsService {
         const totalReceivedPayments = (payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
         const totalExpenses = (expenses || []).reduce((sum, exp) => sum + (exp.amount || 0), 0);
         const cashOnHand = totalReceivedPayments - totalExpenses;
+        const settings = mapConfigToFrontend(config || {});
 
         const gstRate = Number(settings?.defaultGstRate ?? settings?.default_gst_rate ?? TAX_RESERVES.GST_RATE * 100);
-        const hasGstRegistration = Boolean(settings?.companyTaxId);
+        const hasGstRegistration = Boolean(settings?.companyTaxId || settings?.gstin);
         const gstReserve = hasGstRegistration
             ? Math.max(0, totalReceivedPayments) * (gstRate / (100 + gstRate))
             : 0;

@@ -4,6 +4,7 @@ import { formatCurrency, getCurrencySymbol } from '../../core/utils/formatting.j
 import { supabase } from '../../core/database/supabase.js';
 import analyticsService from '../analytics/analytics.service.js';
 import aiReadModelService from './aiReadModel.service.js';
+import aiToolRegistryService from './aiToolRegistry.service.js';
 import { PLAN_TIERS } from '../../core/config/tierConfig.js';
 import { brandProfile } from '../../core/config/brandProfile.js';
 
@@ -370,6 +371,7 @@ class AIService {
             'You are Capita, a grounded financial product agent.',
             personaInstructions,
             `Business: ${businessName}`,
+            `Business type: ${businessSegment}`,
             `Currency: ${currency}`,
             `Current time: ${temporal.currentTime || new Date().toISOString()}`,
             '',
@@ -379,6 +381,8 @@ class AIService {
             '- Do not invent private data, metrics, customer names, totals, or dates.',
             '- Be concise, specific, and operationally useful.',
             '- When tool evidence exists, cite the relevant business object in plain language.',
+            '- Personalize recommendations to the user business, cash position, receivables, expense profile, and compliance state when those facts are present in TOOL results.',
+            '- If the user asks what to do next, rank the most important actions using the available evidence instead of giving generic business advice.',
             '- If the query is general knowledge and there are no tools, answer carefully without pretending to see private data.',
             '',
             `Execution mode: ${execution.mode || 'general'}`,
@@ -394,10 +398,840 @@ class AIService {
         ].join('\n');
     }
 
+    buildGroundedJsonPrompt(query, context = {}, execution = {}) {
+        const {
+            settings = {},
+            temporal = {},
+            businessType,
+        } = context;
+
+        const currency = settings?.currency || context?.currency || 'INR';
+        const businessName = settings?.business_name || settings?.businessName || 'your business';
+        const rawBusinessSegment = businessType || settings?.business_type || settings?.businessType || 'solopreneur';
+        const businessSegment = rawBusinessSegment === 'freelancer' ? 'solopreneur' : rawBusinessSegment;
+
+        const personaInstructions = {
+            solopreneur: 'Act like a pragmatic CFO for an Indian freelancer. Prioritise collections, runway, taxes, margins, and concrete next actions.',
+            subscription: 'Act like a SaaS finance lead. Prioritise MRR quality, churn, retention, and forecast clarity.',
+            services_firm: 'Act like a services finance lead. Prioritise utilisation, project margins, receivables, and delivery risk.',
+            ecommerce: 'Act like a commerce finance operator. Prioritise margin, working capital, receivables, and cash conversion.'
+        }[businessSegment] || 'Act like a pragmatic finance operator.';
+
+        const evidenceLines = (execution.toolResults || []).map((entry, index) => {
+            const payload = JSON.stringify({
+                tool: entry.toolId,
+                args: entry.args,
+                data: entry.result?.data,
+                meta: entry.result?.meta
+            });
+            return `TOOL_${index + 1}: ${payload}`;
+        }).join('\n');
+
+        return [
+            'You are Capita, a grounded financial product agent.',
+            personaInstructions,
+            `Business: ${businessName}`,
+            `Business type: ${businessSegment}`,
+            `Currency: ${currency}`,
+            `Current time: ${temporal.currentTime || new Date().toISOString()}`,
+            '',
+            'Return valid JSON only. No markdown.',
+            '',
+            'Rules:',
+            '- Treat TOOL results as the only source of truth for user-specific numbers, names, totals, dates, statuses, and business facts.',
+            '- If a fact is missing, do not infer it. Say it is unavailable.',
+            '- Do not cite tools that were not provided.',
+            '- Every summary or supporting point that states a business fact must cite at least one tool.',
+            '- `next_action` may be advice, but must not introduce new business facts.',
+            '- If the user asks for priorities, recommendations, business health, or what to do next, tailor the answer to the business type and rank advice using the available evidence.',
+            '- Keep the answer concise and operational.',
+            '',
+            `Execution mode: ${execution.mode || 'general'}`,
+            `User question: ${query}`,
+            '',
+            'Tool evidence:',
+            evidenceLines || 'NO_TOOL_RESULTS',
+            '',
+            'JSON schema:',
+            '{',
+            '  "summary": "string",',
+            '  "bullets": [{"text": "string", "citations": [{"tool": "tool_id"}]}],',
+            '  "next_action": "string",',
+            '  "citations": [{"tool": "tool_id"}],',
+            '  "verification_status": "grounded" | "insufficient_evidence" | "requires_professional_review"',
+            '}'
+        ].join('\n');
+    }
+
+    _normaliseClaimNumber(value) {
+        if (value === null || value === undefined) return null;
+        const raw = String(value).trim();
+        if (!raw) return null;
+        const cleaned = raw.replace(/,/g, '');
+        const numeric = Number(cleaned.replace(/%$/, ''));
+        if (!Number.isFinite(numeric)) return null;
+        const suffix = cleaned.endsWith('%') ? '%' : '';
+        return `${numeric}${suffix}`;
+    }
+
+    _extractClaimNumbers(text = '') {
+        const matches = String(text).match(/\b\d[\d,]*(?:\.\d+)?%?\b/g) || [];
+        return matches
+            .map((value) => this._normaliseClaimNumber(value))
+            .filter(Boolean);
+    }
+
+    _collectEvidenceFacts(value, accumulator = { numbers: new Set() }) {
+        if (value === null || value === undefined) {
+            return accumulator;
+        }
+
+        if (typeof value === 'number') {
+            const normalised = this._normaliseClaimNumber(value);
+            if (normalised) accumulator.numbers.add(normalised);
+            return accumulator;
+        }
+
+        if (typeof value === 'string') {
+            for (const numeric of this._extractClaimNumbers(value)) {
+                accumulator.numbers.add(numeric);
+            }
+            return accumulator;
+        }
+
+        if (Array.isArray(value)) {
+            value.forEach((item) => this._collectEvidenceFacts(item, accumulator));
+            return accumulator;
+        }
+
+        if (typeof value === 'object') {
+            Object.values(value).forEach((item) => this._collectEvidenceFacts(item, accumulator));
+        }
+
+        return accumulator;
+    }
+
+    collectExecutionEvidence(execution = {}) {
+        const toolIds = new Set();
+        const numbers = new Set();
+
+        for (const entry of execution.toolResults || []) {
+            if (entry?.toolId) {
+                toolIds.add(entry.toolId);
+            }
+            this._collectEvidenceFacts(entry?.result?.data, { numbers });
+            this._collectEvidenceFacts(entry?.result?.meta, { numbers });
+        }
+
+        return {
+            toolIds,
+            numbers
+        };
+    }
+
+    validateGroundedPayload(payload = {}, execution = {}, queryRisk = {}) {
+        const issues = [];
+        const evidence = this.collectExecutionEvidence(execution);
+        const hasToolEvidence = Boolean((execution.toolResults || []).length);
+        const citations = Array.isArray(payload.citations) ? payload.citations : [];
+        const bullets = Array.isArray(payload.bullets) ? payload.bullets : [];
+
+        if (!payload.summary || typeof payload.summary !== 'string') {
+            issues.push('missing_summary');
+        }
+
+        if (!payload.next_action || typeof payload.next_action !== 'string') {
+            issues.push('missing_next_action');
+        }
+
+        const citedTools = new Set();
+        for (const citation of citations) {
+            const toolId = citation?.tool;
+            if (!toolId || !evidence.toolIds.has(toolId)) {
+                issues.push('invalid_top_level_citation');
+                continue;
+            }
+            citedTools.add(toolId);
+        }
+
+        for (const bullet of bullets) {
+            if (!bullet?.text || typeof bullet.text !== 'string') {
+                issues.push('invalid_bullet');
+                continue;
+            }
+
+            const bulletCitations = Array.isArray(bullet.citations) ? bullet.citations : [];
+            if (hasToolEvidence && bulletCitations.length === 0) {
+                issues.push('uncited_bullet');
+                continue;
+            }
+
+            for (const citation of bulletCitations) {
+                const toolId = citation?.tool;
+                if (!toolId || !evidence.toolIds.has(toolId)) {
+                    issues.push('invalid_bullet_citation');
+                    continue;
+                }
+                citedTools.add(toolId);
+            }
+        }
+
+        if (hasToolEvidence && citedTools.size === 0) {
+            issues.push('missing_citations');
+        }
+
+        const factualText = [
+            payload.summary,
+            ...bullets.map((bullet) => bullet?.text || '')
+        ].join('\n');
+        const unsupportedNumbers = this._extractClaimNumbers(factualText)
+            .filter((number) => !evidence.numbers.has(number));
+
+        if (hasToolEvidence && unsupportedNumbers.length > 0) {
+            issues.push(`unsupported_numbers:${Array.from(new Set(unsupportedNumbers)).join(',')}`);
+        }
+
+        const validStatuses = new Set(['grounded', 'insufficient_evidence', 'requires_professional_review']);
+        if (!validStatuses.has(payload.verification_status)) {
+            issues.push('invalid_verification_status');
+        }
+
+        if (queryRisk.highStakesDomain && payload.verification_status === 'grounded' && !hasToolEvidence) {
+            issues.push('ungrounded_high_stakes_claim');
+        }
+
+        return {
+            ok: issues.length === 0,
+            issues
+        };
+    }
+
+    formatGroundedPayload(payload = {}) {
+        const citations = (payload.citations || [])
+            .map((citation) => citation?.tool)
+            .filter(Boolean);
+        const citationSuffix = citations.length > 0
+            ? ` [Sources: ${Array.from(new Set(citations)).join(', ')}]`
+            : '';
+
+        const bulletLines = (payload.bullets || [])
+            .filter((bullet) => bullet?.text)
+            .map((bullet) => {
+                const bulletSources = (bullet.citations || [])
+                    .map((citation) => citation?.tool)
+                    .filter(Boolean);
+                const bulletSuffix = bulletSources.length > 0
+                    ? ` [Source: ${Array.from(new Set(bulletSources)).join(', ')}]`
+                    : '';
+                return `- ${bullet.text}${bulletSuffix}`;
+            });
+
+        return [
+            `${payload.summary || 'I do not have enough verified evidence to answer that.'}${citationSuffix}`,
+            bulletLines.length > 0 ? '' : null,
+            bulletLines.length > 0 ? bulletLines.join('\n') : null,
+            '',
+            `Next action: ${payload.next_action || 'Ask a narrower grounded question.'}`
+        ].filter(Boolean).join('\n');
+    }
+
+    buildToolBackedFallbackAnswer(query = '', execution = {}) {
+        const lowerQuery = String(query || '').toLowerCase();
+        const sections = [];
+        const nextActions = [];
+        let dashboardSnapshot = null;
+        let invoiceWorkspace = null;
+        let paymentWorkspace = null;
+        let expenseWorkspace = null;
+        let complianceWorkspace = null;
+        let recentActivity = null;
+
+        for (const entry of execution.toolResults || []) {
+            const toolId = entry?.toolId;
+            const data = entry?.result?.data || {};
+            const currency = data?.currency || entry?.result?.meta?.currency || 'INR';
+
+            if (toolId === 'get_business_advisor_context') {
+                dashboardSnapshot = data.snapshot || dashboardSnapshot;
+                recentActivity = data.recentActivity || recentActivity;
+                invoiceWorkspace = data.invoices || invoiceWorkspace;
+                paymentWorkspace = data.payments || paymentWorkspace;
+                expenseWorkspace = data.expenses || expenseWorkspace;
+                complianceWorkspace = data.compliance || complianceWorkspace;
+            }
+
+            if (toolId === 'get_dashboard_snapshot') dashboardSnapshot = data;
+            if (toolId === 'get_invoice_workspace') invoiceWorkspace = data;
+            if (toolId === 'get_payment_workspace') paymentWorkspace = data;
+            if (toolId === 'get_expense_workspace') expenseWorkspace = data;
+            if (toolId === 'get_compliance_workspace') complianceWorkspace = data;
+            if (toolId === 'get_recent_activity') recentActivity = data;
+
+            if (toolId === 'get_dashboard_snapshot') {
+                const stats = data.stats || {};
+                const safeToSpend = data.safeToSpend || {};
+                const monthlyBurn = Number(safeToSpend.totalExpenses || stats.total_expenses || 0);
+                const availableLiquidity = Number(safeToSpend.safeToSpend || 0);
+                const estimatedRunwayMonths = monthlyBurn > 0
+                    ? Number((availableLiquidity / monthlyBurn).toFixed(1))
+                    : null;
+
+                if (lowerQuery.includes('runway')) {
+                    if (estimatedRunwayMonths === null) {
+                        return [
+                            'I can estimate runway only when there is a non-zero expense trend to compare against current safe-to-spend cash.',
+                            '',
+                            `Verified liquidity right now is ${formatCurrency(availableLiquidity, currency)}, but monthly burn is not high enough in the available data to compute a stable runway estimate.`,
+                            '',
+                            'Next action: review current expenses and cash reserves before using runway as a decision metric.'
+                        ].join('\n');
+                    }
+
+                    return [
+                        `Estimated cash runway is about ${estimatedRunwayMonths} months based on verified safe-to-spend liquidity of ${formatCurrency(availableLiquidity, currency)} and recorded expenses of ${formatCurrency(monthlyBurn, currency)} in the current trend window.`,
+                        '',
+                        `- Cash on hand: ${formatCurrency(safeToSpend.cashOnHand || 0, currency)}.`,
+                        `- Protected reserves and risk buffers: ${formatCurrency((safeToSpend.reserves?.gst || 0) + (safeToSpend.reserves?.incomeTax || 0) + (safeToSpend.reserves?.atRisk || 0), currency)}.`,
+                        '',
+                        'Next action: treat this as an operating estimate and tighten collections if you want to extend runway.'
+                    ].join('\n');
+                }
+
+                if (lowerQuery.includes('safe to spend') || lowerQuery.includes('cash flow') || lowerQuery.includes('cashflow')) {
+                    return [
+                        `Verified safe-to-spend cash is ${formatCurrency(availableLiquidity, currency)}.`,
+                        '',
+                        `- Cash on hand: ${formatCurrency(safeToSpend.cashOnHand || 0, currency)}.`,
+                        `- Total recorded expenses: ${formatCurrency(monthlyBurn, currency)}.`,
+                        `- Reserve buffer: ${formatCurrency((safeToSpend.reserves?.gst || 0) + (safeToSpend.reserves?.incomeTax || 0) + (safeToSpend.reserves?.atRisk || 0), currency)}.`,
+                        '',
+                        'Next action: preserve buffer for tax and overdue-risk reserves before committing new spend.'
+                    ].join('\n');
+                }
+            }
+
+            if (toolId === 'get_recent_activity' && (
+                lowerQuery.includes('recent activity') ||
+                lowerQuery.includes('what happened recently') ||
+                lowerQuery.includes('latest activity')
+            )) {
+                const invoices = Array.isArray(data.invoices) ? data.invoices : [];
+                const payments = Array.isArray(data.payments) ? data.payments : [];
+                const expenses = Array.isArray(data.expenses) ? data.expenses : [];
+
+                return [
+                    'Recent business activity from your live data:',
+                    '',
+                    invoices.length > 0 ? `- Invoices: ${invoices.slice(0, 2).map((invoice) => `#${invoice.invoiceNumber} (${invoice.status}, ${formatCurrency(invoice.total || 0, currency)})`).join('; ')}.` : '- Invoices: no recent invoice activity found.',
+                    payments.length > 0 ? `- Payments: ${payments.slice(0, 2).map((payment) => `${payment.reference_number || payment.method || 'payment'} (${formatCurrency(payment.amount || 0, currency)} on ${payment.date || 'unknown date'})`).join('; ')}.` : '- Payments: no recent payment activity found.',
+                    expenses.length > 0 ? `- Expenses: ${expenses.slice(0, 2).map((expense) => `${expense.description || expense.category || 'expense'} (${formatCurrency(expense.amount || 0, currency)} on ${expense.date || 'unknown date'})`).join('; ')}.` : '- Expenses: no recent expense activity found.',
+                    '',
+                    'Next action: reconcile the most recent cash movements and confirm they match open invoices and planned spend.'
+                ].join('\n');
+            }
+
+            if (toolId === 'get_invoice_workspace') {
+                const summary = data.summary || {};
+                const overdueInvoices = Array.isArray(data.overdueInvoices) ? data.overdueInvoices : [];
+                const recentInvoices = Array.isArray(data.recentInvoices) ? data.recentInvoices : [];
+                const topAttention = overdueInvoices.slice(0, 3)
+                    .map((invoice) => `#${invoice.invoiceNumber} (${invoice.daysOverdue || 0} days overdue, ${formatCurrency(invoice.balanceDue || 0, currency)})`);
+
+                sections.push([
+                    `Receivables needing action: ${summary.totalInvoices || 0} invoices tracked, ${formatCurrency(summary.totalOutstanding || 0, currency)} still outstanding, and ${formatCurrency(summary.overdueAmount || 0, currency)} already overdue.`,
+                    topAttention.length > 0 ? `- Priority invoices: ${topAttention.join('; ')}.` : null,
+                    recentInvoices.length > 0 ? `- Recent invoice activity: ${recentInvoices.slice(0, 2).map((invoice) => `#${invoice.invoiceNumber} (${invoice.status}, ${formatCurrency(invoice.total || 0, currency)})`).join('; ')}.` : null
+                ].filter(Boolean).join('\n'));
+
+                if (topAttention.length > 0) {
+                    nextActions.push(`follow up first on ${topAttention[0].split(' ')[0]}`);
+                } else {
+                    nextActions.push('review unpaid invoices and send reminders');
+                }
+            }
+
+            if (toolId === 'get_payment_workspace') {
+                const summary = data.summary || {};
+                const recentPayments = Array.isArray(data.recentPayments) ? data.recentPayments : [];
+
+                sections.push([
+                    `Payments snapshot: ${summary.completedCount || 0} completed payments recorded, ${formatCurrency(summary.totalCollected || 0, currency)} collected overall, and ${formatCurrency(summary.collectedThisMonth || 0, currency)} collected this month.`,
+                    recentPayments.length > 0 ? `- Recent receipts: ${recentPayments.slice(0, 3).map((payment) => `${payment.reference_number || payment.method || 'payment'} (${formatCurrency(payment.amount || 0, currency)} on ${payment.date || 'unknown date'})`).join('; ')}.` : null
+                ].filter(Boolean).join('\n'));
+
+                nextActions.push('reconcile the latest completed payments against open invoices');
+            }
+
+            if (toolId === 'get_expense_workspace') {
+                const summary = data.summary || {};
+                const topCategories = Array.isArray(data.topCategories) ? data.topCategories : [];
+
+                sections.push([
+                    `Expense snapshot: ${summary.totalExpenses || 0} expenses recorded, ${formatCurrency(summary.totalSpend || 0, currency)} total spend, and ${formatCurrency(summary.spendThisMonth || 0, currency)} spent this month.`,
+                    topCategories.length > 0 ? `- Largest categories: ${topCategories.slice(0, 3).map((entry) => `${entry.category} (${formatCurrency(entry.amount || 0, currency)})`).join('; ')}.` : null
+                ].filter(Boolean).join('\n'));
+
+                nextActions.push('review the highest spend categories for controllable costs');
+            }
+
+            if (toolId === 'get_compliance_workspace') {
+                const summary = data.summary || {};
+                const urgentTasks = Array.isArray(data.urgentTasks) ? data.urgentTasks : [];
+
+                sections.push([
+                    `Compliance snapshot: ${summary.totalTasks || 0} tracked tasks, ${summary.pendingCount || 0} pending, ${summary.overdueCount || 0} overdue, and ${summary.dueThisWeekCount || 0} due this week.`,
+                    urgentTasks.length > 0 ? `- Urgent items: ${urgentTasks.slice(0, 3).map((task) => `${task.title || task.name || 'task'} (${task.status}${task.due_date ? `, due ${task.due_date}` : ''})`).join('; ')}.` : null
+                ].filter(Boolean).join('\n'));
+
+                nextActions.push('clear overdue compliance items before upcoming deadlines');
+            }
+        }
+
+        if (
+            recentActivity &&
+            (lowerQuery.includes('recent activity') ||
+                lowerQuery.includes('what happened recently') ||
+                lowerQuery.includes('latest activity') ||
+                lowerQuery.includes('what happened in the business'))
+        ) {
+            const currency = recentActivity.currency || dashboardSnapshot?.currency || 'INR';
+            const invoices = Array.isArray(recentActivity.invoices) ? recentActivity.invoices : [];
+            const payments = Array.isArray(recentActivity.payments) ? recentActivity.payments : [];
+            const expenses = Array.isArray(recentActivity.expenses) ? recentActivity.expenses : [];
+
+            return [
+                'Recent business activity from your live data:',
+                '',
+                invoices.length > 0 ? `- Invoices: ${invoices.slice(0, 2).map((invoice) => `#${invoice.invoiceNumber} (${invoice.status}, ${formatCurrency(invoice.total || 0, currency)})`).join('; ')}.` : '- Invoices: no recent invoice activity found.',
+                payments.length > 0 ? `- Payments: ${payments.slice(0, 2).map((payment) => `${payment.reference_number || payment.method || 'payment'} (${formatCurrency(payment.amount || 0, currency)} on ${payment.date || 'unknown date'})`).join('; ')}.` : '- Payments: no recent payment activity found.',
+                expenses.length > 0 ? `- Expenses: ${expenses.slice(0, 2).map((expense) => `${expense.description || expense.category || 'expense'} (${formatCurrency(expense.amount || 0, currency)} on ${expense.date || 'unknown date'})`).join('; ')}.` : '- Expenses: no recent expense activity found.',
+                '',
+                'Next action: reconcile the latest cash movements and confirm they align with expected collections and planned spend.'
+            ].join('\n');
+        }
+
+        if (
+            dashboardSnapshot &&
+            (lowerQuery.includes('how is the business doing') ||
+                lowerQuery.includes('how are we doing') ||
+                lowerQuery.includes('financial health') ||
+                lowerQuery.includes('business health') ||
+                lowerQuery.includes('financial position') ||
+                lowerQuery.includes('finance') ||
+                lowerQuery.includes('business performance'))
+        ) {
+            const currency = dashboardSnapshot.currency || 'INR';
+            const snapshotStats = dashboardSnapshot.stats || {};
+            const snapshotLiquidity = dashboardSnapshot.safeToSpend || {};
+
+            return [
+                `The business is currently operating with ${formatCurrency(snapshotLiquidity.safeToSpend || 0, currency)} of verified safe-to-spend cash, ${formatCurrency(snapshotStats.pending_payments || 0, currency)} still pending from customers, and ${formatCurrency(snapshotStats.overdue_revenue || 0, currency)} already overdue.`,
+                '',
+                `- Revenue collected from paid invoices: ${formatCurrency(snapshotStats.total_revenue || 0, currency)}.`,
+                `- Total recorded expenses: ${formatCurrency(snapshotStats.total_expenses || 0, currency)}.`,
+                `- Net profit from current records: ${formatCurrency(snapshotStats.net_profit || 0, currency)} with a ${snapshotStats.profit_margin || 0}% margin.`,
+                '',
+                `Next action: ${nextActions[0] || 'review receivables, liquidity, and current cost pressure before making new commitments.'}`
+            ].join('\n');
+        }
+
+        if (
+            dashboardSnapshot &&
+            (lowerQuery.includes('focus') ||
+                lowerQuery.includes('priority') ||
+                lowerQuery.includes('priorities') ||
+                lowerQuery.includes('what should i do') ||
+                lowerQuery.includes('what should we do') ||
+                lowerQuery.includes('how are we doing') ||
+                lowerQuery.includes('business health') ||
+                lowerQuery.includes('biggest risk') ||
+                lowerQuery.includes('best move'))
+        ) {
+            const currency = dashboardSnapshot.currency || 'INR';
+            const snapshotStats = dashboardSnapshot.stats || {};
+            const snapshotLiquidity = dashboardSnapshot.safeToSpend || {};
+            const overdueAmount = Number(invoiceWorkspace?.summary?.overdueAmount || snapshotStats.overdue_revenue || 0);
+            const outstandingAmount = Number(invoiceWorkspace?.summary?.totalOutstanding || snapshotStats.pending_payments || 0);
+            const spendThisMonth = Number(expenseWorkspace?.summary?.spendThisMonth || snapshotLiquidity.totalExpenses || 0);
+            const dueThisWeek = Number(complianceWorkspace?.summary?.dueThisWeekCount || 0) + Number(complianceWorkspace?.summary?.overdueCount || 0);
+            const collectedThisMonth = Number(paymentWorkspace?.summary?.collectedThisMonth || 0);
+            const priorities = [];
+
+            if (overdueAmount > 0) {
+                priorities.push(`Collections is the top priority because ${formatCurrency(overdueAmount, currency)} is already overdue and ${formatCurrency(outstandingAmount, currency)} is still outstanding.`);
+            }
+            if (dueThisWeek > 0) {
+                priorities.push(`Compliance needs attention because ${dueThisWeek} items are overdue or due this week.`);
+            }
+            if (spendThisMonth > collectedThisMonth && spendThisMonth > 0) {
+                priorities.push(`Cash discipline matters because this month spend of ${formatCurrency(spendThisMonth, currency)} is ahead of recorded collections of ${formatCurrency(collectedThisMonth, currency)}.`);
+            }
+            if (priorities.length === 0) {
+                priorities.push(`The business looks stable from current records, with ${formatCurrency(snapshotLiquidity.safeToSpend || 0, currency)} of verified safe-to-spend cash and no immediate red flags in the retrieved workspaces.`);
+            }
+
+            return [
+                priorities[0],
+                '',
+                ...priorities.slice(1).map((line) => `- ${line}`),
+                snapshotLiquidity.safeToSpend !== undefined ? `- Verified safe-to-spend cash: ${formatCurrency(snapshotLiquidity.safeToSpend || 0, currency)}.` : null,
+                '',
+                `Next action: ${nextActions[0] || 'review the highest-risk item first and then recheck cash position.'}`
+            ].filter(Boolean).join('\n');
+        }
+
+        if (sections.length === 0) {
+            return this.buildUnverifiedAnswer({}, ['no_tool_fallback_available']);
+        }
+
+        const uniqueActions = Array.from(new Set(nextActions));
+        return [
+            sections.join('\n\n'),
+            '',
+            `Next action: ${uniqueActions[0] || 'Ask a narrower grounded question.'}.`
+        ].join('\n');
+    }
+
+    parseJsonText(rawText = '') {
+        return JSON.parse(
+            String(rawText || '')
+                .trim()
+                .replace(/```json\n?/g, '')
+                .replace(/```\n?/g, '')
+                .trim()
+        );
+    }
+
+    buildGenericValidationError(message = 'The AI response could not be verified safely.') {
+        return new Error(message);
+    }
+
+    validateInvoiceExtractionPayload(payload = {}, sourceText = '') {
+        const issues = [];
+        const sourceNumbers = this._extractClaimNumbers(sourceText);
+        const payloadNumbers = Array.from(this._collectEvidenceFacts(payload).numbers);
+
+        for (const number of payloadNumbers) {
+            if (!sourceNumbers.includes(number)) {
+                issues.push(`unsupported_numbers:${number}`);
+            }
+        }
+
+        return {
+            ok: issues.length === 0,
+            issues
+        };
+    }
+
+    validateAuditPayload(payload = {}, invoiceData = {}) {
+        const issues = [];
+        if (!Number.isFinite(payload.riskScore) || payload.riskScore < 0 || payload.riskScore > 100) {
+            issues.push('invalid_risk_score');
+        }
+        if (!Array.isArray(payload.suggestions) || payload.suggestions.some((entry) => typeof entry !== 'string')) {
+            issues.push('invalid_suggestions');
+        }
+
+        const evidenceNumbers = this.collectExecutionEvidence({
+            toolResults: [{ toolId: 'invoice_input', result: { data: invoiceData, meta: {} } }]
+        }).numbers;
+        const suggestionNumbers = this._extractClaimNumbers((payload.suggestions || []).join('\n'));
+        const unsupportedNumbers = suggestionNumbers.filter((number) => !evidenceNumbers.has(number));
+        if (unsupportedNumbers.length > 0) {
+            issues.push(`unsupported_numbers:${Array.from(new Set(unsupportedNumbers)).join(',')}`);
+        }
+
+        return {
+            ok: issues.length === 0,
+            issues
+        };
+    }
+
+    validateCollectionDraftPayload(payload = {}, invoice = {}) {
+        const issues = [];
+        if (typeof payload.subject !== 'string' || payload.subject.trim().length === 0) {
+            issues.push('missing_subject');
+        }
+        if (typeof payload.body !== 'string' || payload.body.trim().length === 0) {
+            issues.push('missing_body');
+        }
+        if ('discountOffered' in payload && typeof payload.discountOffered !== 'boolean') {
+            issues.push('invalid_discount_flag');
+        }
+
+        const evidenceNumbers = this.collectExecutionEvidence({
+            toolResults: [{ toolId: 'invoice_input', result: { data: invoice, meta: {} } }]
+        }).numbers;
+        const draftNumbers = this._extractClaimNumbers(`${payload.subject || ''}\n${payload.body || ''}`);
+        const unsupportedNumbers = draftNumbers.filter((number) => !evidenceNumbers.has(number));
+        if (unsupportedNumbers.length > 0) {
+            issues.push(`unsupported_numbers:${Array.from(new Set(unsupportedNumbers)).join(',')}`);
+        }
+
+        return {
+            ok: issues.length === 0,
+            issues
+        };
+    }
+
+    validateCommandPayload(payload = {}) {
+        const issues = [];
+        const validTypes = new Set(['create_customer', 'unknown']);
+
+        if (!validTypes.has(payload.type)) {
+            issues.push('invalid_type');
+        }
+
+        if (payload.type === 'create_customer') {
+            if (!payload.data || typeof payload.data !== 'object') {
+                issues.push('missing_data');
+            } else if (typeof payload.data.name !== 'string' || payload.data.name.trim().length === 0) {
+                issues.push('missing_customer_name');
+            }
+        }
+
+        if (payload.message !== undefined && typeof payload.message !== 'string') {
+            issues.push('invalid_message');
+        }
+
+        return {
+            ok: issues.length === 0,
+            issues
+        };
+    }
+
+    validateAgentPayload(payload = {}, contextData = {}) {
+        const issues = [];
+        if (typeof payload.text !== 'string' || payload.text.trim().length === 0) {
+            issues.push('missing_text');
+        }
+
+        const evidenceNumbers = this.collectExecutionEvidence({
+            toolResults: [{ toolId: 'agent_context', result: { data: contextData, meta: {} } }]
+        }).numbers;
+        const payloadNumbers = this._extractClaimNumbers(payload.text || '');
+        const unsupportedNumbers = payloadNumbers.filter((number) => !evidenceNumbers.has(number));
+        if (unsupportedNumbers.length > 0) {
+            issues.push(`unsupported_numbers:${Array.from(new Set(unsupportedNumbers)).join(',')}`);
+        }
+
+        return {
+            ok: issues.length === 0,
+            issues
+        };
+    }
+
+    async safeJsonModelCall({
+        prompt,
+        cacheKey = null,
+        cacheTtl = null,
+        validator = null,
+        sanitise = null,
+        providerSuffix = 'json'
+    } = {}) {
+        if (cacheKey) {
+            const cached = this._cacheGet(cacheKey);
+            if (cached) {
+                return { ...cached, provider: `${cached.provider}:cached` };
+            }
+        }
+
+        if (!this.genAI || !this._canMakeRequest()) {
+            throw new Error('Cloud Busy: AI structured generation is currently unavailable.');
+        }
+
+        for (const modelName of this.models) {
+            try {
+                this._consumeToken();
+                const modelInstance = this.getModel(modelName, true);
+                const result = await modelInstance.generateContent(prompt);
+                const response = await result.response;
+                const parsed = this.parseJsonText(response.text());
+                const validation = validator ? validator(parsed) : { ok: true, issues: [] };
+
+                if (!validation.ok) {
+                    throw this.buildGenericValidationError(`AI verification failed: ${validation.issues.join(', ')}`);
+                }
+
+                const base = sanitise ? sanitise(parsed) : parsed;
+                const responseData = {
+                    ...base,
+                    usage: response.usageMetadata,
+                    provider: `cloud:${modelName}:${providerSuffix}`
+                };
+
+                if (cacheKey && cacheTtl) {
+                    this._cacheSet(cacheKey, responseData, cacheTtl);
+                }
+
+                return responseData;
+            } catch (error) {
+                if (this.isRetryable(error)) continue;
+                throw error;
+            }
+        }
+
+        throw new Error('Cloud Busy: Unable to complete structured AI request safely.');
+    }
+
+    async buildToolBackedExecution(query, context = {}) {
+        const plannedTools = await aiToolRegistryService.planTools(query, context);
+        const toolResults = [];
+
+        for (const step of plannedTools) {
+            const definition = aiToolRegistryService.getToolDefinition(step.toolId);
+            const result = await aiToolRegistryService.executeTool(step.toolId, context, step.args || {});
+            toolResults.push({
+                toolId: step.toolId,
+                label: definition?.label || step.toolId,
+                uiComponent: definition?.uiComponent || null,
+                args: step.args || {},
+                result
+            });
+        }
+
+        return {
+            mode: plannedTools.length > 0 ? 'grounded' : 'general',
+            toolResults
+        };
+    }
+
+    analyzeQueryRisk(query, execution = {}) {
+        const text = String(query || '').toLowerCase();
+        const hasToolEvidence = Boolean((execution.toolResults || []).length);
+        const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const hasBoundedPhrase = (signal) => {
+            const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegex(signal.toLowerCase())}([^a-z0-9]|$)`, 'i');
+            return pattern.test(text);
+        };
+
+        const privateDataSignals = [
+            'my ', 'our ', 'business', 'workspace', 'dashboard', 'revenue', 'profit',
+            'margin', 'cash flow', 'cashflow', 'safe to spend', 'overdue', 'invoice',
+            'invoices', 'customer', 'customers', 'client', 'clients', 'payment', 'payments',
+            'expense', 'expenses', 'receivable', 'receivables', 'runway'
+        ];
+        const temporalSignals = [
+            'today', 'current', 'currently', 'latest', 'recent', 'recently',
+            'right now', 'as of', 'this week', 'this month', 'this quarter', 'this year'
+        ];
+        const highStakesSignals = [
+            'legal', 'law', 'gst', 'tds', 'tax', 'compliance', 'penalty', 'interest',
+            'file return', 'filing', 'medical', 'diagnose', 'prescription', 'investment',
+            'stock', 'sebi', 'contract'
+        ];
+        const domainSignals = [
+            'invoice', 'invoices', 'payment', 'payments', 'expense', 'expenses',
+            'compliance', 'gst', 'tds', 'receivable', 'receivables', 'vendor', 'vendors',
+            'billing', 'receipt', 'reconcile', 'filing', 'return', 'deadline'
+        ];
+        const conversationalSafeSignals = [
+            'hi', 'hello', 'hey', 'how are you', 'who are you', 'what can you do',
+            'help', 'thanks', 'thank you', 'good morning', 'good evening',
+            'good afternoon', 'good night', 'how are you doing', 'how are you doing these days',
+            'what are the things you can do', 'can you help', 'are you online'
+        ];
+
+        const asksForPrivateData = privateDataSignals.some((signal) => text.includes(signal));
+        const asksForCurrentInfo = temporalSignals.some((signal) => text.includes(signal));
+        const highStakesDomain = highStakesSignals.some((signal) => text.includes(signal));
+        const isDomainQuestion = domainSignals.some((signal) => text.includes(signal));
+        const isConversationalSafe = conversationalSafeSignals.some((signal) => hasBoundedPhrase(signal));
+        const requestsGuarantee = ['100%', 'guarantee', 'guaranteed', 'always correct', 'perfect answer']
+            .some((signal) => text.includes(signal));
+
+        const shouldRefuseGeneralAnswer = !hasToolEvidence && !isConversationalSafe && (
+            asksForPrivateData ||
+            highStakesDomain ||
+            isDomainQuestion
+        );
+
+        const confidence = hasToolEvidence ? 'grounded' : (shouldRefuseGeneralAnswer ? 'blocked' : 'general');
+
+        return {
+            hasToolEvidence,
+            asksForPrivateData,
+            asksForCurrentInfo,
+            highStakesDomain,
+            isDomainQuestion,
+            isConversationalSafe,
+            requestsGuarantee,
+            shouldRefuseGeneralAnswer,
+            confidence
+        };
+    }
+
+    buildSafetyMetadata(execution = {}, queryRisk = {}) {
+        return {
+            confidence: queryRisk.confidence || 'general',
+            grounded: Boolean(queryRisk.hasToolEvidence),
+            blocked: Boolean(queryRisk.shouldRefuseGeneralAnswer),
+            requiresVerification: Boolean(!queryRisk.hasToolEvidence && queryRisk.highStakesDomain),
+            provenance: (execution.toolResults || []).map((entry) => ({
+                tool: entry.toolId,
+                source: entry.result?.meta?.source || null,
+                generated_at: entry.result?.meta?.generated_at || null
+            }))
+        };
+    }
+
+    buildUnsupportedAnswer(queryRisk = {}) {
+        const reasons = [];
+
+        if (queryRisk.asksForPrivateData) {
+            reasons.push('your workspace-specific data was not retrieved by a tool');
+        }
+
+        if (queryRisk.asksForCurrentInfo && queryRisk.highStakesDomain) {
+            reasons.push('the question needs current high-stakes verification');
+        }
+
+        const reasonText = reasons.length > 0
+            ? reasons.join(' and ')
+            : 'the answer cannot be verified safely from the current context';
+
+        return [
+            `I can’t answer that as certain fact because ${reasonText}.`,
+            '',
+            '- I only treat tool results as authoritative for private business metrics.',
+            '- For changing legal, tax, or compliance rules, this system should verify the latest source before speaking with certainty.',
+            '- Ask a grounded workspace question or provide a narrower general question that does not depend on current private data.',
+            '',
+            '→ Next action: rephrase the question so it can be answered from available tools or verified sources.'
+        ].join('\n');
+    }
+
+    buildUnverifiedAnswer(queryRisk = {}, issues = []) {
+        const issueText = issues.length > 0 ? ` The verification step rejected the draft for: ${issues.join(', ')}.` : '';
+        return [
+            `I’m not returning an AI-generated answer because it could not be verified against the backend evidence.${issueText}`,
+            '',
+            '- This system now rejects answers that cite missing tools or introduce unsupported business facts.',
+            '- Ask a narrower question, or retrieve the needed data first so the response can be grounded.',
+            queryRisk.highStakesDomain
+                ? '- For tax, legal, compliance, or other high-stakes topics, treat AI output as support material and get professional review.'
+                : '- The safest next step is to ask for a specific metric, customer, invoice group, or time window.',
+            '',
+            '→ Next action: ask a more specific grounded question.'
+        ].join('\n');
+    }
+
     async generateGroundedAnswer(query, context = {}, execution = {}) {
         const userId = context.user?.id || 'anon';
         const orgId = context.organizationId;
         const budget = await this._checkPlanBudget(orgId);
+        const queryRisk = this.analyzeQueryRisk(query, execution);
+
+        if (queryRisk.shouldRefuseGeneralAnswer) {
+            return {
+                text: this.buildUnsupportedAnswer(queryRisk),
+                action: null,
+                data: this.buildSafetyMetadata(execution, queryRisk),
+                usage: null,
+                provider: 'system:safety_guard',
+                budget: await this.getBudgetStatus(userId, orgId)
+            };
+        }
 
         if (!this.genAI || this.isCircuitOpen() || !budget.allowed || !this._canMakeRequest()) {
             if (!budget.allowed) {
@@ -406,7 +1240,9 @@ class AIService {
             throw new Error('Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.');
         }
 
-        const prompt = this.buildEvidencePrompt(query, context, execution);
+        const prompt = execution.toolResults?.length
+            ? this.buildGroundedJsonPrompt(query, context, execution)
+            : this.buildEvidencePrompt(query, context, execution);
         const rawHistory = context.history || [];
         const history = this._sanitiseHistory(rawHistory);
         const targetModels = budget.models || this.models;
@@ -415,24 +1251,62 @@ class AIService {
         for (const modelName of targetModels) {
             try {
                 this._consumeToken();
-                const modelInstance = this.getModel(modelName, false, false);
+                const useJsonMode = Boolean(execution.toolResults?.length);
+                const modelInstance = this.getModel(modelName, useJsonMode, false);
                 if (!modelInstance) continue;
 
                 const chat = modelInstance.startChat({ history });
                 const result = await chat.sendMessage(prompt);
                 const response = await result.response;
                 const budgetStatus = await this.getBudgetStatus(userId, orgId);
+                const rawText = response.text().trim();
+
+                if (useJsonMode) {
+                    let payload = null;
+                    try {
+                        payload = JSON.parse(rawText);
+                    } catch {
+                        payload = null;
+                    }
+
+                    const validation = this.validateGroundedPayload(payload || {}, execution, queryRisk);
+                    if (!payload || !validation.ok || payload.verification_status === 'insufficient_evidence') {
+                        const fallbackText = execution.toolResults?.length
+                            ? this.buildToolBackedFallbackAnswer(query, execution)
+                            : this.buildUnverifiedAnswer(queryRisk, validation.issues);
+                        return {
+                            text: fallbackText,
+                            action: null,
+                            data: {
+                                ...this.buildSafetyMetadata(execution, queryRisk),
+                                verificationIssues: validation.issues,
+                                usedToolFallback: Boolean(execution.toolResults?.length)
+                            },
+                            usage: response.usageMetadata,
+                            provider: execution.toolResults?.length
+                                ? `system:grounding_fallback:${modelName}`
+                                : `system:grounding_guard:${modelName}`,
+                            budget: budgetStatus
+                        };
+                    }
+
+                    return {
+                        text: this.formatGroundedPayload(payload),
+                        action: this.extractAction(payload.next_action, query),
+                        data: {
+                            ...this.buildSafetyMetadata(execution, queryRisk),
+                            verificationStatus: payload.verification_status
+                        },
+                        usage: response.usageMetadata,
+                        provider: `cloud:${modelName}:orchestrated`,
+                        budget: budgetStatus
+                    };
+                }
 
                 return {
-                    text: response.text().trim(),
-                    action: this.extractAction(response.text(), query),
-                    data: {
-                        provenance: (execution.toolResults || []).map((entry) => ({
-                            tool: entry.toolId,
-                            source: entry.result?.meta?.source || null,
-                            generated_at: entry.result?.meta?.generated_at || null
-                        }))
-                    },
+                    text: rawText,
+                    action: this.extractAction(rawText, query),
+                    data: this.buildSafetyMetadata(execution, queryRisk),
                     usage: response.usageMetadata,
                     provider: `cloud:${modelName}:orchestrated`,
                     budget: budgetStatus
@@ -451,6 +1325,20 @@ class AIService {
         const userId = context.user?.id || 'anon';
         const orgId = context.organizationId;
         const budget = await this._checkPlanBudget(orgId);
+        const queryRisk = this.analyzeQueryRisk(query, execution);
+
+        if (queryRisk.shouldRefuseGeneralAnswer) {
+            yield {
+                type: 'complete',
+                text: this.buildUnsupportedAnswer(queryRisk),
+                action: null,
+                usage: null,
+                provider: 'system:safety_guard',
+                budget: await this.getBudgetStatus(userId, orgId),
+                data: this.buildSafetyMetadata(execution, queryRisk)
+            };
+            return;
+        }
 
         if (!budget.allowed) {
             throw new Error(AI_ACCESS_EXHAUSTED_MESSAGE);
@@ -459,7 +1347,9 @@ class AIService {
             throw new Error('Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.');
         }
 
-        const prompt = this.buildEvidencePrompt(query, context, execution);
+        const prompt = execution.toolResults?.length
+            ? this.buildGroundedJsonPrompt(query, context, execution)
+            : this.buildEvidencePrompt(query, context, execution);
         const rawHistory = context.history || [];
         const history = this._sanitiseHistory(rawHistory);
         const targetModels = budget.models || this.models;
@@ -469,7 +1359,8 @@ class AIService {
         for (const modelName of targetModels) {
             try {
                 this._consumeToken();
-                const modelInstance = this.getModel(modelName, false, false);
+                const useJsonMode = Boolean(execution.toolResults?.length);
+                const modelInstance = this.getModel(modelName, useJsonMode, false);
                 if (!modelInstance) continue;
 
                 const chat = modelInstance.startChat({ history });
@@ -480,7 +1371,9 @@ class AIService {
                         const chunkText = chunk.text();
                         if (chunkText) {
                             fullText += chunkText;
-                            yield { type: 'token', text: chunkText };
+                            if (!useJsonMode) {
+                                yield { type: 'token', text: chunkText };
+                            }
                         }
                     } catch {
                         // Ignore empty chunks
@@ -490,20 +1383,62 @@ class AIService {
                 const finalResponse = await currentResult.response;
                 const budgetStatus = await this.getBudgetStatus(userId, orgId);
 
+                const rawText = fullText.trim();
+
+                if (useJsonMode) {
+                    let payload = null;
+                    try {
+                        payload = JSON.parse(rawText);
+                    } catch {
+                        payload = null;
+                    }
+
+                    const validation = this.validateGroundedPayload(payload || {}, execution, queryRisk);
+                    if (!payload || !validation.ok || payload.verification_status === 'insufficient_evidence') {
+                        const fallbackText = execution.toolResults?.length
+                            ? this.buildToolBackedFallbackAnswer(query, execution)
+                            : this.buildUnverifiedAnswer(queryRisk, validation.issues);
+                        yield {
+                            type: 'complete',
+                            text: fallbackText,
+                            action: null,
+                            usage: finalResponse?.usageMetadata,
+                            provider: execution.toolResults?.length
+                                ? `system:grounding_fallback:${modelName}`
+                                : `system:grounding_guard:${modelName}`,
+                            budget: budgetStatus,
+                            data: {
+                                ...this.buildSafetyMetadata(execution, queryRisk),
+                                verificationIssues: validation.issues,
+                                usedToolFallback: Boolean(execution.toolResults?.length)
+                            }
+                        };
+                        return;
+                    }
+
+                    yield {
+                        type: 'complete',
+                        text: this.formatGroundedPayload(payload),
+                        action: this.extractAction(payload.next_action, query),
+                        usage: finalResponse?.usageMetadata,
+                        provider: `cloud:${modelName}:orchestrated`,
+                        budget: budgetStatus,
+                        data: {
+                            ...this.buildSafetyMetadata(execution, queryRisk),
+                            verificationStatus: payload.verification_status
+                        }
+                    };
+                    return;
+                }
+
                 yield {
                     type: 'complete',
-                    text: fullText.trim(),
+                    text: rawText,
                     action: this.extractAction(fullText, query),
                     usage: finalResponse?.usageMetadata,
                     provider: `cloud:${modelName}:orchestrated`,
                     budget: budgetStatus,
-                    data: {
-                        provenance: (execution.toolResults || []).map((entry) => ({
-                            tool: entry.toolId,
-                            source: entry.result?.meta?.source || null,
-                            generated_at: entry.result?.meta?.generated_at || null
-                        }))
-                    }
+                    data: this.buildSafetyMetadata(execution, queryRisk)
                 };
                 return;
             } catch (error) {
@@ -763,99 +1698,8 @@ class AIService {
         if (context.agentId && actionAgents.includes(context.agentId)) {
             return this.processStructuredAgentQuery(query, context.agentId, context);
         }
-
-        // 1. Check budget + rate limits before calling API
-        const orgId = context.organizationId;
-        const budget = await this._checkPlanBudget(orgId);
-        
-        if (!this.genAI || this.isCircuitOpen() || !budget.allowed || !this._canMakeRequest()) {
-            const reason = !this.genAI ? 'no_api_key' 
-                : this.isCircuitOpen() ? 'circuit_open' 
-                : !this._canMakeRequest() ? 'rpm_limit' 
-                : 'monthly_budget_exhausted';
-            console.log(`📡 Local fallback: ${reason} (user: ${userId})`);
-            
-            if (!budget.allowed) {
-                throw new Error(AI_ACCESS_EXHAUSTED_MESSAGE);
-            }
-            
-            throw new Error(`Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.`);
-        }
-
-        const lockKey = `chat_${userId}_${query.slice(0, 20)}`;
-        const targetModels = budget.models || this.models;
-
-        return this.executeWithLock(lockKey, async () => {
-            let lastError = null;
-            
-            for (const modelName of targetModels) {
-                try {
-                    this._consumeToken();
-                    const modelInstance = this.getModel(modelName);
-                    if (!modelInstance) continue;
-
-                    const prompt = this.buildChatbotPrompt(query, context);
-                    const rawHistory = context.history || [];
-                    // Gemini requires history[0].role === 'user' and no empty parts
-                    const history = this._sanitiseHistory(rawHistory);
-                    
-                    // Use startChat for multi-turn memory
-                    const chat = modelInstance.startChat({ history });
-                    let result = await chat.sendMessage(prompt);
-                    let response = await result.response;
-                    
-                    // Handle potential function calls in non-streaming mode
-                    let iterations = 0;
-                    let pendingCalls = (typeof response.functionCalls === 'function' ? response.functionCalls() : null) || [];
-                    while (pendingCalls.length > 0 && iterations < 5) {
-                        const funcCall = pendingCalls[0];
-                        const toolResult = await this.executeTool(funcCall, context);
-                        
-                        result = await chat.sendMessage([{
-                            functionResponse: {
-                                name: funcCall.name,
-                                response: toolResult
-                            }
-                        }]);
-                        response = await result.response;
-                        pendingCalls = (typeof response.functionCalls === 'function' ? response.functionCalls() : null) || [];
-                        iterations++;
-                    }
-
-                    const text = response.text();
-                    const action = this.extractAction(text, query);
-
-                    const budgetStatus = await this.getBudgetStatus(userId, orgId);
-                    const responseData = {
-                        text: text.trim(),
-                        action,
-                        data: action ? action.data : null,
-                        usage: response.usageMetadata,
-                        provider: `cloud:${modelName}`,
-                        budget: budgetStatus,
-                    };
-
-                    return responseData;
-                } catch (error) {
-                    lastError = error;
-                    if (this.isRetryable(error)) {
-                        const status = error.status || error.statusCode || 'N/A';
-                        console.warn(`📡 [${modelName}] Skip: ${status}`);
-                        continue;
-                    } else {
-                        console.error(`📡 [${modelName}] Fatal AI Error:`, error.message);
-                        break; 
-                    }
-                }
-            }
-
-            const isRetryable = this.isRetryable(lastError);
-            if (isRetryable && (lastError?.status === 429 || lastError?.statusCode === 429)) {
-                this.openCircuit(lastError);
-            }
-
-            throw lastError || new Error('Cloud Busy: All AI models failed. Please try again.');
-        });
+        const execution = await this.buildToolBackedExecution(query, context);
+        return this.generateGroundedAnswer(query, context, execution);
     }
 
     /**
@@ -863,145 +1707,17 @@ class AIService {
      * Yields chunks of tokens to the client via a callback or generator
      */
     async *processQueryStream(query, context = {}) {
-        const userId = context.user?.id || 'anon';
-        const orgId = context.organizationId;
-        
-        const budget = await this._checkPlanBudget(orgId);
-        if (!budget.allowed) {
-            throw new Error(AI_ACCESS_EXHAUSTED_MESSAGE);
-        }
-        
-        if (!this.genAI || this.isCircuitOpen() || !this._canMakeRequest()) {
-            throw new Error(`Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.`);
-        }
-
-        const targetModels = budget.models || this.models;
-        let fullText = '';
-        let lastError = null;
-
-        for (const modelUsed of targetModels) {
-            try {
-                this._consumeToken();
-                const modelInstance = this.getModel(modelUsed);
-                if (!modelInstance) continue;
-
-                const prompt = this.buildChatbotPrompt(query, context);
-                const rawHistory = context.history || [];
-                // Gemini requires history[0].role === 'user' and no empty parts
-                const history = this._sanitiseHistory(rawHistory);
-                
-                const chat = modelInstance.startChat({ history });
-                let currentResult = await chat.sendMessageStream(prompt);
-                
-                let done = false;
-                let finalResponse = null;
-
-                while (!done) {
-                    let functionCallOccurred = false;
-                    for await (const chunk of currentResult.stream) {
-                        let funcCall = null;
-                        try {
-                            if (chunk.candidates?.length > 0) {
-                                const calls = typeof chunk.functionCalls === 'function' ? chunk.functionCalls() : [];
-                                funcCall = calls?.[0] || null;
-                            }
-                        } catch (e) {
-                            // ignore empty or malformed candidates
-                        }
-                        
-                        if (funcCall) {
-                            functionCallOccurred = true;
-                            // Execute native tool
-                            const toolResult = await this.executeTool(funcCall, context);
-                            
-                            // Yield Generative UI Event to the Frontend stream immediately
-                            if (this.shouldEmitGenerativeUI(funcCall.name, query)) {
-                                yield {
-                                    type: 'gen_ui',
-                                    component: funcCall.name,
-                                    data: toolResult
-                                };
-                            }
-                            
-                            // CRITICAL: Await the current stream's completion so Gemini SDK registers the model's functionCall turn internally.
-                            try {
-                                await currentResult.response;
-                            } catch (ignoreErr) { }
-                            
-                            // Feed result back into Gemini to get the final text response
-                            currentResult = await chat.sendMessageStream([{
-                                functionResponse: {
-                                    name: funcCall.name,
-                                    response: toolResult
-                                }
-                            }]);
-                            break; // Break inner loop, restart stream with new result
-                        } else if (chunk.text) {
-                            // Some chunks might just be empty parts, so check if text() is valid
-                            try {
-                                const chunkText = chunk.text();
-                                if (chunkText) {
-                                    fullText += chunkText;
-                                    yield { type: 'token', text: chunkText };
-                                }
-                            } catch (e) {
-                                // Ignore empty text chunks
-                            }
-                        }
-                    }
-                    
-                    if (!functionCallOccurred) {
-                        done = true;
-                        // Wait for the final usage metadata
-                        finalResponse = await currentResult.response;
-                    }
-                }
-
-                const action = this.extractAction(fullText, query);
-                const budgetStatus = await this.getBudgetStatus(userId, orgId);
-                
-                yield { 
-                    type: 'complete', 
-                    text: fullText.trim(),
-                    action,
-                    usage: finalResponse?.usageMetadata,
-                    provider: `cloud:${modelUsed}`,
-                    budget: budgetStatus
+        const execution = await this.buildToolBackedExecution(query, context);
+        for (const toolResult of execution.toolResults || []) {
+            if (toolResult.uiComponent) {
+                yield {
+                    type: 'gen_ui',
+                    component: toolResult.uiComponent,
+                    data: toolResult.result?.data
                 };
-
-                return; // Stream succeeded, exit the generator successfully
-
-            } catch (error) {
-                lastError = error;
-                if (this.isRetryable(error)) {
-                    console.warn(`📡 [${modelUsed}] Stream Error (${error.status || 'N/A'}). Retrying with fallback...`);
-                    // reset accumulated text for the next model
-                    fullText = '';
-                    continue;
-                } else {
-                    console.error(`📡 [${modelUsed}] Fatal Stream Error:`, error.stack || error.message);
-                    break;
-                }
             }
         }
-
-        const isRetryable = this.isRetryable(lastError);
-        if (isRetryable && (lastError?.status === 429 || lastError?.statusCode === 429)) {
-            this.openCircuit(lastError);
-        }
-
-        if (lastError) {
-            const msg = lastError.message || '';
-            if (lastError.status === 503 || msg.includes('503')) {
-                throw new Error('Our AI models are experiencing unusually high demand. Please try again in a few moments.');
-            } else if (lastError.status === 429 || msg.includes('429') || msg.includes('quota')) {
-                throw new Error('You have exhausted your AI budget or rate limit. Please wait a minute before trying again.');
-            } else {
-                throw new Error('AI processing failed securely. Please modify your query and try again.');
-            }
-        }
-
-        throw new Error('Cloud Busy: All AI backup models failed.');
+        yield* this.generateGroundedAnswerStream(query, context, execution);
     }
 
     /**
@@ -1032,40 +1748,21 @@ class AIService {
                 break;
         }
 
-        let lastError = null;
-        const targetModels = budget.models || this.models;
-        for (let i = 0; i < targetModels.length; i++) {
-            const modelName = targetModels[i];
-            try {
-                this._consumeToken();
-                const modelInstance = this.getModel(modelName, true);
-                if (!modelInstance) continue;
+        const response = await this.safeJsonModelCall({
+            providerSuffix: 'agent',
+            prompt: `${systemPrompt}
+Return strict JSON only: { "text": string }.
+Use only facts present in the supplied query and agent context.`,
+            validator: (payload) => this.validateAgentPayload(payload, contextData),
+            sanitise: (payload) => ({
+                text: payload.text.trim()
+            })
+        });
 
-                const result = await modelInstance.generateContent(systemPrompt);
-                const response = await result.response;
-                
-                const budgetStatus = await this.getBudgetStatus(userId, orgId);
-                
-                return {
-                    text: response.text().trim(),
-                    usage: response.usageMetadata,
-                    provider: `cloud:${modelName}:json`,
-                    budget: budgetStatus,
-                };
-            } catch (error) {
-                lastError = error;
-                // If there's another model to try, wait briefly to avoid rapid-fire 429s
-                if (i < targetModels.length - 1 && this.isRetryable(error)) {
-                    console.log(`📡 [${modelName}] Retryable error, cooling down for 1s...`);
-                    await this._sleep(1200);
-                    continue;
-                }
-                break;
-            }
-        }
-
-        // If all models fail, throw a Cloud Busy error instead of falling back to local mode
-        throw new Error(`Cloud Busy: All AI models (${targetModels.join(', ')}) are currently rate-limited or unavailable. Please try again in a few seconds.`);
+        return {
+            ...response,
+            budget: await this.getBudgetStatus(userId, orgId)
+        };
     }
 
     buildChatbotPrompt(query, context) {
@@ -1200,15 +1897,22 @@ class AIService {
                 try {
                     this._consumeToken();
                     const modelInstance = this.getModel(modelName, true);
-                    const prompt = `Parse this text into a strict JSON invoice: "${text}"`;
+                    const prompt = `Parse this text into a strict JSON invoice.
+Only include values directly present in the source text. Do not infer missing numeric values.
+Source text:
+${text}`;
                     const result = await modelInstance.generateContent(prompt);
                     const response = await result.response;
-                    const jsonText = response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                    const parsed = JSON.parse(jsonText);
-                    
+                    const parsed = this.parseJsonText(response.text());
+                    const validation = this.validateInvoiceExtractionPayload(parsed, text);
+
+                    if (!validation.ok) {
+                        throw this.buildGenericValidationError(`AI verification failed: ${validation.issues.join(', ')}`);
+                    }
+
                     const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:magic` };
                     this._cacheSet(cacheKey, responseData, this.CACHE_TTL.invoice);
-                    
+
                     return responseData;
                 } catch (error) {
                     if (this.isRetryable(error)) continue;
@@ -1224,40 +1928,22 @@ class AIService {
      */
     async auditInvoice(invoiceData, userId = 'anon') {
         const cacheKey = this._cacheKey('audit', JSON.stringify(invoiceData));
-        const cached = this._cacheGet(cacheKey);
-        if (cached) return { ...cached, provider: cached.provider + ':cached' };
-
-        if (!this.genAI || !this._canMakeRequest()) {
-            throw new Error('Cloud Busy: AI Audit is currently unavailable.');
-        }
-
         const prompt = `You are a strict financial auditor. Audit this invoice for errors (GST/Tax errors, pricing logic, missing information, risk of rejection).
         Invoice: ${JSON.stringify(invoiceData)}
-        Return a strict JSON object: { "riskScore": number (0-100), "suggestions": string[] }`;
+        Return a strict JSON object: { "riskScore": number (0-100), "suggestions": string[] }.
+        Suggestions must stay grounded in the provided invoice data and must not invent amounts, dates, or counterparties.`;
 
-        for (const modelName of this.models) {
-            try {
-                this._consumeToken();
-                const modelInstance = this.getModel(modelName, true);
-                const result = await modelInstance.generateContent(prompt);
-                const response = await result.response;
-                const jsonText = response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                const parsed = JSON.parse(jsonText);
-                
-                const data = {
-                    riskScore: parsed.riskScore ?? 0,
-                    suggestions: parsed.suggestions ?? ["Looks perfect!"],
-                    usage: response.usageMetadata,
-                    provider: `cloud:${modelName}:audit`,
-                };
-                this._cacheSet(cacheKey, data, this.CACHE_TTL.invoice);
-                return data;
-            } catch (error) {
-                if (this.isRetryable(error)) continue;
-                break;
-            }
-        }
-        throw new Error('Cloud Busy: AI Audit failed.');
+        return this.safeJsonModelCall({
+            cacheKey,
+            cacheTtl: this.CACHE_TTL.invoice,
+            providerSuffix: 'audit',
+            prompt,
+            validator: (payload) => this.validateAuditPayload(payload, invoiceData),
+            sanitise: (payload) => ({
+                riskScore: payload.riskScore ?? 0,
+                suggestions: Array.isArray(payload.suggestions) ? payload.suggestions : ['Unable to verify audit suggestions safely.']
+            })
+        });
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1334,91 +2020,63 @@ class AIService {
 
     async generateCollectionDraft(invoice, currency, forceAggressive = false, userId = 'anon') {
         const cacheKey = this._cacheKey('draft', `${invoice.invoiceNumber}_${forceAggressive}`);
-        const cached = this._cacheGet(cacheKey);
-        if (cached) {
-            return { ...cached, provider: cached.provider + ':cached' };
-        }
+        const prompt = `Generate a collection email draft as strict JSON only.
+Invoice context: ${JSON.stringify(invoice)}
+Tone: ${forceAggressive ? 'firm' : 'professional'}.
+Use only facts present in the invoice context.
+Return: { "subject": string, "body": string, "discountOffered": boolean }`;
 
-        if (!this.genAI || !this._canMakeRequest()) {
-            throw new Error('Cloud Busy: Unable to generate collection draft using cloud models.');
-        }
-
-        for (const modelName of this.models) {
-            try {
-                this._consumeToken();
-                const modelInstance = this.getModel(modelName, true);
-                const prompt = `Generate collection draft for Invoice #${invoice.invoiceNumber}`;
-                const result = await modelInstance.generateContent(prompt);
-                const response = await result.response;
-                const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-                
-                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:draft` };
-                this._cacheSet(cacheKey, responseData, this.CACHE_TTL.draft);
-                
-                return responseData;
-            } catch (error) {
-                if (this.isRetryable(error)) continue;
-                break;
-            }
-        }
-        // Throw error instead of local draft
-        throw new Error('Cloud Busy: Unable to generate collection draft using cloud models.');
+        return this.safeJsonModelCall({
+            cacheKey,
+            cacheTtl: this.CACHE_TTL.draft,
+            providerSuffix: 'draft',
+            prompt,
+            validator: (payload) => this.validateCollectionDraftPayload(payload, invoice),
+            sanitise: (payload) => ({
+                subject: payload.subject.trim(),
+                body: payload.body.trim(),
+                discountOffered: Boolean(payload.discountOffered)
+            })
+        });
     }
 
     async generateSettlementOffer(invoice, currency, userId = 'anon') {
         const cacheKey = this._cacheKey('draft', `settle_${invoice.invoiceNumber}`);
-        const cached = this._cacheGet(cacheKey);
-        if (cached) {
-            return { ...cached, provider: cached.provider + ':cached' };
-        }
+        const prompt = `Generate a settlement negotiation email as strict JSON only.
+Invoice context: ${JSON.stringify(invoice)}
+Use only invoice facts supplied here. Do not invent new amounts or deadlines.
+Return: { "subject": string, "body": string, "discountOffered": boolean }`;
 
-        if (!this.genAI || !this._canMakeRequest()) {
-            throw new Error('Cloud Busy: Unable to generate settlement offer using cloud models.');
-        }
-        
-        for (const modelName of this.models) {
-            try {
-                this._consumeToken();
-                const modelInstance = this.getModel(modelName, true);
-                const prompt = `Generate settlement for Invoice #${invoice.invoiceNumber}`;
-                const result = await modelInstance.generateContent(prompt);
-                const response = await result.response;
-                const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-                
-                const responseData = { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:settle` };
-                this._cacheSet(cacheKey, responseData, this.CACHE_TTL.draft);
-                
-                return responseData;
-            } catch (error) {
-                if (this.isRetryable(error)) continue;
-                break;
-            }
-        }
-        // Throw error instead of local settlement
-        throw new Error('Cloud Busy: Unable to generate settlement offer using cloud models.');
+        return this.safeJsonModelCall({
+            cacheKey,
+            cacheTtl: this.CACHE_TTL.draft,
+            providerSuffix: 'settle',
+            prompt,
+            validator: (payload) => this.validateCollectionDraftPayload(payload, invoice),
+            sanitise: (payload) => ({
+                subject: payload.subject.trim(),
+                body: payload.body.trim(),
+                discountOffered: Boolean(payload.discountOffered)
+            })
+        });
     }
 
     async parseCommand(text, userId = 'anon') {
-        if (!this.genAI || !this._canMakeRequest()) {
-            throw new Error('Cloud Busy: AI Command Parser is temporarily unavailable.');
-        }
-        
-        for (const modelName of this.models) {
-            try {
-                this._consumeToken();
-                const modelInstance = this.getModel(modelName, true);
-                const prompt = `Parse command: "${text}"`;
-                const result = await modelInstance.generateContent(prompt);
-                const response = await result.response;
-                const parsed = JSON.parse(response.text().trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
-                
-                return { ...parsed, usage: response.usageMetadata, provider: `cloud:${modelName}:cmd` };
-            } catch (error) {
-                if (this.isRetryable(error)) continue;
-                break;
-            }
-        }
-        throw new Error('Cloud Busy: Unable to parse command using cloud models.');
+        return this.safeJsonModelCall({
+            providerSuffix: 'cmd',
+            prompt: `Parse this command into strict JSON only.
+Supported action types: "create_customer", "unknown".
+Return schema:
+{ "type": "create_customer" | "unknown", "message": string, "data": { "name"?: string, "email"?: string, "phone"?: string, "address"?: string } }
+If the command does not clearly map to a supported action, return type "unknown".
+Command: "${text}"`,
+            validator: (payload) => this.validateCommandPayload(payload),
+            sanitise: (payload) => ({
+                type: payload.type,
+                message: typeof payload.message === 'string' ? payload.message : '',
+                data: payload.data && typeof payload.data === 'object' ? payload.data : {}
+            })
+        });
     }
 
     /* ========== HELPER METHODS ========== */

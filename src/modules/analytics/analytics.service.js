@@ -516,43 +516,56 @@ class AnalyticsService {
      * Logic: Real Cash (Payments) - Computed Burn - Reserves - Risk
      */
     async getSafeToSpend(organizationId) {
-        // 1. Get Actual Cash on Hand (Sum of all payments received)
-        const { data: payments, error: payError } = await supabase
-            .from('payments')
-            .select('amount')
-            .eq('organization_id', organizationId);
+        const [
+            { data: payments, error: payError },
+            { data: expenses, error: expError },
+            { data: settings, error: settingsError },
+            { data: overdueInvoices, error: overdueError }
+        ] = await Promise.all([
+            supabase.from('payments').select('amount').eq('organization_id', organizationId),
+            supabase.from('expenses').select('amount').eq('organization_id', organizationId),
+            supabase.from('settings').select('companyTaxId, defaultGstRate, default_gst_rate').eq('organization_id', organizationId).maybeSingle(),
+            supabase
+                .from('invoices')
+                .select('total')
+                .eq('organization_id', organizationId)
+                .eq('status', 'pending')
+                .lt('dueDate', new Date().toISOString())
+        ]);
 
         if (payError) throw new Error(payError.message);
+        if (expError) throw new Error(expError.message);
+        if (settingsError) throw new Error(settingsError.message);
+        if (overdueError) throw new Error(overdueError.message);
 
-        const bankBalance = payments.reduce((sum, p) => sum + p.amount, 0);
+        const totalReceivedPayments = (payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
+        const totalExpenses = (expenses || []).reduce((sum, exp) => sum + (exp.amount || 0), 0);
+        const cashOnHand = totalReceivedPayments - totalExpenses;
 
-        // 2. Tax Reserves (Estimates)
-        const gstReserve = bankBalance * TAX_RESERVES.GST_RATE;
-        const incomeTaxReserve = bankBalance * TAX_RESERVES.INCOME_TAX_RATE;
+        const gstRate = Number(settings?.defaultGstRate ?? settings?.default_gst_rate ?? TAX_RESERVES.GST_RATE * 100);
+        const hasGstRegistration = Boolean(settings?.companyTaxId);
+        const gstReserve = hasGstRegistration
+            ? Math.max(0, totalReceivedPayments) * (gstRate / (100 + gstRate))
+            : 0;
 
-        // 3. Risk Factor
-        const { data: overdueInvoices } = await supabase
-            .from('invoices')
-            .select('total')
-            .eq('organization_id', organizationId)
-            .eq('status', 'pending')
-            .lt('dueDate', new Date().toISOString());
+        const taxableProfit = Math.max(0, totalReceivedPayments - gstReserve - totalExpenses);
+        const incomeTaxReserve = taxableProfit * TAX_RESERVES.INCOME_TAX_RATE;
 
-        const overdueTotal = overdueInvoices?.reduce((sum, inv) => sum + inv.total, 0) || 0;
+        const overdueTotal = (overdueInvoices || []).reduce((sum, inv) => sum + (inv.total || 0), 0);
         const atRiskAmount = overdueTotal * TAX_RESERVES.OVERDUE_RISK_FACTOR;
 
-        // 4. Calculate Safe Liquidity
-        // Safe = Cash - Taxes - Risk
-        const safeToSpend = bankBalance - gstReserve - incomeTaxReserve - atRiskAmount;
+        const safeToSpend = cashOnHand - gstReserve - incomeTaxReserve - atRiskAmount;
 
         return {
             safeToSpend: Math.max(0, safeToSpend),
-            totalRevenue: bankBalance, // Displaying "Cash on Hand" as the base
+            cashOnHand,
+            totalRevenue: totalReceivedPayments,
+            totalExpenses,
             reserves: {
                 gst: gstReserve,
                 incomeTax: incomeTaxReserve,
                 atRisk: atRiskAmount,
-                overdueTotal: overdueTotal
+                overdueTotal
             }
         };
     }

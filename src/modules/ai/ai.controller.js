@@ -388,6 +388,7 @@ export const auditInvoice = async (req, res) => {
 export const getInsights = async (req, res) => {
     const orgId = req.user.organizationId;
     const { persona } = req.query;
+    const cacheKey = `${orgId}:${persona || 'default'}`;
 
     const creditStatus = await checkAICreditLimit(req);
     if (!creditStatus.allowed) {
@@ -400,10 +401,10 @@ export const getInsights = async (req, res) => {
     }
 
     // Check Cache
-    if (insightsCache.has(orgId)) {
-        const cached = insightsCache.get(orgId);
+    if (insightsCache.has(cacheKey)) {
+        const cached = insightsCache.get(cacheKey);
         if (Date.now() - cached.timestamp < CACHE_TTL) {
-            console.log('⚡ Serving cached insights for', orgId);
+            console.log('⚡ Serving cached insights for', cacheKey);
             return res.json(cached.data);
         }
     }
@@ -411,6 +412,7 @@ export const getInsights = async (req, res) => {
     const [
         invoicesRes,
         customersRes,
+        settingsRes,
         stats,
         revenueTrends,
         customerInsights,
@@ -420,6 +422,7 @@ export const getInsights = async (req, res) => {
     ] = await Promise.all([
         Promise.resolve(supabase.from('invoices').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
         Promise.resolve(supabase.from('customers').select('*').eq('organization_id', req.user.organizationId)).catch(() => ({ data: [] })),
+        Promise.resolve(supabase.from('settings').select('*').eq('organization_id', req.user.organizationId).maybeSingle()).catch(() => ({ data: {} })),
         analyticsService.getDashboardStats(req.user.organizationId).catch(() => ({})),
         analyticsService.getRevenueTrends(req.user.organizationId, 'monthly').catch(() => ([])),
         analyticsService.getCustomerInsights(req.user.organizationId).catch(() => ([])),
@@ -433,6 +436,8 @@ export const getInsights = async (req, res) => {
         organizationId: orgId,
         invoices: invoicesRes?.data || [],
         customers: customersRes?.data || [],
+        settings: settingsRes?.data || {},
+        currency: settingsRes?.data?.currency || 'INR',
         stats: stats || {},
         safeToSpend: safeToSpend || {},
         personaStats: personaStats || {},
@@ -453,7 +458,7 @@ export const getInsights = async (req, res) => {
     }
 
     // Save to Cache
-    insightsCache.set(orgId, {
+    insightsCache.set(cacheKey, {
         data: insights,
         timestamp: Date.now()
     });
@@ -471,29 +476,31 @@ export const getInsights = async (req, res) => {
 };
 
 export const predictRevenue = async (req, res) => {
-    // 1. Get historical invoice data
-    const { data: invoices } = await supabase
-        .from('invoices')
-        .select('total, createdAt, status')
-        .eq('organization_id', req.user.organizationId)
-        .order('createdAt', { ascending: true });
+    const inputData = req.body?.historicalData;
 
-    // Null guard: if the Supabase query fails, invoices will be null
-    const safeInvoices = invoices || [];
+    let historicalData = inputData;
+    if (!historicalData || (Array.isArray(historicalData) && historicalData.length === 0)) {
+        const { data: invoices } = await supabase
+            .from('invoices')
+            .select('total, createdAt, status')
+            .eq('organization_id', req.user.organizationId)
+            .order('createdAt', { ascending: true });
 
-    // 2. Format for AI analysis
-    const historicalData = safeInvoices.reduce((acc, inv) => {
-        const month = new Date(inv.createdAt).toISOString().slice(0, 7); // YYYY-MM
-        acc[month] = (acc[month] || 0) + inv.total;
-        return acc;
-    }, {});
+        const safeInvoices = invoices || [];
+        historicalData = safeInvoices.reduce((acc, inv) => {
+            if (inv.status !== 'paid') return acc;
+            const month = new Date(inv.createdAt).toISOString().slice(0, 7);
+            acc[month] = (acc[month] || 0) + (inv.total || 0);
+            return acc;
+        }, {});
+    }
 
-    const forecast = aiService.predictRevenue(historicalData); // This is mock in aiService but wired up
+    const forecast = aiService.predictRevenue(historicalData);
     res.json(forecast);
 };
 
 export const negotiateSettlement = async (req, res) => {
-    const { invoiceId } = req.body;
+    const invoiceId = req.body?.invoiceId || req.body?.id;
 
     const creditStatus = await checkAICreditLimit(req);
     if (!creditStatus.allowed) {

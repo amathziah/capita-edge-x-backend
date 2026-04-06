@@ -830,8 +830,15 @@ class AIService {
         // Derive everything from real settings — no hardcoded defaults
         const currency = settings?.currency || context?.currency || 'INR';
         const businessName = settings?.business_name || settings?.businessName || 'your business';
-        const businessSegment = businessType || settings?.business_type || settings?.businessType || 'freelancer';
+        const rawBusinessSegment = businessType || settings?.business_type || settings?.businessType || 'solopreneur';
+        const businessSegment = rawBusinessSegment === 'freelancer' ? 'solopreneur' : rawBusinessSegment;
         const ownerName = settings?.owner_name || settings?.full_name || null;
+        const personaInstructions = {
+            solopreneur: 'Speak like a sharp CFO for an Indian freelancer. Be practical, direct, and commercially aware. Prioritise cash flow, GST/TDS, receivables, pricing, scope discipline, and concrete next steps a solo operator can actually execute.',
+            subscription: 'Speak like a finance lead for a SaaS business. Prioritise recurring revenue quality, churn, retention, unit economics, and forecasting.',
+            services_firm: 'Speak like a commercial finance lead for an agency or services firm. Prioritise project margins, retainers, utilisation, burn, collections, and delivery risk.',
+            ecommerce: 'Speak like a finance operator for a commerce business. Prioritise revenue quality, margins, working capital, inventory-linked cash flow, and collections.',
+        }[businessSegment] || 'Speak like a pragmatic finance advisor for this business persona.';
 
         // Safe Date Helper
         const safeDateFormat = (dateStr) => {
@@ -853,13 +860,20 @@ class AIService {
         contextBlock += `If the user asks "Who owes me?", run the get_overdue_invoices tool first.\n`;
         contextBlock += `Always execute tools if needed before responding.\n\n`;
         contextBlock += `**CRITICAL ANTI-HALLUCINATION RULE:**\n`;
-        contextBlock += `- You have ZERO financial data in your training. ALL numbers MUST come from tool results.\n`;
+        contextBlock += `- You do NOT have the user's private financial data unless a tool returns it. ALL user-specific numbers MUST come from tool results.\n`;
         contextBlock += `- If a tool call fails or you cannot call tools, say: "I'm unable to fetch your data right now. Please try again."\n`;
         contextBlock += `- NEVER fabricate amounts, counts, percentages, or dates. Every number you output must come from a tool response.\n\n`;
+        contextBlock += `**GENERAL KNOWLEDGE POLICY:**\n`;
+        contextBlock += `- You ARE allowed to answer general professional knowledge questions about GST, TDS, invoicing, bookkeeping, collections, pricing, and finance workflows without tools.\n`;
+        contextBlock += `- Distinguish clearly between GENERAL GUIDANCE and USER-SPECIFIC DATA.\n`;
+        contextBlock += `- For stable concept questions like "What is IGST?" or "What are GST rules in India?", answer directly in persona.\n`;
+        contextBlock += `- For law, thresholds, rates, or compliance rules that may change over time, give a careful high-level answer and tell the user to verify the latest rule with a CA or the official portal if precision matters.\n`;
+        contextBlock += `- NEVER say you lack general tax knowledge. Only say you lack the user's private business data when tools were not used.\n\n`;
 
         contextBlock += `---\n`;
         contextBlock += `## RESPONSE FORMATTING RULES (YOU MUST FOLLOW)\n\n`;
         contextBlock += `You are **Capita**, a high-end Strategic CFO AI for freelancers. Give sharp, structured, visually clear answers.\n\n`;
+        contextBlock += `**PERSONA MODE:** ${personaInstructions}\n\n`;
         contextBlock += `**TONE:** Authoritative but warm. Senior advisor, not a chatbot.\n\n`;
         contextBlock += `**FORMAT RULES:**\n`;
         contextBlock += `- Start with a **1-sentence executive summary** — bold the key number or insight.\n`;
@@ -885,6 +899,13 @@ class AIService {
         contextBlock += `- If the user asks about a SPECIFIC customer, use \`get_customer_insights\` to find their ID first, then use \`get_customer_details\` to get their risk/health metrics.\n`;
         contextBlock += `- If a tool is unavailable, use clean bullet points, NOT tables.\n`;
         contextBlock += `- **UPGRADE NUDGES**: If a tool returns a \`gated: true\` response, it means the feature requires a plan upgrade. Communicate the upgrade message naturally and warmly. Include the upgrade URL (/dashboard/pricing) as a suggestion. Do NOT try to answer with fabricated data — only relay the upgrade message.\n\n`;
+        if (businessSegment === 'solopreneur') {
+            contextBlock += `**FREELANCER-SPECIFIC RULES:**\n`;
+            contextBlock += `- Assume the user is an Indian freelancer or solo service business unless the question clearly says otherwise.\n`;
+            contextBlock += `- When discussing GST, TDS, invoices, payment terms, or collections, answer from a freelancer operator's perspective.\n`;
+            contextBlock += `- Prefer practical language like client, project, invoice, receivable, advance, retainer, and payout.\n`;
+            contextBlock += `- Keep recommendations lightweight and execution-focused. Do not answer like an enterprise finance department.\n\n`;
+        }
         contextBlock += `**User's Question:** "${query}"`;
 
         return contextBlock;
@@ -1010,7 +1031,47 @@ class AIService {
     }
 
     predictRevenue(historicalData) {
-        return [{ month: 'Forecast', revenue: 0, isForecast: true, provider: 'cloud_forecast' }];
+        const normalizedEntries = Array.isArray(historicalData)
+            ? historicalData
+                .map(entry => ({
+                    month: entry?.month || entry?.period,
+                    revenue: Number(entry?.revenue ?? entry?.total ?? 0),
+                }))
+                .filter(entry => entry.month)
+            : Object.entries(historicalData || {}).map(([month, revenue]) => ({
+                month,
+                revenue: Number(revenue || 0),
+            }));
+
+        const sorted = normalizedEntries
+            .filter(entry => !Number.isNaN(entry.revenue))
+            .sort((a, b) => a.month.localeCompare(b.month));
+
+        if (sorted.length === 0) {
+            return [{ month: 'Forecast', revenue: 0, isForecast: true, provider: 'local_forecast' }];
+        }
+
+        const trailingWindow = sorted.slice(-3);
+        const baseline = trailingWindow.reduce((sum, entry) => sum + entry.revenue, 0) / trailingWindow.length;
+
+        let monthKey = sorted[sorted.length - 1].month;
+        if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+            monthKey = new Date().toISOString().slice(0, 7);
+        }
+
+        const nextMonthDate = new Date(`${monthKey}-01T00:00:00Z`);
+        nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1);
+        const forecastMonth = nextMonthDate.toISOString().slice(0, 7);
+
+        return [
+            ...sorted,
+            {
+                month: forecastMonth,
+                revenue: Math.round(baseline),
+                isForecast: true,
+                provider: 'local_forecast'
+            }
+        ];
     }
 
     // ═══════════════════════════════════════════════════════════

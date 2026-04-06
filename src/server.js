@@ -42,6 +42,10 @@ app.use(helmet());
 // Hardened CORS Configuration
 const allowedOrigins = [
     process.env.APP_URL?.replace(/\/$/, ''), // Production Frontend (trim trailing slash)
+    ...(process.env.CORS_ALLOWED_ORIGINS || '')
+        .split(',')
+        .map((origin) => origin.trim().replace(/\/$/, ''))
+        .filter(Boolean),
     'http://localhost:5173', 
     'http://localhost:5174',
     'https://capitaedgex.com',
@@ -56,10 +60,7 @@ app.use(cors({
         // Exact match from configured origins
         const isAllowed = allowedOrigins.some(allowed => origin === allowed);
         
-        // Flexible match for Vercel preview/deployment URLs
-        const isVercel = origin.endsWith('.vercel.app');
-
-        if (isAllowed || isVercel) {
+        if (isAllowed) {
             return callback(null, true);
         }
         
@@ -73,7 +74,13 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 app.use(sanitizeInput);
-app.use('/api/uploads', express.static(UPLOAD_DIR));
+app.use('/api/uploads', express.static(UPLOAD_DIR, {
+    setHeaders: (res) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none';");
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    }
+}));
 
 // Health Check Endpoint (For Render/Platform Monitoring)
 app.get('/health', (req, res) => {

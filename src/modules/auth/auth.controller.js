@@ -308,6 +308,10 @@ export const signUp = async (req, res) => {
         throw new APIError('Email, password, and company name are required', 400);
     }
 
+    if (String(password).length < DEFAULTS.MIN_PASSWORD_LENGTH) {
+        throw new APIError(`Password must be at least ${DEFAULTS.MIN_PASSWORD_LENGTH} characters`, 400);
+    }
+
     try {
         // 1. Create User in Supabase
         const { data: userData, error: userError } = await supabase.auth.admin.createUser({

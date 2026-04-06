@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { supabase } from '../../core/database/supabase.js';
 import pdfService from './pdf.service.js';
 import emailService from '../../core/services/email.service.js';
@@ -11,8 +12,68 @@ import {
     attachResolvedInvoiceStatus,
     normalizeStoredInvoiceStatus
 } from './invoiceStatus.service.js';
+import { DEFAULTS } from '../../core/config/constants.js';
 
 const escapeLikePattern = (value = '') => value.replace(/[%_]/g, '\\$&');
+const SHARE_SCHEMA_COLUMNS = ['shared_enabled', 'share_expires_at', 'share_revoked_at'];
+
+const isMissingShareColumnError = (error) =>
+    Boolean(error?.message) &&
+    SHARE_SCHEMA_COLUMNS.some((column) => error.message.includes(column));
+
+const getDefaultShareExpiry = () => {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + DEFAULTS.SHARE_LINK_EXPIRY_DAYS);
+    return expiresAt.toISOString();
+};
+
+const isShareAccessible = (invoice) => {
+    if (!invoice) return false;
+    if (invoice.shared_enabled === false) return false;
+    if (invoice.share_revoked_at) return false;
+    if (invoice.share_expires_at && new Date(invoice.share_expires_at).getTime() <= Date.now()) return false;
+    return true;
+};
+
+const applyShareState = async (invoiceId, organizationId, updates, fallbackUpdates = {}) => {
+    const primary = await supabase
+        .from('invoices')
+        .update(updates)
+        .eq('id', invoiceId)
+        .eq('organization_id', organizationId)
+        .select(`
+            *,
+            customers!invoices_customer_id_fkey (*),
+            items: invoice_items (*)
+        `)
+        .single();
+
+    if (!primary.error) {
+        return primary.data;
+    }
+
+    if (!isMissingShareColumnError(primary.error) || !Object.keys(fallbackUpdates).length) {
+        throw new APIError(primary.error.message, 500);
+    }
+
+    const fallback = await supabase
+        .from('invoices')
+        .update(fallbackUpdates)
+        .eq('id', invoiceId)
+        .eq('organization_id', organizationId)
+        .select(`
+            *,
+            customers!invoices_customer_id_fkey (*),
+            items: invoice_items (*)
+        `)
+        .single();
+
+    if (fallback.error) {
+        throw new APIError(fallback.error.message, 500);
+    }
+
+    return fallback.data;
+};
 
 const getOrCreateOrganizationConfig = async (organizationId) => {
     const { data: existingConfig, error: configError } = await supabase
@@ -824,12 +885,63 @@ export const sendInvoiceEmail = async (req, res) => {
 };
 
 export const shareInvoice = async (req, res) => {
-    const invoice = await markInvoiceAsShared(req.params.id, req.user.organizationId);
+    const baseInvoice = await markInvoiceAsShared(req.params.id, req.user.organizationId);
+    const shareToken = baseInvoice.share_token || crypto.randomUUID();
+    const now = new Date().toISOString();
+    const invoice = await applyShareState(
+        req.params.id,
+        req.user.organizationId,
+        {
+            share_token: shareToken,
+            shared_enabled: true,
+            share_expires_at: getDefaultShareExpiry(),
+            share_revoked_at: null,
+            updatedAt: now
+        },
+        {
+            share_token: shareToken,
+            updatedAt: now
+        }
+    );
+
     res.json({
         success: true,
-        invoice,
+        invoice: attachResolvedInvoiceStatus(invoice),
         shareToken: invoice.share_token,
+        shareExpiresAt: invoice.share_expires_at || null,
     });
+};
+
+export const revokeSharedInvoice = async (req, res) => {
+    const { data: invoice, error } = await supabase
+        .from('invoices')
+        .select('id')
+        .eq('id', req.params.id)
+        .eq('organization_id', req.user.organizationId)
+        .single();
+
+    if (error || !invoice) {
+        throw new APIError('Invoice not found', 404);
+    }
+
+    const now = new Date().toISOString();
+    await applyShareState(
+        req.params.id,
+        req.user.organizationId,
+        {
+            shared_enabled: false,
+            share_revoked_at: now,
+            share_expires_at: now,
+            share_token: crypto.randomUUID(),
+            updatedAt: now
+        },
+        {
+            share_token: crypto.randomUUID(),
+            updatedAt: now
+        }
+    );
+
+    res.json({ success: true });
 };
 
 export const bulkReminders = async (req, res) => {
@@ -910,7 +1022,7 @@ export const getInvoiceByShareToken = async (req, res) => {
         .eq('share_token', token)
         .single();
 
-    if (error || !invoice) {
+    if (error || !invoice || !isShareAccessible(invoice)) {
         return res.status(404).send('Invalid or expired share token');
     }
 
@@ -965,7 +1077,7 @@ export const getInvoiceShareDetails = async (req, res) => {
         .eq('share_token', token)
         .single();
 
-    if (error || !invoice) {
+    if (error || !invoice || !isShareAccessible(invoice)) {
         throw new APIError('Invalid or expired share token', 404);
     }
 

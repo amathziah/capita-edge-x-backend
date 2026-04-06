@@ -58,6 +58,34 @@ const CONFIG_COLUMNS = new Set([
 fs.mkdirSync(logoDir, { recursive: true });
 fs.mkdirSync(paymentQrDir, { recursive: true });
 
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+    'image/png',
+    'image/jpeg',
+    'image/webp'
+]);
+
+const buildImageUploadMiddleware = (destination) => multer({
+    storage: multer.diskStorage({
+        destination: (_req, _file, callback) => callback(null, destination),
+        filename: (_req, file, callback) => {
+            const safeBaseName = path.parse(file.originalname).name.replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload';
+            const extension = file.mimetype === 'image/png'
+                ? '.png'
+                : file.mimetype === 'image/webp'
+                    ? '.webp'
+                    : '.jpg';
+            callback(null, `${Date.now()}-${safeBaseName}${extension}`);
+        }
+    }),
+    fileFilter: (_req, file, callback) => {
+        if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
+            return callback(new APIError('Only PNG, JPG, and WebP images are allowed', 400));
+        }
+        callback(null, true);
+    },
+    limits: { fileSize: 2 * 1024 * 1024 },
+});
+
 const buildFallbackConfig = async (organizationId) => {
     const { data: organization, error: organizationError } = await supabase
         .from('organizations')
@@ -118,27 +146,9 @@ const getOrCreateOrganizationConfig = async (organizationId) => {
     return insertedConfig;
 };
 
-export const uploadLogoMiddleware = multer({
-    storage: multer.diskStorage({
-        destination: (_req, _file, callback) => callback(null, logoDir),
-        filename: (_req, file, callback) => {
-            const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-            callback(null, `${Date.now()}-${safeName}`);
-        }
-    }),
-    limits: { fileSize: 2 * 1024 * 1024 },
-});
+export const uploadLogoMiddleware = buildImageUploadMiddleware(logoDir);
 
-export const uploadPaymentQrMiddleware = multer({
-    storage: multer.diskStorage({
-        destination: (_req, _file, callback) => callback(null, paymentQrDir),
-        filename: (_req, file, callback) => {
-            const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-            callback(null, `${Date.now()}-${safeName}`);
-        }
-    }),
-    limits: { fileSize: 2 * 1024 * 1024 },
-});
+export const uploadPaymentQrMiddleware = buildImageUploadMiddleware(paymentQrDir);
 
 export const getSettings = async (req, res) => {
     const config = await getOrCreateOrganizationConfig(req.user.organizationId);
@@ -152,9 +162,7 @@ export const getSettings = async (req, res) => {
         p_name: 'smtp_pass'
     });
 
-    if (!smtpPass.error && smtpPass.data) {
-        settings.smtp_pass = smtpPass.data;
-    }
+    settings.smtpConfigured = Boolean(settings.smtp_user && !smtpPass.error && smtpPass.data);
 
     res.json(settings);
 };

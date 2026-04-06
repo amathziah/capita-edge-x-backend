@@ -20,6 +20,8 @@ export const DEFAULTS = {
     // OTP
     OTP_EXPIRY_MS: 15 * 60 * 1000,        // 15 minutes
     OTP_EXPIRY_DISPLAY: '15 minutes',
+    SHARE_LINK_EXPIRY_DAYS: 30,
+    MIN_PASSWORD_LENGTH: 12,
 
     // Follow-up cadence (days) — used when org config not set
     FOLLOW_UP_DAY_1: 7,
@@ -35,6 +37,18 @@ export const LIMITS = {
     AI_RATE_LIMIT: parseInt(process.env.AI_RATE_LIMIT) || 30, // Increased from 10
     META_RATE_LIMIT: 100, // For usage and config checks
     AI_RATE_WINDOW_MS: 60 * 1000,
+    AUTH_VERIFY_RATE_LIMIT: parseInt(process.env.AUTH_VERIFY_RATE_LIMIT) || 10,
+    AUTH_VERIFY_WINDOW_MS: 15 * 60 * 1000,
+    AUTH_RESEND_RATE_LIMIT: parseInt(process.env.AUTH_RESEND_RATE_LIMIT) || 5,
+    AUTH_RESEND_WINDOW_MS: 15 * 60 * 1000,
+    AUTH_SIGNUP_RATE_LIMIT: parseInt(process.env.AUTH_SIGNUP_RATE_LIMIT) || 5,
+    AUTH_SIGNUP_WINDOW_MS: 15 * 60 * 1000,
+    SHARE_PUBLIC_RATE_LIMIT: parseInt(process.env.SHARE_PUBLIC_RATE_LIMIT) || 30,
+    SHARE_PUBLIC_WINDOW_MS: 15 * 60 * 1000,
+    INVOICE_ACTION_RATE_LIMIT: parseInt(process.env.INVOICE_ACTION_RATE_LIMIT) || 20,
+    INVOICE_ACTION_WINDOW_MS: 15 * 60 * 1000,
+    SYSTEM_ACTION_RATE_LIMIT: parseInt(process.env.SYSTEM_ACTION_RATE_LIMIT) || 10,
+    SYSTEM_ACTION_WINDOW_MS: 15 * 60 * 1000,
     AI_CACHE_TTL_MS: (parseInt(process.env.AI_CACHE_TTL_HOURS) || 24) * 60 * 60 * 1000,
     MAX_INVOICE_RETRIES: 50,
     MAX_NOTIFICATIONS: 10,

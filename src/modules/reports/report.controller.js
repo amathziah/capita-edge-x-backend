@@ -49,7 +49,7 @@ export const createReport = async (req, res) => {
  * Get all reports for an organization
  */
 export const getReports = async (req, res) => {
-    const organizationId = req.headers['x-organization-id'];
+    const organizationId = req.user?.organizationId;
 
     if (!organizationId) {
         throw new APIError('Organization context is required', 400);

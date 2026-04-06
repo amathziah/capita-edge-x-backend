@@ -32,6 +32,17 @@ export const getPayments = async (req, res) => {
 export const createPayment = async (req, res) => {
     const { id, invoiceId, amount, date, method, notes, status } = req.body;
 
+        const { data: invoiceForPayment, error: invoiceLookupError } = await supabase
+            .from('invoices')
+            .select('id, total, net_receivable, amount_paid, status, customer_id, invoiceNumber, organization_id')
+            .eq('id', invoiceId)
+            .eq('organization_id', req.user.organizationId)
+            .single();
+
+        if (invoiceLookupError || !invoiceForPayment) {
+            throw new APIError('Invoice not found', 404);
+        }
+
         const rawMode = (req.body.paymentMode || req.body.method || 'other').toString().toLowerCase().trim();
         const validModes = ['upi', 'neft', 'imps', 'rtgs', 'cheque', 'cash', 'razorpay', 'stripe', 'other'];
         const paymentMode = validModes.includes(rawMode) ? rawMode : 'other';
@@ -66,11 +77,7 @@ export const createPayment = async (req, res) => {
 
         const totalPaid = payments?.reduce((sum, p) => sum + (p.amount || 0), 0) || 0;
 
-        const { data: invoice } = await supabase
-            .from('invoices')
-            .select('id, total, net_receivable, amount_paid, status, customer_id, invoiceNumber, organization_id')
-            .eq('id', invoiceId)
-            .single();
+        const invoice = invoiceForPayment;
 
         if (invoice) {
             if (normalizeStoredInvoiceStatus(invoice.status) === 'draft') {
@@ -120,6 +127,7 @@ export const downloadReceipt = async (req, res) => {
         .from('invoices')
         .select('*')
         .eq('id', payment.invoiceId)
+        .eq('organization_id', req.user.organizationId)
         .single();
 
     if (iError || !invoice) throw new APIError('Linked invoice not found', 404);
@@ -177,6 +185,7 @@ export const reconcilePayment = async (req, res) => {
         .from('invoices')
         .select('id, total, net_receivable, amount_paid, status, customer_id, invoiceNumber, organization_id')
         .eq('id', payment.invoiceId)
+        .eq('organization_id', req.user.organizationId)
         .single();
 
     if (invoice) {

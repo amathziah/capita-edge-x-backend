@@ -31,117 +31,122 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const app = express();
-app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../uploads');
 
-// Security middleware
-app.use(helmet());
+export const createApp = () => {
+    const app = express();
+    app.set('trust proxy', 1);
 
-// Hardened CORS Configuration
-const allowedOrigins = [
-    process.env.APP_URL?.replace(/\/$/, ''), // Production Frontend (trim trailing slash)
-    ...(process.env.CORS_ALLOWED_ORIGINS || '')
-        .split(',')
-        .map((origin) => origin.trim().replace(/\/$/, ''))
-        .filter(Boolean),
-    'http://localhost:5173', 
-    'http://localhost:5174',
-    'https://capitaedgex.com',
-    'https://www.capitaedgex.com'
-].filter(Boolean);
+    // Security middleware
+    app.use(helmet());
 
-app.use(cors({
-    origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
-        
-        // Exact match from configured origins
-        const isAllowed = allowedOrigins.some(allowed => origin === allowed);
-        
-        if (isAllowed) {
-            return callback(null, true);
+    // Hardened CORS Configuration
+    const allowedOrigins = [
+        process.env.APP_URL?.replace(/\/$/, ''), // Production Frontend (trim trailing slash)
+        ...(process.env.CORS_ALLOWED_ORIGINS || '')
+            .split(',')
+            .map((origin) => origin.trim().replace(/\/$/, ''))
+            .filter(Boolean),
+        'http://localhost:5173',
+        'http://localhost:5174',
+        'https://capitaedgex.com',
+        'https://www.capitaedgex.com'
+    ].filter(Boolean);
+
+    app.use(cors({
+        origin: (origin, callback) => {
+            // Allow requests with no origin (like mobile apps or curl requests)
+            if (!origin) return callback(null, true);
+
+            // Exact match from configured origins
+            const isAllowed = allowedOrigins.some(allowed => origin === allowed);
+
+            if (isAllowed) {
+                return callback(null, true);
+            }
+
+            console.warn(`Blocked by CORS: ${origin}`);
+            const err = new Error('CORS Policy Violation');
+            err.statusCode = 403;
+            return callback(err, false);
+        },
+        credentials: true
+    }));
+
+    app.use(express.json({ limit: '50mb' }));
+    app.use(sanitizeInput);
+    app.use('/api/uploads', express.static(UPLOAD_DIR, {
+        setHeaders: (res) => {
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none';");
+            res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
         }
-        
-        console.warn(`Blocked by CORS: ${origin}`);
-        const err = new Error('CORS Policy Violation');
-        err.statusCode = 403;
-        return callback(err, false);
-    },
-    credentials: true
-}));
+    }));
 
-app.use(express.json({ limit: '50mb' }));
-app.use(sanitizeInput);
-app.use('/api/uploads', express.static(UPLOAD_DIR, {
-    setHeaders: (res) => {
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'none'; script-src 'none';");
-        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-    }
-}));
-
-// Health Check Endpoint (For Render/Platform Monitoring)
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'UP',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development'
+    // Health Check Endpoint (For Render/Platform Monitoring)
+    app.get('/health', (req, res) => {
+        res.status(200).json({
+            status: 'UP',
+            timestamp: new Date().toISOString(),
+            environment: process.env.NODE_ENV || 'development'
+        });
     });
-});
 
+    // ============================================================================
+    // API ROUTES (Authenticated)
+    // ============================================================================
 
+    // Authentication Middleware - Protects all /api routes (EXCEPT webhooks and shared invoices)
+    app.use('/api/', (req, res, next) => {
+        if (req.path.includes('/invoices/share/')) return next();
+        if (req.path.includes('/auth/signup')) return next();
+        if (req.path.includes('/auth/resend-confirmation')) return next();
+        if (req.path.includes('/auth/verify-otp')) return next();
+        authenticateUser(req, res, next);
+    });
 
-// ============================================================================
-// API ROUTES (Authenticated)
-// ============================================================================
+    // Mount Routes
+    app.use('/api/auth', authRoutes);
+    app.use('/api', aiRoutes); // Mount at /api to support /api/ai/* AND /api/negotiate-settlement
+    app.use('/api/invoices', invoiceRoutes);
+    app.use('/api/customers', customerRoutes);
+    app.use('/api/expenses', expenseRoutes);
+    app.use('/api/payments', paymentRoutes);
+    app.use('/api/compliance', complianceRoutes);
+    app.use('/api/notifications', notificationRoutes);
+    app.use('/api/system', systemRoutes);
+    app.use('/api', systemRoutes);
 
-// Authentication Middleware - Protects all /api routes (EXCEPT webhooks and shared invoices)
-app.use('/api/', (req, res, next) => {
-    if (req.path.includes('/invoices/share/')) return next();
-    if (req.path.includes('/auth/signup')) return next();
-    if (req.path.includes('/auth/resend-confirmation')) return next();
-    if (req.path.includes('/auth/verify-otp')) return next();
-    authenticateUser(req, res, next);
-});
+    app.use('/api/reports', reportRoutes);
 
+    // Shared prefixes / General Routes
+    app.use('/api', analyticsRoutes); // Handles /api/dashboard-stats, /api/analytics/*
+    app.use('/api', productsRoutes); // Handles /api/products, /api/analytics/product-performance
 
+    // SERVE FRONTEND (Optional)
+    const CLIENT_BUILD_PATH = path.join(__dirname, 'dist');
+    if (fs.existsSync(CLIENT_BUILD_PATH)) {
+        app.use(express.static(CLIENT_BUILD_PATH));
+        app.get(/(.*)/, (req, res) => {
+            if (!req.path.startsWith('/api')) {
+                res.sendFile(path.join(CLIENT_BUILD_PATH, 'index.html'));
+            }
+        });
+    }
 
-// Mount Routes
-app.use('/api/auth', authRoutes);
-app.use('/api', aiRoutes); // Mount at /api to support /api/ai/* AND /api/negotiate-settlement
-app.use('/api/invoices', invoiceRoutes);
-app.use('/api/customers', customerRoutes);
-app.use('/api/expenses', expenseRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/compliance', complianceRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/system', systemRoutes);
-app.use('/api', systemRoutes);
+    // Error Handling
+    app.use(notFoundHandler);
+    app.use(errorHandler);
 
-app.use('/api/reports', reportRoutes);
+    return app;
+};
 
-// Shared prefixes / General Routes
-app.use('/api', analyticsRoutes); // Handles /api/dashboard-stats, /api/analytics/*
-app.use('/api', productsRoutes); // Handles /api/products, /api/analytics/product-performance
+export const app = createApp();
 
-// SERVE FRONTEND (Optional)
-const CLIENT_BUILD_PATH = path.join(__dirname, 'dist');
-if (fs.existsSync(CLIENT_BUILD_PATH)) {
-    app.use(express.static(CLIENT_BUILD_PATH));
-    app.get(/(.*)/, (req, res) => {
-        if (!req.path.startsWith('/api')) {
-            res.sendFile(path.join(CLIENT_BUILD_PATH, 'index.html'));
-        }
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+    app.listen(PORT, () => {
+        console.log(`✅ Backend server running on http://localhost:${PORT}`);
+        console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
     });
 }
-
-// Error Handling
-app.use(notFoundHandler);
-app.use(errorHandler);
-
-app.listen(PORT, () => {
-    console.log(`✅ Backend server running on http://localhost:${PORT}`);
-    console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-});

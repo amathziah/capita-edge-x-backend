@@ -5,9 +5,52 @@ import QRCode from 'qrcode';
 
 /**
  * PDF Generation Service
- * Creates professional invoice PDFs with logos, QR codes, and custom formatting
+ * Creates professional invoice PDFs with logos and custom formatting
  */
 class PDFService {
+    getTheme(type) {
+        switch (type) {
+            case 'subscription':
+                return {
+                    primary: '#4F46E5',
+                    primarySoft: '#EEF2FF',
+                    accent: '#312E81',
+                    text: '#111827',
+                    muted: '#6B7280',
+                    border: '#C7D2FE',
+                };
+            case 'ecommerce':
+                return {
+                    primary: '#D97706',
+                    primarySoft: '#FFFBEB',
+                    accent: '#92400E',
+                    text: '#111827',
+                    muted: '#6B7280',
+                    border: '#FCD34D',
+                };
+            case 'services_firm':
+            case 'ca_firm':
+                return {
+                    primary: '#0F766E',
+                    primarySoft: '#F0FDFA',
+                    accent: '#134E4A',
+                    text: '#111827',
+                    muted: '#6B7280',
+                    border: '#99F6E4',
+                };
+            case 'solopreneur':
+            default:
+                return {
+                    primary: '#059669',
+                    primarySoft: '#ECFDF5',
+                    accent: '#065F46',
+                    text: '#111827',
+                    muted: '#6B7280',
+                    border: '#A7F3D0',
+                };
+        }
+    }
+
     getCurrencySymbol(settings = {}) {
         const currency = settings.currencySymbol || settings.currency || settings.currencyCode || 'INR';
 
@@ -34,6 +77,24 @@ class PDFService {
         return value === null || value === undefined ? '' : String(value);
     }
 
+    getSeller(invoice = {}, settings = {}) {
+        return {
+            name: invoice?.seller?.name || settings.owner_name || settings.businessName || 'Your Business',
+            phone: invoice?.seller?.phone || settings.phone || '',
+            email: invoice?.seller?.email || settings.email || '',
+            address: invoice?.seller?.address || settings.address || '',
+            taxId: invoice?.seller?.taxId || settings.companyTaxId || settings.gstin || '',
+            upiId: invoice?.seller?.upiId || settings.upiId || '',
+            bankName: invoice?.seller?.bankName || settings.bankName || '',
+            accountNumber: invoice?.seller?.accountNumber || settings.bankAccountNumber || '',
+            ifscCode: invoice?.seller?.ifscCode || settings.bankIfsc || '',
+            terms: invoice?.seller?.terms || settings.paymentInstructions || '',
+            signatureName: invoice?.seller?.signatureName || settings.owner_name || settings.businessName || '',
+            includeSignature: invoice?.seller?.includeSignature ?? Boolean(settings.owner_name || settings.businessName),
+            paymentQrPath: settings.paymentQrPath || '',
+        };
+    }
+
     getBuyer(invoice = {}) {
         return invoice.buyer || invoice.customers || invoice.customer || {};
     }
@@ -41,6 +102,32 @@ class PDFService {
     getItems(invoice = {}) {
         const items = invoice.items || invoice.items_data || [];
         return Array.isArray(items) ? items : [];
+    }
+
+    getLineAmount(item = {}) {
+        const quantity = Number(item.quantity || 0);
+        const price = Number(item.price || 0);
+        const discountPercent = Number(item.discount_percent ?? item.discountPercent ?? item.discount ?? 0);
+        const gross = quantity * price;
+        return Math.max(gross - (gross * discountPercent) / 100, 0);
+    }
+
+    getDocumentTitle(invoice = {}) {
+        const explicitType = this.safeText(invoice.type).toLowerCase();
+
+        if (explicitType === 'bill_of_supply') return 'BILL OF SUPPLY';
+        if (explicitType === 'credit_note') return 'CREDIT NOTE';
+        if (explicitType === 'debit_note') return 'DEBIT NOTE';
+        if (explicitType === 'delivery_challan') return 'DELIVERY CHALLAN';
+
+        return invoice.isGstRegistered === false ? 'BILL OF SUPPLY' : 'INVOICE';
+    }
+
+    getPayableAmount(invoice = {}) {
+        if (invoice.tdsApplicable && Number(invoice.netReceivable || 0) > 0) {
+            return Number(invoice.netReceivable || 0);
+        }
+        return Number(invoice.total || 0);
     }
 
     ensureSpace(doc, y, requiredHeight, onNewPage) {
@@ -95,6 +182,7 @@ class PDFService {
                 y = this.addItemsTable(doc, invoice, settings, y);
                 y = this.addTotals(doc, invoice, settings, y);
                 y = await this.addPaymentInfo(doc, invoice, settings, y);
+                y = this.addNotesAndTerms(doc, invoice, settings, y);
                 this.addFooter(doc, settings, invoice, y);
 
                 doc.end();
@@ -111,6 +199,8 @@ class PDFService {
      * Add header with logo
      */
     async addHeader(doc, settings, invoice) {
+        const theme = this.getTheme(invoice?.persona || settings?.businessType);
+        const seller = this.getSeller(invoice, settings);
         const logoPath = settings.logoPath;
         const leftX = doc.page.margins.left;
         const rightX = 360;
@@ -127,13 +217,13 @@ class PDFService {
         doc.fontSize(20)
             .font('Helvetica-Bold')
             .fillColor('#111827')
-            .text(settings.businessName || invoice?.seller?.name || 'Your Business', 130, y + 2, { width: 200 });
+            .text(seller.name, 130, y + 2, { width: 200 });
 
         const companyLines = [
-            this.safeText(settings.address),
-            this.safeText(settings.phone),
-            this.safeText(settings.email),
-            settings.gstin ? `GSTIN: ${settings.gstin}` : '',
+            this.safeText(seller.address),
+            this.safeText(seller.phone),
+            this.safeText(seller.email),
+            seller.taxId ? `GSTIN: ${seller.taxId}` : '',
             settings.pan ? `PAN: ${settings.pan}` : '',
         ].filter(Boolean);
 
@@ -143,16 +233,16 @@ class PDFService {
         });
 
         doc.roundedRect(rightX, y, 185, 76, 10)
-            .fillAndStroke('#F8FAFC', '#E2E8F0');
+            .fillAndStroke(theme.primarySoft, theme.border);
 
         doc.font('Helvetica-Bold')
             .fontSize(22)
-            .fillColor('#0F172A')
-            .text('INVOICE', rightX + 16, y + 14, { width: 120 });
+            .fillColor(theme.accent)
+            .text(this.getDocumentTitle(invoice), rightX + 16, y + 14, { width: 150 });
 
         const status = this.safeText(invoice?.status || 'draft').replace(/_/g, ' ').toUpperCase();
         doc.roundedRect(rightX + 118, y + 14, 50, 18, 9)
-            .fill('#111827');
+            .fill(theme.primary);
         doc.font('Helvetica-Bold')
             .fontSize(7)
             .fillColor('#FFFFFF')
@@ -172,6 +262,8 @@ class PDFService {
      */
     addBusinessDetails(doc, settings, invoice, startY) {
         const buyer = this.getBuyer(invoice);
+        const seller = this.getSeller(invoice, settings);
+        const theme = this.getTheme(invoice?.persona || settings?.businessType);
         let y = startY;
         const leftX = doc.page.margins.left;
         const rightX = 315;
@@ -179,16 +271,16 @@ class PDFService {
 
         doc.fontSize(9)
             .font('Helvetica-Bold')
-            .fillColor('#6B7280')
+            .fillColor(theme.muted)
             .text('BILL FROM', leftX, y)
             .text('BILL TO', rightX, y);
 
         const sellerLines = [
-            settings.businessName || invoice?.seller?.name || 'Your Business',
-            settings.address,
-            settings.email,
-            settings.phone,
-            settings.gstin ? `GSTIN: ${settings.gstin}` : '',
+            seller.name,
+            seller.address,
+            seller.email,
+            seller.phone,
+            seller.taxId ? `GSTIN: ${seller.taxId}` : '',
             settings.pan ? `PAN: ${settings.pan}` : '',
         ].filter(Boolean);
 
@@ -234,12 +326,13 @@ class PDFService {
      */
     addItemsTable(doc, invoice, settings, startY) {
         const items = this.getItems(invoice);
+        const theme = this.getTheme(invoice?.persona || settings?.businessType);
         const drawHeader = (headerY) => {
             doc.roundedRect(50, headerY, 495, 24, 6)
-                .fillAndStroke('#F8FAFC', '#E2E8F0');
+                .fillAndStroke(theme.primarySoft, theme.border);
             doc.font('Helvetica-Bold')
                 .fontSize(8)
-                .fillColor('#475569')
+                .fillColor(theme.accent)
                 .text('DESCRIPTION', 60, headerY + 8, { width: 235 })
                 .text('QTY', 300, headerY + 8, { width: 50, align: 'center' })
                 .text('RATE', 360, headerY + 8, { width: 85, align: 'right' })
@@ -261,8 +354,7 @@ class PDFService {
         for (const item of items) {
             const quantity = Number(item.quantity || 0);
             const price = Number(item.price || 0);
-            const discount = Number(item.discount || item.discountAmount || 0);
-            const amount = Math.max((quantity * price) - discount, 0);
+            const amount = this.getLineAmount(item);
             const itemCode = item.hsnCode || item.hsn_code || item.sacCode || item.sac_code;
             const descriptionLines = [
                 this.safeText(item.description || 'Item'),
@@ -300,6 +392,7 @@ class PDFService {
      * Add totals section
      */
     addTotals(doc, invoice, settings, startY) {
+        const theme = this.getTheme(invoice?.persona || settings?.businessType);
         const subtotal = Number(invoice.subtotal || 0);
         const discount = Number(invoice.discountAmount || invoice.discount || 0);
         const shipping = Number(invoice.shipping || 0);
@@ -347,7 +440,7 @@ class PDFService {
 
         doc.font('Helvetica-Bold')
             .fontSize(12)
-            .fillColor('#111827')
+            .fillColor(theme.accent)
             .text('Total', labelX, y, { width: 90, align: 'right' })
             .text(this.formatAmount(total, settings), valueX, y, { width: 85, align: 'right' });
 
@@ -358,15 +451,22 @@ class PDFService {
      * Add payment info and QR code
      */
     async addPaymentInfo(doc, invoice, settings, startY) {
-        const notes = [settings.paymentInstructions, settings.bankDetails, settings.invoiceNotes]
-            .filter(Boolean)
-            .join('\n\n');
-        const hasQr = Boolean(settings.upiId);
-        const blockHeight = Math.max(notes ? doc.heightOfString(notes, { width: 310, lineGap: 3 }) + 42 : 0, hasQr ? 140 : 0, 100);
+        const theme = this.getTheme(invoice?.persona || settings?.businessType);
+        const seller = this.getSeller(invoice, settings);
+        const paymentLines = [
+            seller.upiId ? `UPI: ${seller.upiId}` : '',
+            seller.bankName ? `Bank: ${seller.bankName}` : '',
+            seller.accountNumber ? `A/C: ${seller.accountNumber}` : '',
+            seller.ifscCode ? `IFSC: ${seller.ifscCode}` : '',
+            !seller.bankName && settings.bankDetails ? settings.bankDetails : '',
+        ].filter(Boolean);
+        const paymentBody = paymentLines.join('\n');
+        const hasQr = Boolean(seller.paymentQrPath || seller.upiId);
+        const blockHeight = Math.max(paymentBody ? doc.heightOfString(paymentBody, { width: 310, lineGap: 3 }) + 42 : 0, hasQr ? 140 : 0, 100);
         let y = this.ensureSpace(doc, startY, blockHeight + 16, () => 50);
 
         doc.roundedRect(50, y, 495, blockHeight, 8)
-            .fillAndStroke('#F8FAFC', '#E2E8F0');
+            .fillAndStroke(theme.primarySoft, theme.border);
 
         doc.font('Helvetica-Bold')
             .fontSize(10)
@@ -377,7 +477,7 @@ class PDFService {
             .fontSize(9)
             .fillColor('#475569')
             .text(
-                notes || 'Please make payment by the due date using the details shared by the seller.',
+                paymentBody || 'Please make payment by the due date using the details shared by the seller.',
                 64,
                 y + 32,
                 { width: hasQr ? 305 : 455, lineGap: 3 }
@@ -385,32 +485,74 @@ class PDFService {
 
         if (hasQr) {
             try {
-                const qrData = `upi://pay?pa=${settings.upiId}&pn=${encodeURIComponent(settings.businessName || 'Business')}&am=${Number(invoice.total || 0).toFixed(2)}&cu=INR`;
-                const qrCodeDataUrl = await QRCode.toDataURL(qrData, { margin: 0, width: 120 });
-                const qrBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
-
-                doc.image(qrBuffer, 412, y + 18, { width: 95, height: 95 });
+                if (seller.paymentQrPath && fs.existsSync(seller.paymentQrPath)) {
+                    doc.image(seller.paymentQrPath, 412, y + 18, { width: 95, height: 95, fit: [95, 95] });
+                } else if (seller.upiId) {
+                    const payableAmount = this.getPayableAmount(invoice);
+                    const qrData = `upi://pay?pa=${seller.upiId}&pn=${encodeURIComponent(seller.name || settings.businessName || 'Business')}&am=${payableAmount.toFixed(2)}&cu=INR`;
+                    const qrCodeDataUrl = await QRCode.toDataURL(qrData, { margin: 0, width: 120 });
+                    const qrBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
+                    doc.image(qrBuffer, 412, y + 18, { width: 95, height: 95 });
+                }
                 doc.font('Helvetica-Bold')
                     .fontSize(8)
                     .fillColor('#334155')
                     .text('Scan to Pay', 402, y + 118, { width: 115, align: 'center' });
             } catch (err) {
-                console.error('QR Code generation error:', err);
+                console.error('Payment QR render error:', err);
             }
         }
 
         return y + blockHeight + 18;
     }
 
+    addNotesAndTerms(doc, invoice, settings, startY) {
+        const theme = this.getTheme(invoice?.persona || settings?.businessType);
+        const seller = this.getSeller(invoice, settings);
+        const blocks = [
+            {
+                title: 'Notes',
+                body: this.safeText(invoice?.notes || settings?.invoiceNotes),
+            },
+            {
+                title: 'Terms & Conditions',
+                body: this.safeText(seller.terms),
+            },
+        ].filter((block) => block.body);
+
+        let y = startY;
+
+        for (const block of blocks) {
+            const bodyHeight = doc.heightOfString(block.body, { width: 495, lineGap: 3 });
+            y = this.ensureSpace(doc, y, bodyHeight + 34, () => 50);
+
+            doc.font('Helvetica-Bold')
+                .fontSize(9)
+                .fillColor(theme.muted)
+                .text(block.title.toUpperCase(), 50, y, { width: 495 });
+
+            doc.font('Helvetica')
+                .fontSize(9)
+                .fillColor('#475569')
+                .text(block.body, 50, y + 14, { width: 495, lineGap: 3 });
+
+            y += bodyHeight + 28;
+        }
+
+        return y;
+    }
+
     /**
      * Add footer
      */
     addFooter(doc, settings, invoice = {}, startY = 0) {
-        const requiredHeight = invoice?.seller?.includeSignature ? 74 : 28;
+        const theme = this.getTheme(invoice?.persona || settings?.businessType);
+        const seller = this.getSeller(invoice, settings);
+        const requiredHeight = seller.includeSignature ? 74 : 28;
         let y = this.ensureSpace(doc, startY, requiredHeight + 20, () => 50);
 
-        if (invoice?.seller?.includeSignature) {
-            const signatureName = invoice?.seller?.signatureName || invoice?.seller?.name || 'Authorised Signatory';
+        if (seller.includeSignature) {
+            const signatureName = seller.signatureName || seller.name || 'Authorised Signatory';
             doc.fontSize(14)
                 .font('Helvetica-Oblique')
                 .fillColor('#444444')
@@ -433,7 +575,7 @@ class PDFService {
         this.drawDivider(doc, y);
         doc.fontSize(8)
             .font('Helvetica')
-            .fillColor('#666666')
+            .fillColor(theme.muted)
             .text(
                 settings.footerText || 'Thank you for your business!',
                 50,

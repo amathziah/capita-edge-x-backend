@@ -29,9 +29,16 @@ export function calculateInvoiceTax(input) {
     ? uniqueSections[0]
     : getDefaultTdsSection(input.persona || 'solopreneur');
 
+  const tdsRateOverride = Number(input.tds_rate_override);
+  const hasExplicitTdsRate = Number.isFinite(tdsRateOverride) && tdsRateOverride >= 0;
   const tds_rate = input.tds_enabled
-    ? (TDS_RATES[tds_section] ?? 10)
+    ? (hasExplicitTdsRate ? tdsRateOverride : (TDS_RATES[tds_section] ?? 10))
     : 0;
+
+  const defaultTaxRate = Number(input.default_tax_rate);
+  const resolvedDefaultTaxRate = Number.isFinite(defaultTaxRate) && defaultTaxRate >= 0
+    ? defaultTaxRate
+    : DEFAULTS.DEFAULT_TAX_RATE;
 
   // Step 3 — Run InvoiceCalculator
   const calcResult = InvoiceCalculator.calculate({
@@ -41,7 +48,7 @@ export function calculateInvoiceTax(input) {
       discount: (Number(item.discount_percent) > 0)
         ? { type: 'percentage', value: item.discount_percent }
         : undefined,
-      tax_rate: item.is_exempt ? 0 : (Number(item.tax_rate ?? DEFAULTS.DEFAULT_TAX_RATE) || 0),
+      tax_rate: item.is_exempt ? 0 : (Number(item.tax_rate ?? resolvedDefaultTaxRate) || 0),
       is_interstate: isInterState,
     })),
     document_discount: (Number(input.discount_amount) > 0)
@@ -55,7 +62,10 @@ export function calculateInvoiceTax(input) {
   const line_tax_results = (input.items || []).map((item, i) => {
     const lineResult = calcResult.line_totals[i] || {};
     const breakdown = lineResult.tax_breakdown || {};
-    const effectiveRate = item.is_exempt ? 0 : (Number(item.tax_rate) ?? 18);
+    const rawItemRate = Number(item.tax_rate);
+    const effectiveRate = item.is_exempt
+      ? 0
+      : (Number.isFinite(rawItemRate) ? rawItemRate : resolvedDefaultTaxRate);
     const sacInfo = getSacInfo(item.sac_code || '');
     return {
       taxable_value: parseFloat(lineResult.line_total) || 0,

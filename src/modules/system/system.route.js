@@ -14,6 +14,11 @@ router.post(
     systemController.uploadLogoMiddleware.single('logo'),
     asyncHandler(systemController.uploadLogo)
 );
+router.post(
+    '/upload/payment-qr',
+    systemController.uploadPaymentQrMiddleware.single('paymentQr'),
+    asyncHandler(systemController.uploadPaymentQr)
+);
 
 // router.post('/run-catalog-stress', asyncHandler(systemController.runCatalogStressTest));
 

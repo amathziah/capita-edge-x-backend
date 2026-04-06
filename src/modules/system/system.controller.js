@@ -12,6 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '../../../uploads');
 const logoDir = path.join(uploadDir, 'logos');
+const paymentQrDir = path.join(uploadDir, 'payment-qr');
 const CONFIG_COLUMNS = new Set([
     'business_name',
     'company_tax_id',
@@ -28,6 +29,7 @@ const CONFIG_COLUMNS = new Set([
     'tax_label',
     'invoice_prefix',
     'logo_filename',
+    'payment_qr_filename',
     'smtp_user',
     'inventory_settings',
     'gstin',
@@ -54,6 +56,7 @@ const CONFIG_COLUMNS = new Set([
 ]);
 
 fs.mkdirSync(logoDir, { recursive: true });
+fs.mkdirSync(paymentQrDir, { recursive: true });
 
 const buildFallbackConfig = async (organizationId) => {
     const { data: organization, error: organizationError } = await supabase
@@ -118,6 +121,17 @@ const getOrCreateOrganizationConfig = async (organizationId) => {
 export const uploadLogoMiddleware = multer({
     storage: multer.diskStorage({
         destination: (_req, _file, callback) => callback(null, logoDir),
+        filename: (_req, file, callback) => {
+            const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+            callback(null, `${Date.now()}-${safeName}`);
+        }
+    }),
+    limits: { fileSize: 2 * 1024 * 1024 },
+});
+
+export const uploadPaymentQrMiddleware = multer({
+    storage: multer.diskStorage({
+        destination: (_req, _file, callback) => callback(null, paymentQrDir),
         filename: (_req, file, callback) => {
             const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
             callback(null, `${Date.now()}-${safeName}`);
@@ -267,6 +281,30 @@ export const uploadLogo = async (req, res) => {
     res.json({
         filename: req.file.filename,
         url: `/api/uploads/logos/${req.file.filename}`,
+    });
+};
+
+export const uploadPaymentQr = async (req, res) => {
+    if (!req.file) {
+        throw new APIError('Payment QR file is required', 400);
+    }
+
+    await getOrCreateOrganizationConfig(req.user.organizationId);
+
+    const { error } = await supabase
+        .from('organization_configs')
+        .upsert({
+            organization_id: req.user.organizationId,
+            payment_qr_filename: req.file.filename,
+        });
+
+    if (error) {
+        throw new APIError(error.message, 500);
+    }
+
+    res.json({
+        filename: req.file.filename,
+        url: `/api/uploads/payment-qr/${req.file.filename}`,
     });
 };
 

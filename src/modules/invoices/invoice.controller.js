@@ -131,16 +131,17 @@ export const getInvoiceDraftDefaults = async (req, res) => {
     res.json({
         nextNumber,
         defaults: {
-            fromName: settings.businessName || '',
+            fromName: settings.owner_name || settings.businessName || '',
             fromAddress: settings.address || '',
             fromPan: settings.pan || settings.companyTaxId || '',
-            fromGstin: settings.gstin || '',
+            fromGstin: settings.companyTaxId || settings.gstin || '',
             notes: settings.invoiceNotes || '',
-            terms: settings.paymentTerms || '',
+            terms: settings.paymentInstructions || '',
             currencyCode: settings.currency || 'INR',
             taxLabel: settings.taxLabel || settings.tax_label || 'GST',
+            defaultGstRate: Number(settings.defaultGstRate || 0),
             dueDays: Number(settings.defaultDueDays || 30),
-            isGstRegistered: Boolean(settings.gstin),
+            isGstRegistered: Boolean(settings.companyTaxId || settings.gstin),
             businessType: settings.businessType || 'solopreneur',
         }
     });
@@ -198,11 +199,13 @@ export const createInvoice = async (req, res) => {
         seller_gstin: req.body.seller?.taxId || req.body.seller?.gstin || '',
         buyer_gstin: req.body.buyer?.gstin || req.body.buyer?.taxId || '',
         persona: req.body.persona || 'solopreneur',
+        default_tax_rate: Number(req.body.taxRate || req.body.tax_rate) || 0,
         delivery_state: req.body.deliveryState || req.body.delivery_state || undefined,
         is_gst_registered: req.body.isGstRegistered !== false,
         lut_number: req.body.lutNumber || req.body.lut_number || undefined,
         reverse_charge: !!(req.body.reverseCharge || req.body.reverse_charge),
         tds_enabled: !!(req.body.tdsApplicable || req.body.tdsEnabled),
+        tds_rate_override: req.body.tdsRate || req.body.tds_rate,
         discount_amount: Number(req.body.discountAmount || req.body.discount_amount) || 0,
         shipping_charges: Number(req.body.shipping) || 0,
     });
@@ -488,11 +491,13 @@ export const updateInvoice = async (req, res) => {
             seller_gstin: updates.seller?.taxId || updates.seller?.gstin || existing.seller?.taxId || existing.seller?.gstin || '',
             buyer_gstin: updates.buyer?.gstin || updates.buyer?.taxId || existing.buyer?.gstin || existing.buyer?.taxId || existing.customers?.gstin || '',
             persona: updates.persona || existing.persona || 'solopreneur',
+            default_tax_rate: Number(updates.taxRate || updates.tax_rate || existing.taxRate || existing.tax_rate) || 0,
             delivery_state: updates.deliveryState || updates.delivery_state || existing.delivery_state || undefined,
             is_gst_registered: updates.isGstRegistered !== undefined ? updates.isGstRegistered !== false : existing.is_gst_registered !== false,
             lut_number: updates.lutNumber || updates.lut_number || existing.lut_number || undefined,
             reverse_charge: !!(updates.reverseCharge || updates.reverse_charge || existing.reverse_charge),
             tds_enabled: !!(updates.tdsApplicable || updates.tdsEnabled || existing.tds_applicable),
+            tds_rate_override: updates.tdsRate || updates.tds_rate || existing.tds_rate,
             discount_amount: Number(updates.discountAmount || updates.discount_amount) || Number(existing.discount_amount) || 0,
             shipping_charges: Number(updates.shipping) || Number(existing.shipping) || 0,
         });
@@ -678,6 +683,9 @@ export const generatePdf = async (req, res) => {
     const settingsObj = mapConfigToFrontend(config || {});
     if (settingsObj.logoFilename) {
         settingsObj.logoPath = fileService.getFilePath(settingsObj.logoFilename);
+    }
+    if (config?.payment_qr_filename) {
+        settingsObj.paymentQrPath = fileService.getFilePath(`payment-qr/${config.payment_qr_filename}`);
     }
 
     let tempPath = null;
@@ -867,6 +875,9 @@ export const getInvoiceByShareToken = async (req, res) => {
     if (settings.logo_filename) {
         settings.logoPath = fileService.getFilePath(settings.logo_filename);
     }
+    if (settings.payment_qr_filename) {
+        settings.paymentQrPath = fileService.getFilePath(`payment-qr/${settings.payment_qr_filename}`);
+    }
 
     // 4. Generate & Stream PDF
     let tempPath = null;
@@ -925,13 +936,21 @@ export const getInvoiceShareDetails = async (req, res) => {
         invoice,
         settings: {
             businessName: settings.businessName || organization?.name || 'Your Business',
+            ownerName: settings.owner_name || '',
+            businessType: settings.businessType || invoice.persona || 'solopreneur',
+            companyTaxId: settings.companyTaxId || settings.gstin || '',
             email: settings.email || '',
             phone: settings.phone || '',
             address: settings.address || '',
             paymentInstructions: settings.paymentInstructions || '',
+            invoiceNotes: settings.invoiceNotes || '',
             upiId: settings.upiId || '',
+            bankName: settings.bankName || '',
+            bankAccountNumber: settings.bankAccountNumber || '',
+            bankIfsc: settings.bankIfsc || '',
             bankDetails: settings.bankDetails || '',
             logoUrl: settings.logoFilename ? `${baseUrl}/api/uploads/logos/${settings.logoFilename}` : null,
+            paymentQrUrl: settings.paymentQrFilename ? `${baseUrl}/api/uploads/payment-qr/${settings.paymentQrFilename}` : null,
         },
         actions: {
             downloadUrl: `${baseUrl}/api/invoices/share/${token}`,

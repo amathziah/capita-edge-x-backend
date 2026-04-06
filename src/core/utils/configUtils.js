@@ -15,6 +15,8 @@ const KEY_MAPPING = {
     invoice_prefix: 'invoice_prefix',
     logoFilename: 'logo_filename',
     logo_filename: 'logo_filename',
+    paymentQrFilename: 'payment_qr_filename',
+    payment_qr_filename: 'payment_qr_filename',
     smtp_user: 'smtp_user',
     gstin: 'gstin',
     pan: 'pan',

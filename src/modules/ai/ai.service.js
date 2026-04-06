@@ -3,9 +3,9 @@ import dotenv from 'dotenv';
 import { formatCurrency, getCurrencySymbol } from '../../core/utils/formatting.js';
 import { supabase } from '../../core/database/supabase.js';
 import analyticsService from '../analytics/analytics.service.js';
+import aiReadModelService from './aiReadModel.service.js';
 import { PLAN_TIERS } from '../../core/config/tierConfig.js';
 import { brandProfile } from '../../core/config/brandProfile.js';
-import { getInvoiceAmounts, resolveInvoiceStatus } from '../invoices/invoiceStatus.service.js';
 
 dotenv.config();
 
@@ -191,6 +191,24 @@ class AIService {
         return key;
     }
 
+    async _countMonthlyUsageRecords(orgId, firstOfMonthIso) {
+        const timestampColumns = ['createdAt', 'created_at'];
+
+        for (const column of timestampColumns) {
+            const { count, error } = await supabase
+                .from('ai_requests')
+                .select('id', { count: 'exact', head: true })
+                .eq('organization_id', orgId)
+                .gte(column, firstOfMonthIso);
+
+            if (!error) {
+                return { count: count || 0, column };
+            }
+        }
+
+        return { count: 0, column: null, error: new Error('Unable to resolve ai_requests timestamp column') };
+    }
+
     /**
      * Check if the organization has exhausted their monthly plan budget.
      * Limits are sourced from PLAN_TIERS (tierConfig.js) — single source of truth.
@@ -220,20 +238,15 @@ class AIService {
         firstOfMonth.setDate(1);
         firstOfMonth.setHours(0, 0, 0, 0);
 
-        const { count, error } = await supabase
-            .from('ai_requests')
-            .select('id', { count: 'exact' })
-            .eq('organization_id', orgId)
-            .gte('createdAt', firstOfMonth.toISOString());
-
-        if (error) {
-            console.error('Plan Budget Error (Usage Query):', error);
+        const usage = await this._countMonthlyUsageRecords(orgId, firstOfMonth.toISOString());
+        if (usage.error) {
+            console.error('Plan Budget Error (Usage Query):', usage.error);
             return { allowed: true, limit: queryLimit, used: 0 }; // Fail open
         }
 
         return {
-            allowed: count < queryLimit,
-            used: count,
+            allowed: usage.count < queryLimit,
+            used: usage.count,
             limit: queryLimit,
             tier: planConfig.name,
             models
@@ -302,7 +315,7 @@ class AIService {
         ];
     }
 
-    getModel(modelName, isJson = false) {
+    getModel(modelName, isJson = false, enableTools = true) {
         if (!this.genAI) return null;
         
         const config = {
@@ -317,11 +330,193 @@ class AIService {
         };
 
         // Inject tools if not in JSON mode
-        if (!isJson) {
+        if (!isJson && enableTools) {
             config.tools = this.getToolDeclarations();
         }
 
         return this.genAI.getGenerativeModel(config);
+    }
+
+    buildEvidencePrompt(query, context = {}, execution = {}) {
+        const {
+            settings = {},
+            temporal = {},
+            businessType,
+        } = context;
+
+        const currency = settings?.currency || context?.currency || 'INR';
+        const businessName = settings?.business_name || settings?.businessName || 'your business';
+        const rawBusinessSegment = businessType || settings?.business_type || settings?.businessType || 'solopreneur';
+        const businessSegment = rawBusinessSegment === 'freelancer' ? 'solopreneur' : rawBusinessSegment;
+
+        const personaInstructions = {
+            solopreneur: 'Act like a pragmatic CFO for an Indian freelancer. Prioritise collections, runway, taxes, margins, and concrete next actions.',
+            subscription: 'Act like a SaaS finance lead. Prioritise MRR quality, churn, retention, and forecast clarity.',
+            services_firm: 'Act like a services finance lead. Prioritise utilisation, project margins, receivables, and delivery risk.',
+            ecommerce: 'Act like a commerce finance operator. Prioritise margin, working capital, receivables, and cash conversion.'
+        }[businessSegment] || 'Act like a pragmatic finance operator.';
+
+        const evidenceLines = (execution.toolResults || []).map((entry, index) => {
+            const payload = JSON.stringify({
+                tool: entry.toolId,
+                args: entry.args,
+                data: entry.result?.data,
+                meta: entry.result?.meta
+            });
+            return `TOOL_${index + 1}: ${payload}`;
+        }).join('\n');
+
+        return [
+            'You are Capita, a grounded financial product agent.',
+            personaInstructions,
+            `Business: ${businessName}`,
+            `Currency: ${currency}`,
+            `Current time: ${temporal.currentTime || new Date().toISOString()}`,
+            '',
+            'Rules:',
+            '- Treat TOOL results as the only source of truth for user-specific numbers.',
+            '- If a needed fact is missing from TOOL results, say so plainly.',
+            '- Do not invent private data, metrics, customer names, totals, or dates.',
+            '- Be concise, specific, and operationally useful.',
+            '- When tool evidence exists, cite the relevant business object in plain language.',
+            '- If the query is general knowledge and there are no tools, answer carefully without pretending to see private data.',
+            '',
+            `Execution mode: ${execution.mode || 'general'}`,
+            `User question: ${query}`,
+            '',
+            'Tool evidence:',
+            evidenceLines || 'NO_TOOL_RESULTS',
+            '',
+            'Respond in markdown with:',
+            '1. A one-sentence executive answer.',
+            '2. Short supporting bullets when useful.',
+            '3. One clear next action.',
+        ].join('\n');
+    }
+
+    async generateGroundedAnswer(query, context = {}, execution = {}) {
+        const userId = context.user?.id || 'anon';
+        const orgId = context.organizationId;
+        const budget = await this._checkPlanBudget(orgId);
+
+        if (!this.genAI || this.isCircuitOpen() || !budget.allowed || !this._canMakeRequest()) {
+            if (!budget.allowed) {
+                throw new Error(AI_ACCESS_EXHAUSTED_MESSAGE);
+            }
+            throw new Error('Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.');
+        }
+
+        const prompt = this.buildEvidencePrompt(query, context, execution);
+        const rawHistory = context.history || [];
+        const history = this._sanitiseHistory(rawHistory);
+        const targetModels = budget.models || this.models;
+        let lastError = null;
+
+        for (const modelName of targetModels) {
+            try {
+                this._consumeToken();
+                const modelInstance = this.getModel(modelName, false, false);
+                if (!modelInstance) continue;
+
+                const chat = modelInstance.startChat({ history });
+                const result = await chat.sendMessage(prompt);
+                const response = await result.response;
+                const budgetStatus = await this.getBudgetStatus(userId, orgId);
+
+                return {
+                    text: response.text().trim(),
+                    action: this.extractAction(response.text(), query),
+                    data: {
+                        provenance: (execution.toolResults || []).map((entry) => ({
+                            tool: entry.toolId,
+                            source: entry.result?.meta?.source || null,
+                            generated_at: entry.result?.meta?.generated_at || null
+                        }))
+                    },
+                    usage: response.usageMetadata,
+                    provider: `cloud:${modelName}:orchestrated`,
+                    budget: budgetStatus
+                };
+            } catch (error) {
+                lastError = error;
+                if (this.isRetryable(error)) continue;
+                break;
+            }
+        }
+
+        throw lastError || new Error('Cloud Busy: All AI models failed. Please try again.');
+    }
+
+    async *generateGroundedAnswerStream(query, context = {}, execution = {}) {
+        const userId = context.user?.id || 'anon';
+        const orgId = context.organizationId;
+        const budget = await this._checkPlanBudget(orgId);
+
+        if (!budget.allowed) {
+            throw new Error(AI_ACCESS_EXHAUSTED_MESSAGE);
+        }
+        if (!this.genAI || this.isCircuitOpen() || !this._canMakeRequest()) {
+            throw new Error('Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.');
+        }
+
+        const prompt = this.buildEvidencePrompt(query, context, execution);
+        const rawHistory = context.history || [];
+        const history = this._sanitiseHistory(rawHistory);
+        const targetModels = budget.models || this.models;
+        let fullText = '';
+        let lastError = null;
+
+        for (const modelName of targetModels) {
+            try {
+                this._consumeToken();
+                const modelInstance = this.getModel(modelName, false, false);
+                if (!modelInstance) continue;
+
+                const chat = modelInstance.startChat({ history });
+                const currentResult = await chat.sendMessageStream(prompt);
+
+                for await (const chunk of currentResult.stream) {
+                    try {
+                        const chunkText = chunk.text();
+                        if (chunkText) {
+                            fullText += chunkText;
+                            yield { type: 'token', text: chunkText };
+                        }
+                    } catch {
+                        // Ignore empty chunks
+                    }
+                }
+
+                const finalResponse = await currentResult.response;
+                const budgetStatus = await this.getBudgetStatus(userId, orgId);
+
+                yield {
+                    type: 'complete',
+                    text: fullText.trim(),
+                    action: this.extractAction(fullText, query),
+                    usage: finalResponse?.usageMetadata,
+                    provider: `cloud:${modelName}:orchestrated`,
+                    budget: budgetStatus,
+                    data: {
+                        provenance: (execution.toolResults || []).map((entry) => ({
+                            tool: entry.toolId,
+                            source: entry.result?.meta?.source || null,
+                            generated_at: entry.result?.meta?.generated_at || null
+                        }))
+                    }
+                };
+                return;
+            } catch (error) {
+                lastError = error;
+                if (this.isRetryable(error)) {
+                    fullText = '';
+                    continue;
+                }
+                break;
+            }
+        }
+
+        throw lastError || new Error('Cloud Busy: All AI models failed. Please try again.');
     }
 
     /**
@@ -381,74 +576,45 @@ class AIService {
         try {
             switch (name) {
                 case "get_financial_summary": {
-                    const stats = await analyticsService.getDashboardStats(orgId).catch(() => ({}));
-                    const safeToSpend = await analyticsService.getSafeToSpend(orgId).catch(() => ({}));
-                    
-                    // Pre-calculate derived business metrics to avoid AI hallucination
-                    const totalRevenue = stats.total_revenue || 0;
-                    const totalExpenses = stats.total_expenses || 0;
-                    const netProfit = totalRevenue - totalExpenses;
-                    const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
-
-                    return { 
-                        stats: {
-                            ...stats,
-                            total_clients: stats.total_customers || 0, // Explicit mapping
-                            net_profit: netProfit,
-                            profit_margin: profitMargin.toFixed(2) + '%'
-                        }, 
-                        safeToSpend 
+                    const snapshot = await aiReadModelService.getDashboardSnapshot(orgId);
+                    return {
+                        ...snapshot.data,
+                        _meta: snapshot.meta
                     };
                 }
                 
                 case "get_overdue_invoices": {
-                    const res = await supabase.from('invoices')
-                        .select('*')
-                        .eq('organization_id', orgId)
-                        .order('date', { ascending: false });
-
-                    if (res.error) {
-                        throw res.error;
-                    }
-
-                    const overdueInvoices = (res.data || []).filter(inv => resolveInvoiceStatus(inv) === 'overdue');
-                    const now = new Date();
-                    const ageing = { current: 0, near: 0, critical: 0, totalOverdue: 0 };
-                    
-                    overdueInvoices.forEach(inv => {
-                        const dueDate = inv.dueDate || inv.due_date; // Backwards compatibility if any
-                        const diffDays = Math.ceil((now - new Date(dueDate)) / 86400000);
-                        const { balanceDue } = getInvoiceAmounts(inv);
-                        ageing.totalOverdue += balanceDue;
-                        if (diffDays <= 30) ageing.current += balanceDue;
-                        else if (diffDays <= 60) ageing.near += balanceDue;
-                        else ageing.critical += balanceDue;
-                    });
-                    
-                    return { ageing, riskyInvoices: overdueInvoices.slice(0, 5) };
+                    const receivables = await aiReadModelService.getOverdueReceivables(orgId);
+                    return {
+                        ...receivables.data,
+                        _meta: receivables.meta
+                    };
                 }
 
                 case "get_recent_transactions": {
-                    const invoices = await supabase.from('invoices').select('*').eq('organization_id', orgId).order('created_at', { ascending: false }).limit(5);
-                    const payments = await supabase.from('payments').select('*, customers(name)').eq('organization_id', orgId).order('date', { ascending: false }).limit(5);
-                    const expenses = await supabase.from('expenses').select('*').eq('organization_id', orgId).order('date', { ascending: false }).limit(5);
-                    return { 
-                        invoices: invoices.data || [], 
-                        payments: payments.data || [], 
-                        expenses: expenses.data || [] 
+                    const activity = await aiReadModelService.getRecentActivity(orgId);
+                    return {
+                        ...activity.data,
+                        _meta: activity.meta
                     };
                 }
 
                 case "get_customer_insights": {
-                    const insights = await analyticsService.getCustomerInsights(orgId).catch(() => []);
-                    return { customers: insights };
+                    const portfolio = await aiReadModelService.getCustomerPortfolio(orgId);
+                    return {
+                        ...portfolio.data,
+                        _meta: portfolio.meta
+                    };
                 }
 
                 case "get_customer_details": {
                     const customerId = funcCall.args?.customer_id;
                     if (!customerId) return { error: "Customer ID is required." };
-                    const intelligence = await analyticsService.getCustomerIntelligence(customerId, orgId).catch(() => ({}));
-                    return { intelligence };
+                    const detail = await aiReadModelService.getCustomerDetail(orgId, customerId);
+                    return {
+                        ...detail.data,
+                        _meta: detail.meta
+                    };
                 }
 
                 default:

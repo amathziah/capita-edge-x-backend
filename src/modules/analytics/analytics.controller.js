@@ -32,6 +32,11 @@ export const getHealthScore = async (req, res) => {
     res.json(healthScore);
 };
 
+export const getSafeToSpend = async (req, res) => {
+    const snapshot = await analyticsService.getSafeToSpend(req.user.organizationId);
+    res.json(snapshot);
+};
+
 export const exportData = async (req, res) => {
     const type = req.query.type || 'invoices';
     const csv = await analyticsService.exportToCSV(type, {}, req.user.organizationId);

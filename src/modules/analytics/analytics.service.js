@@ -556,13 +556,11 @@ class AnalyticsService {
         ] = await Promise.all([
             supabase.from('payments').select('amount').eq('organization_id', organizationId),
             supabase.from('expenses').select('amount').eq('organization_id', organizationId),
-            supabase.from('settings').select('companyTaxId, defaultGstRate, default_gst_rate').eq('organization_id', organizationId).maybeSingle(),
+            supabase.from('settings').select('companyTaxId, defaultGstRate, default_gst_rate, currency').eq('organization_id', organizationId).maybeSingle(),
             supabase
                 .from('invoices')
-                .select('total')
+                .select('status, total, net_receivable, amount_paid, dueDate, due_date, document_status, payment_status, balance_due')
                 .eq('organization_id', organizationId)
-                .eq('status', 'pending')
-                .lt('dueDate', new Date().toISOString())
         ]);
 
         if (payError) throw new Error(payError.message);
@@ -583,7 +581,9 @@ class AnalyticsService {
         const taxableProfit = Math.max(0, totalReceivedPayments - gstReserve - totalExpenses);
         const incomeTaxReserve = taxableProfit * TAX_RESERVES.INCOME_TAX_RATE;
 
-        const overdueTotal = (overdueInvoices || []).reduce((sum, inv) => sum + (inv.total || 0), 0);
+        const overdueTotal = (overdueInvoices || [])
+            .filter((invoice) => resolveInvoiceStatus(invoice) === 'overdue')
+            .reduce((sum, inv) => sum + getInvoiceAmounts(inv).balanceDue, 0);
         const atRiskAmount = overdueTotal * TAX_RESERVES.OVERDUE_RISK_FACTOR;
 
         const safeToSpend = cashOnHand - gstReserve - incomeTaxReserve - atRiskAmount;
@@ -593,6 +593,7 @@ class AnalyticsService {
             cashOnHand,
             totalRevenue: totalReceivedPayments,
             totalExpenses,
+            currency: settings?.currency || 'INR',
             reserves: {
                 gst: gstReserve,
                 incomeTax: incomeTaxReserve,

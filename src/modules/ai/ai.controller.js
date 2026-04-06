@@ -1,5 +1,8 @@
 import { supabase } from '../../core/database/supabase.js';
 import aiService from './ai.service.js';
+import aiOrchestratorService from './aiOrchestrator.service.js';
+import aiTraceService from './aiTrace.service.js';
+import aiActionExecutorService from './aiActionExecutor.service.js';
 import analyticsService from '../analytics/analytics.service.js';
 import emailService from '../../core/services/email.service.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
@@ -34,13 +37,27 @@ const calculateAICost = (usage, model = 'gemini-2.0-flash') => {
  * Aggregates total token usage for an organization
  */
 const getAIUsageData = async (organizationId) => {
-    const { data, error } = await supabase
-        .from('ai_requests')
-        .select('total_tokens')
-        .eq('organization_id', organizationId);
+    const firstOfMonth = new Date();
+    firstOfMonth.setDate(1);
+    firstOfMonth.setHours(0, 0, 0, 0);
 
-    if (error) return 0;
-    return data.reduce((sum, req) => sum + (req.total_tokens || 0), 0);
+    const timestampColumns = ['createdAt', 'created_at'];
+    for (const column of timestampColumns) {
+        const { data, error } = await supabase
+            .from('ai_requests')
+            .select('id, total_tokens')
+            .eq('organization_id', organizationId)
+            .gte(column, firstOfMonth.toISOString());
+
+        if (!error) {
+            return {
+                queries: (data || []).length,
+                tokens: (data || []).reduce((sum, req) => sum + (req.total_tokens || 0), 0)
+            };
+        }
+    }
+
+    return { queries: 0, tokens: 0 };
 };
 
 const checkAICreditLimit = async (req) => {
@@ -56,19 +73,25 @@ const checkAICreditLimit = async (req) => {
 const AI_ACCESS_EXHAUSTED_MESSAGE = 'AI access is temporarily unavailable for this workspace right now. Upgrade or wait for the next usage cycle to continue.';
 
 export const getAIUsageStatus = async (req, res) => {
-    const [usage, { data: org }] = await Promise.all([
+    const [usage, budget, { data: org }] = await Promise.all([
         getAIUsageData(req.user.organizationId),
+        aiService.getBudgetStatus(req.user.id, req.user.organizationId),
         supabase.from('organizations').select('plan_tier').eq('id', req.user.organizationId).single()
     ]);
 
-    const limit = getTierLimit(org?.plan_tier || 'starter', 'ai_token_limit');
+    const tokenLimit = getTierLimit(org?.plan_tier || 'starter', 'ai_token_limit');
 
     res.json({
-        usage,
-        limit,
+        usage: usage.queries,
+        limit: budget.userMax,
         tier: org?.plan_tier || 'starter',
-        remaining: limit === Infinity ? Infinity : Math.max(0, limit - usage),
-        percent: limit === Infinity ? 0 : Math.min(100, Math.round((usage / limit) * 100))
+        remaining: budget.userRemaining,
+        percent: budget.userMax === Infinity ? 0 : Math.min(100, Math.round((usage.queries / Math.max(1, budget.userMax)) * 100)),
+        queryUsage: usage.queries,
+        queryLimit: budget.userMax,
+        tokenUsage: usage.tokens,
+        tokenLimit,
+        tokenRemaining: tokenLimit === Infinity ? Infinity : Math.max(0, tokenLimit - usage.tokens)
     });
 };
 
@@ -124,6 +147,8 @@ const getAIContext = async (req, persona, agentId, history) => {
         settings: realSettings,
         history: history || [],
         agentId,
+        conversationId: req.body?.conversationId || null,
+        query: req.body?.query || null,
         // Empty arrays/objects as placeholders so legacy destructuring doesn't break
         // while we transition fully to tools.
         invoices: [], 
@@ -156,7 +181,7 @@ export const processChat = async (req, res) => {
     if (!query) throw new APIError('Query is required', 400);
 
     const context = await getAIContext(req, persona, agentId, history);
-    const response = await aiService.processQuery(query, context);
+    const response = await aiOrchestratorService.processQuery(query, context);
 
     const modelUsed = response.provider?.split(':')?.[1] || 'gemini-2.5-flash';
     const { tokens, cost } = calculateAICost(response.usage, modelUsed);
@@ -249,7 +274,7 @@ export const processChatStream = async (req, res) => {
         // Handle client disconnect
         req.on('close', () => { aborted = true; });
 
-        const stream = aiService.processQueryStream(query, context);
+        const stream = aiOrchestratorService.processQueryStream(query, context);
 
         let fullText = '';
 
@@ -312,7 +337,8 @@ export const processChatStream = async (req, res) => {
                     usage: chunk.usage,
                     provider: chunk.provider,
                     conversationId,
-                    budget: chunk.budget
+                    budget: chunk.budget,
+                    data: chunk.data
                 });
             }
         }
@@ -769,4 +795,45 @@ export const getBudget = async (req, res) => {
     const orgId = req.user?.organizationId;
     const budget = await aiService.getBudgetStatus(userId, orgId);
     res.json(budget);
+};
+
+export const getTraces = async (req, res) => {
+    const limit = Math.min(Number(req.query.limit || 50), 100);
+    const traces = await aiTraceService.listByOrganization(req.user.organizationId, limit);
+    res.json(traces);
+};
+
+export const getTraceById = async (req, res) => {
+    const records = await aiTraceService.getTrace(req.params.traceId, req.user.organizationId);
+    res.json(records);
+};
+
+export const executeAction = async (req, res) => {
+    const action = req.body?.action;
+    if (!action?.type) throw new APIError('Action type is required', 400);
+
+    const traceId = action?.data?.traceHint || null;
+    const result = await aiActionExecutorService.execute(action, {
+        organizationId: req.user.organizationId,
+        user: req.user
+    });
+
+    if (traceId) {
+        await aiTraceService.log({
+            traceId,
+            organizationId: req.user.organizationId,
+            userId: req.user.id,
+            stage: 'final',
+            toolId: `action:${action.type}`,
+            query: null,
+            input: { action },
+            output: result
+        });
+    }
+
+    res.json({
+        success: true,
+        action: action.type,
+        result
+    });
 };

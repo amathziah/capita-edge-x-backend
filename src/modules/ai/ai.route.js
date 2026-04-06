@@ -40,6 +40,9 @@ router.get('/ai/conversations', aiLimiter, asyncHandler(aiController.getConversa
 router.get('/ai/conversations/:id', aiLimiter, asyncHandler(aiController.getConversationMessages));
 router.get('/ai/history', aiLimiter, asyncHandler(aiController.getChatHistory));
 router.delete('/ai/history', aiLimiter, asyncHandler(aiController.deleteChatHistory));
+router.get('/ai/traces', metaLimiter, asyncHandler(aiController.getTraces));
+router.get('/ai/traces/:traceId', metaLimiter, asyncHandler(aiController.getTraceById));
+router.post('/ai/actions/execute', aiLimiter, asyncHandler(aiController.executeAction));
 router.get('/ai/config', metaLimiter, asyncHandler(aiController.getConfig)); // Use metaLimiter
 router.get('/ai/budget', metaLimiter, asyncHandler(aiController.getBudget)); // Daily AI budget status
 

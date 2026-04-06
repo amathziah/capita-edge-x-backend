@@ -1,0 +1,23 @@
+{
+  "name": "CapitaEdgeX",
+  "teamVoice": "CapitaEdgeX team",
+  "productLabel": "Financial OS",
+  "audienceShort": "Indian freelancers, solopreneurs, agencies, and small businesses",
+  "audienceExtended": "Indian marketing agencies, freelancers, solopreneurs, and small businesses that need stronger financial operations without enterprise overhead",
+  "mission": "We build CapitaEdgeX to simplify invoicing, collections, payments, compliance, and financial operations so growing businesses can spend less time on admin and make better decisions with more clarity.",
+  "purpose": "We want to reduce admin burden, improve cash flow visibility, and give users an AI CFO layer that turns financial data into practical action.",
+  "heroDescription": "CapitaEdgeX is the complete Financial OS for Indian freelancers and agencies — invoicing, collections, payments, compliance, and reporting in one place.",
+  "footerDescription": "The complete Financial OS for Indian freelancers and agencies — bridging the gap between revenue generation and financial operations.",
+  "faqBuiltFor": "Indian freelancers, solopreneurs, agencies, and small businesses that need GST-compliant invoicing, payment tracking, collections visibility, and operational finance support without enterprise complexity.",
+  "aboutParagraphs": [
+    "Welcome to CapitaEdgeX. We are a financial technology team building for Indian freelancers, solopreneurs, agencies, and small businesses.",
+    "Our mission is to simplify invoicing, collections, payments, compliance, and day-to-day financial operations so growing teams can focus on work instead of admin.",
+    "We are building CapitaEdgeX as a practical Financial OS with an AI CFO layer that helps users stay in control of cash flow, receivables, and financial decisions."
+  ],
+  "values": [
+    "clarity over complexity",
+    "practical financial control",
+    "faster collections and cleaner operations",
+    "tools that help users take action"
+  ]
+}

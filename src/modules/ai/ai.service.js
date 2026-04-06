@@ -506,6 +506,82 @@ class AIService {
         return isTransient || isConfigError;
     }
 
+    shouldEmitGenerativeUI(componentName, query = '') {
+        const q = query.toLowerCase();
+
+        if (componentName === 'get_financial_summary') {
+            return [
+                'summary',
+                'overview',
+                'dashboard',
+                'revenue',
+                'profit',
+                'cash flow',
+                'cashflow',
+                'margin',
+                'metrics',
+                'business health',
+                'safe to spend',
+                'runway',
+            ].some(keyword => q.includes(keyword));
+        }
+
+        if (componentName === 'get_overdue_invoices') {
+            return [
+                'overdue',
+                'who owes me',
+                'late payment',
+                'late invoice',
+                'receivable',
+                'aging',
+                'ageing',
+                'pending payment',
+                'collections',
+            ].some(keyword => q.includes(keyword));
+        }
+
+        if (componentName === 'get_recent_transactions') {
+            return [
+                'recent transactions',
+                'recent activity',
+                'latest transactions',
+                'latest payments',
+                'latest expenses',
+                'last 5',
+                'recent invoices',
+                'what happened recently',
+            ].some(keyword => q.includes(keyword));
+        }
+
+        if (componentName === 'get_customer_insights') {
+            return [
+                'top customers',
+                'top clients',
+                'customer portfolio',
+                'client portfolio',
+                'customer insights',
+                'client insights',
+                'best customers',
+                'best clients',
+            ].some(keyword => q.includes(keyword));
+        }
+
+        if (componentName === 'get_customer_details') {
+            return [
+                'specific customer',
+                'specific client',
+                'customer health',
+                'client health',
+                'churn risk',
+                'next purchase',
+                'customer details',
+                'client details',
+            ].some(keyword => q.includes(keyword));
+        }
+
+        return false;
+    }
+
     // ═══════════════════════════════════════════════════════════
     // MAIN API: processQuery (Chat)
     // ═══════════════════════════════════════════════════════════
@@ -669,11 +745,13 @@ class AIService {
                             const toolResult = await this.executeTool(funcCall, context);
                             
                             // Yield Generative UI Event to the Frontend stream immediately
-                            yield {
-                                type: 'gen_ui',
-                                component: funcCall.name,
-                                data: toolResult
-                            };
+                            if (this.shouldEmitGenerativeUI(funcCall.name, query)) {
+                                yield {
+                                    type: 'gen_ui',
+                                    component: funcCall.name,
+                                    data: toolResult
+                                };
+                            }
                             
                             // CRITICAL: Await the current stream's completion so Gemini SDK registers the model's functionCall turn internally.
                             try {
@@ -893,7 +971,7 @@ class AIService {
         contextBlock += `- ❌ Repeat the user's question back to them.\n\n`;
         
         contextBlock += `**CRITICAL — HIGH-FIDELITY TOOLS:**\n`;
-        contextBlock += `- **ALWAYS** use the \`get_financial_summary\` tool if the user asks for a summary of their business.\n`;
+        contextBlock += `- Use the \`get_financial_summary\` tool when the user explicitly asks for a business summary, revenue, profit, cash flow, margins, safe-to-spend, or overall metrics.\n`;
         contextBlock += `- **COUNTING CLIENTS**: If asked for client count, use the \`total_clients\` field from the financial summary tool. NEVER sum invoice counts to estimate clients.\n`;
         contextBlock += `- **ISOLATION**: You are strictly locked to data for **${businessName}**. Reassure the user you only see their data.\n`;
         contextBlock += `- If the user asks about a SPECIFIC customer, use \`get_customer_insights\` to find their ID first, then use \`get_customer_details\` to get their risk/health metrics.\n`;

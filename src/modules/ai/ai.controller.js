@@ -1,6 +1,7 @@
 export {
     getAIUsageStatus,
     getConfig,
+    getDomainWorkspace,
     processChat,
     processChatStream,
     magicFill,

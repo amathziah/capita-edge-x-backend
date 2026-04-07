@@ -1,4 +1,5 @@
 import aiReadModelService from './aiReadModel.service.js';
+import aiIntentService from './aiIntent.service.js';
 
 const TOOL_DEFINITIONS = {
     get_business_advisor_context: {
@@ -75,7 +76,12 @@ class AIToolRegistryService {
 
     async planTools(query, context = {}) {
         const lowerQuery = String(query || '').toLowerCase();
+        const intent = aiIntentService.detect(query);
+        if (aiIntentService.isConversationalIntent(intent)) {
+            return [];
+        }
         const plan = [];
+        const historyLike = ['recent', 'recently', 'latest', 'came in', 'came through', 'inflow', 'received', 'collected'];
         const mentionsWorkspace = ['workspace', 'dashboard', 'books', 'back office', 'operations'].some((token) => lowerQuery.includes(token));
         const asksForOverview = ['overall', 'everything', 'all areas', 'full picture', 'full overview', 'complete picture', 'summary'].some((token) => lowerQuery.includes(token));
         const includesAny = (tokens = []) => tokens.some((token) => lowerQuery.includes(token));
@@ -112,11 +118,61 @@ class AIToolRegistryService {
             'recent activity', 'recent updates', 'what happened recently', 'what changed recently',
             'latest activity', 'latest updates', 'what happened this week', 'recent business activity'
         ]);
+        const asksRecentPayments = includesAny([
+            'what payments came in recently', 'which payments came in recently', 'recent payments',
+            'payments came in', 'payments came through', 'payments received recently',
+            'money came in', 'cash came in', 'collections came in', 'recent collections',
+            'recent receipts'
+        ]) || (includesAny(['payment', 'payments', 'received', 'collected']) && historyLike.some((token) => lowerQuery.includes(token)));
+        const asksDirectDashboardHealth = includesAny([
+            'how are you doing', 'how is the business doing', 'what is my business health',
+            'business health', 'how am i doing', 'how are we doing'
+        ]);
         const pushTool = (toolId, args = {}) => {
             if (!plan.some((entry) => entry.toolId === toolId)) {
                 plan.push({ toolId, args });
             }
         };
+
+        if (intent === 'business_health') {
+            pushTool('get_dashboard_snapshot');
+            pushTool('get_invoice_workspace');
+            pushTool('get_payment_workspace');
+            pushTool('get_expense_workspace');
+            pushTool('get_compliance_workspace');
+        }
+
+        if (intent === 'cash_flow') {
+            pushTool('get_dashboard_snapshot');
+            pushTool('get_payment_workspace');
+            pushTool('get_invoice_workspace');
+        }
+
+        if (intent === 'payments_recent') {
+            pushTool('get_payment_workspace');
+            pushTool('get_recent_activity');
+        }
+
+        if (intent === 'invoices_attention') {
+            pushTool('get_invoice_workspace');
+            pushTool('get_recent_activity');
+        }
+
+        if (intent === 'expenses_spend') {
+            pushTool('get_expense_workspace');
+        }
+
+        if (intent === 'compliance_status') {
+            pushTool('get_compliance_workspace');
+        }
+
+        if (intent === 'compliance_knowledge') {
+            pushTool('get_knowledge_base', { query });
+        }
+
+        if (intent === 'customer_insights') {
+            pushTool('get_invoice_workspace');
+        }
 
         if (includesAny([
             'runway', 'cash runway', 'safe to spend', 'safe-to-spend', 'cash flow',
@@ -127,7 +183,20 @@ class AIToolRegistryService {
             pushTool('get_dashboard_snapshot');
         }
 
+        if (asksDirectDashboardHealth) {
+            pushTool('get_dashboard_snapshot');
+            pushTool('get_payment_workspace');
+            pushTool('get_invoice_workspace');
+            pushTool('get_expense_workspace');
+            pushTool('get_compliance_workspace');
+        }
+
         if (asksRecentBusinessActivity) {
+            pushTool('get_recent_activity');
+        }
+
+        if (asksRecentPayments) {
+            pushTool('get_payment_workspace');
             pushTool('get_recent_activity');
         }
 
@@ -172,6 +241,13 @@ class AIToolRegistryService {
             pushTool('get_compliance_workspace');
         }
 
+        if ((includesAny([
+            'gst', 'tds', 'tax', 'compliance', 'filing', 'return', 'igst', 'cgst', 'sgst',
+            'gstin', 'input tax credit', 'itc', 'reverse charge', 'place of supply'
+        ]) || asksGeneralComplianceKnowledge) && !asksWorkspaceComplianceStatus) {
+            pushTool('get_knowledge_base', { query });
+        }
+
         if (asksForOverview) {
             pushTool('get_dashboard_snapshot');
             pushTool('get_invoice_workspace');
@@ -180,7 +256,7 @@ class AIToolRegistryService {
             pushTool('get_compliance_workspace');
         }
 
-        if (asksGeneralBusinessOrFinance) {
+        if (asksGeneralBusinessOrFinance && intent !== 'conversational') {
             pushTool('get_business_advisor_context', { query });
         }
 

@@ -30,11 +30,32 @@ class AIReadModelService {
     }
 
     async getDashboardSnapshot(organizationId) {
-        const [{ settings, currency }, stats, safeToSpend] = await Promise.all([
+        const [{ settings, currency }, statsResult, safeToSpendResult] = await Promise.all([
             this.getOrganizationContext(organizationId),
-            analyticsService.getDashboardStats(organizationId),
-            analyticsService.getSafeToSpend(organizationId)
+            analyticsService.getDashboardStats(organizationId).catch(() => null),
+            analyticsService.getSafeToSpend(organizationId).catch(() => null)
         ]);
+
+        const stats = statsResult || {
+            total_invoices: 0,
+            paid_invoices: 0,
+            pending_invoices: 0,
+            draft_invoices: 0,
+            overdue_invoices: 0,
+            total_revenue: 0,
+            pending_payments: 0,
+            overdue_revenue: 0,
+            total_customers: 0,
+            total_clients: 0,
+            total_expenses: 0
+        };
+        const safeToSpend = safeToSpendResult || {
+            safeToSpend: 0,
+            cashOnHand: 0,
+            totalRevenue: 0,
+            totalExpenses: 0,
+            currency
+        };
 
         const totalRevenue = stats.total_revenue || 0;
         const totalExpenses = stats.total_expenses || 0;
@@ -85,7 +106,11 @@ class AIReadModelService {
             'cash flow', 'cashflow', 'safe to spend', 'margin', 'overview'
         ]);
 
-        const includeSnapshot = asksBroadBusiness || true;
+        const includeSnapshot = asksBroadBusiness || includesAny([
+            'cash flow', 'cashflow', 'safe to spend', 'runway', 'liquidity',
+            'business health', 'how are we doing', 'how is the business doing',
+            'overall', 'summary', 'full picture', 'overview', 'best move', 'priority'
+        ]);
         const includeInvoices = asksBroadBusiness || needsInvoices;
         const includePayments = asksBroadBusiness || needsPayments;
         const includeExpenses = asksBroadBusiness || needsExpenses;
@@ -358,6 +383,9 @@ class AIReadModelService {
             data: {
                 summary,
                 recentPayments: payments.slice(0, 5),
+                pendingPayments: payments
+                    .filter((payment) => (payment.status || 'completed') !== 'completed')
+                    .slice(0, 5),
                 currency
             },
             meta: {
@@ -472,6 +500,11 @@ class AIReadModelService {
             data: {
                 summary,
                 urgentTasks: normalizedTasks.filter((task) => ['overdue', 'pending'].includes(task.status)).slice(0, 5),
+                dueThisWeekTasks: normalizedTasks.filter((task) => {
+                    if (!task.due_date || task.status === 'completed') return false;
+                    const due = new Date(task.due_date);
+                    return due >= today && due <= endOfWeek;
+                }).slice(0, 5),
                 recentTasks: normalizedTasks.slice(0, 5)
             },
             meta: {

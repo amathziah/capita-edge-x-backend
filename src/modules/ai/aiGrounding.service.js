@@ -1,6 +1,24 @@
 import { formatCurrency } from '../../core/utils/formatting.js';
 
 class AIGroundingService {
+    getSpecialistInstructions(execution = {}) {
+        const domain = execution.primaryDomain || 'finance';
+        const specialistLabel = execution.specialistLabel || 'Finance Guide';
+
+        const domainInstruction = {
+            invoices: 'You are a collections and receivables specialist. Focus on invoice status, overdue exposure, debtor priority, follow-up order, and cash recovery.',
+            payments: 'You are a receipts and reconciliation specialist. Focus on incoming payments, settlement status, payment timing, reconciliation risk, and cash collection clarity.',
+            expenses: 'You are a spend control specialist. Focus on expense mix, category concentration, burn, avoidable costs, and short-term savings opportunities.',
+            compliance: 'You are a compliance specialist. Focus on due items, filing status, deadlines, and practical compliance sequencing.',
+            finance: 'You are a pragmatic CFO operator. Focus on liquidity, collections, spend control, and the next operational move.',
+            customers: 'You are a customer portfolio specialist. Focus on customer concentration, payer quality, and customer-specific collection or retention risk.',
+            actions: 'You are an operations execution specialist. Focus on the exact next workflow or screen needed to complete the user request.',
+            general: 'You are a concise finance operator.'
+        }[domain] || 'You are a concise finance operator.';
+
+        return { domain, specialistLabel, domainInstruction };
+    }
+
     buildEvidencePrompt(query, context = {}, execution = {}) {
         const {
             settings = {},
@@ -30,11 +48,17 @@ class AIGroundingService {
             return `TOOL_${index + 1}: ${payload}`;
         }).join('\n');
 
+        const { domain, specialistLabel, domainInstruction } = this.getSpecialistInstructions(execution);
+
         return [
             'You are Capita, a grounded financial product agent.',
             personaInstructions,
+            domainInstruction,
             `Business: ${businessName}`,
             `Business type: ${businessSegment}`,
+            `Detected intent: ${execution.intent || 'general_advice'}`,
+            `Primary domain: ${domain}`,
+            `Specialist mode: ${specialistLabel}`,
             `Currency: ${currency}`,
             `Current time: ${temporal.currentTime || new Date().toISOString()}`,
             '',
@@ -47,6 +71,7 @@ class AIGroundingService {
             '- Personalize recommendations to the user business, cash position, receivables, expense profile, and compliance state when those facts are present in TOOL results.',
             '- If the user asks what to do next, rank the most important actions using the available evidence instead of giving generic business advice.',
             '- If the query is general knowledge and there are no tools, answer carefully without pretending to see private data.',
+            '- For GST, tax, legal, or compliance questions, include a brief verification note that the latest official source should be checked before acting.',
             '',
             `Execution mode: ${execution.mode || 'general'}`,
             `User question: ${query}`,
@@ -90,11 +115,17 @@ class AIGroundingService {
             return `TOOL_${index + 1}: ${payload}`;
         }).join('\n');
 
+        const { domain, specialistLabel, domainInstruction } = this.getSpecialistInstructions(execution);
+
         return [
             'You are Capita, a grounded financial product agent.',
             personaInstructions,
+            domainInstruction,
             `Business: ${businessName}`,
             `Business type: ${businessSegment}`,
+            `Detected intent: ${execution.intent || 'general_advice'}`,
+            `Primary domain: ${domain}`,
+            `Specialist mode: ${specialistLabel}`,
             `Currency: ${currency}`,
             `Current time: ${temporal.currentTime || new Date().toISOString()}`,
             '',
@@ -433,6 +464,39 @@ class AIGroundingService {
                 const summary = data.summary || {};
                 const recentPayments = Array.isArray(data.recentPayments) ? data.recentPayments : [];
 
+                if (
+                    lowerQuery.includes('recent payment') ||
+                    lowerQuery.includes('recent payments') ||
+                    lowerQuery.includes('payments came in') ||
+                    lowerQuery.includes('payments received') ||
+                    lowerQuery.includes('payments came through') ||
+                    lowerQuery.includes('cash came in') ||
+                    lowerQuery.includes('collections came in')
+                ) {
+                    const latest = recentPayments.slice(0, 3).map((payment) => {
+                        const label = payment.reference_number || payment.method || payment.payment_mode || 'payment';
+                        return `${label} (${formatCurrency(payment.amount || 0, currency)}${payment.date ? ` on ${payment.date}` : ''})`;
+                    });
+
+                    return [
+                        `Recent incoming payments total ${formatCurrency(summary.totalCollected || 0, currency)} across ${summary.completedCount || 0} completed receipts.`,
+                        '',
+                        latest.length > 0 ? `- Latest receipts: ${latest.join('; ')}.` : '- No recent payment receipts were available in the current evidence set.',
+                        '',
+                        'Next action: reconcile these receipts against open invoices and mark any unmatched payments.'
+                    ].join('\n');
+                }
+
+                if (lowerQuery.includes('how are you doing') || lowerQuery.includes('how is the business doing')) {
+                    return [
+                        `Payments show ${formatCurrency(summary.totalCollected || 0, currency)} collected and ${summary.pendingCount || 0} payment(s) still pending.`,
+                        '',
+                        recentPayments.length > 0 ? `- Latest payment activity: ${recentPayments.slice(0, 3).map((payment) => `${payment.reference_number || payment.method || 'payment'} (${formatCurrency(payment.amount || 0, currency)})`).join('; ')}.` : '- No recent payment activity available.',
+                        '',
+                        'Next action: compare receipts with overdue invoices and current cash balance.'
+                    ].join('\n');
+                }
+
                 sections.push([
                     `Payments snapshot: ${summary.completedCount || 0} completed payments recorded, ${formatCurrency(summary.totalCollected || 0, currency)} collected overall, and ${formatCurrency(summary.collectedThisMonth || 0, currency)} collected this month.`,
                     recentPayments.length > 0 ? `- Recent receipts: ${recentPayments.slice(0, 3).map((payment) => `${payment.reference_number || payment.method || 'payment'} (${formatCurrency(payment.amount || 0, currency)} on ${payment.date || 'unknown date'})`).join('; ')}.` : null
@@ -617,8 +681,7 @@ class AIGroundingService {
 
         const shouldRefuseGeneralAnswer = !hasToolEvidence && !isConversationalSafe && (
             asksForPrivateData ||
-            highStakesDomain ||
-            isDomainQuestion
+            (highStakesDomain && asksForCurrentInfo)
         );
 
         const confidence = hasToolEvidence ? 'grounded' : (shouldRefuseGeneralAnswer ? 'blocked' : 'general');
@@ -641,7 +704,10 @@ class AIGroundingService {
             confidence: queryRisk.confidence || 'general',
             grounded: Boolean(queryRisk.hasToolEvidence),
             blocked: Boolean(queryRisk.shouldRefuseGeneralAnswer),
-            requiresVerification: Boolean(!queryRisk.hasToolEvidence && queryRisk.highStakesDomain),
+            requiresVerification: Boolean(!queryRisk.hasToolEvidence && queryRisk.highStakesDomain && queryRisk.asksForCurrentInfo),
+            intent: queryRisk.intent || null,
+            domain: execution.primaryDomain || null,
+            specialistLabel: execution.specialistLabel || null,
             provenance: (execution.toolResults || []).map((entry) => ({
                 tool: entry.toolId,
                 source: entry.result?.meta?.source || null,
@@ -684,7 +750,7 @@ class AIGroundingService {
             '- This system now rejects answers that cite missing tools or introduce unsupported business facts.',
             '- Ask a narrower question, or retrieve the needed data first so the response can be grounded.',
             queryRisk.highStakesDomain
-                ? '- For tax, legal, compliance, or other high-stakes topics, treat AI output as support material and get professional review.'
+                ? '- For tax, legal, compliance, or other high-stakes topics, treat AI output as support material and verify it against the latest official source before acting.'
                 : '- The safest next step is to ask for a specific metric, customer, invoice group, or time window.',
             '',
             '→ Next action: ask a more specific grounded question.'

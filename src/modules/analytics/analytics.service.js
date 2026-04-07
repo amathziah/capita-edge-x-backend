@@ -560,7 +560,7 @@ class AnalyticsService {
             supabase.from('organization_configs').select('*').eq('organization_id', organizationId).maybeSingle(),
             supabase
                 .from('invoices')
-                .select('status, total, net_receivable, amount_paid, dueDate, due_date, document_status, payment_status, balance_due')
+                .select('status, total, net_receivable, amount_paid, dueDate')
                 .eq('organization_id', organizationId)
         ]);
 

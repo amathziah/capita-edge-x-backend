@@ -119,7 +119,9 @@ class AIRuntimeService {
         const isTransient = (
             status === 429 || status === 503 ||
             msg.includes('429') || msg.includes('quota') ||
-            msg.includes('overloaded') || msg.includes('rate limit')
+            msg.includes('overloaded') || msg.includes('rate limit') ||
+            msg.includes('service unavailable') || msg.includes('high demand') ||
+            msg.includes('temporarily unavailable')
         );
 
         const isConfigError = (

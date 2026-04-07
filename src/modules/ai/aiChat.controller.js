@@ -1,6 +1,7 @@
 import { supabase } from '../../core/database/supabase.js';
 import aiService from './ai.service.js';
 import aiOrchestratorService from './aiOrchestrator.service.js';
+import aiGuidedDeskService from './aiGuidedDesk.service.js';
 import analyticsService from '../analytics/analytics.service.js';
 import { APIError } from '../../core/middleware/errorHandler.js';
 import { PERSONA_META, DEFAULT_META, defaultActions, personaActions } from '../../core/config/personas.js';
@@ -50,15 +51,6 @@ export const getConfig = async (req, res) => {
 export const processChat = async (req, res) => {
     const { query, agentId, persona, history, conversationId: incomingConvId } = req.body;
 
-    const creditStatus = await checkAICreditLimit(req);
-    if (!creditStatus.allowed) {
-        return res.json({
-            text: AI_ACCESS_EXHAUSTED_MESSAGE,
-            is_limit_reached: true,
-            provider: 'system:billing_gate'
-        });
-    }
-
     if (!query) throw new APIError('Query is required', 400);
 
     const context = await getAIContext(req, persona, agentId, history);
@@ -67,13 +59,15 @@ export const processChat = async (req, res) => {
     const modelUsed = response.provider?.split(':')?.[1] || 'gemini-2.5-flash';
     const { tokens, cost } = calculateAICost(response.usage, modelUsed);
 
-    await supabase.from('ai_requests').insert([{
-        organization_id: req.user.organizationId,
-        user_id: req.user.id,
-        model_name: modelUsed,
-        total_tokens: tokens,
-        cost
-    }]);
+    if (tokens > 0 || cost > 0) {
+        await supabase.from('ai_requests').insert([{
+            organization_id: req.user.organizationId,
+            user_id: req.user.id,
+            model_name: modelUsed,
+            total_tokens: tokens,
+            cost
+        }]);
+    }
 
     try {
         let conversationId = incomingConvId;
@@ -113,19 +107,7 @@ export const processChatStream = async (req, res) => {
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
     try {
-        const [creditStatus, context] = await Promise.all([
-            checkAICreditLimit(req),
-            getAIContext(req, persona, agentId, history)
-        ]);
-
-        if (!creditStatus.allowed) {
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            res.write(`data: ${JSON.stringify({ type: 'error', message: AI_ACCESS_EXHAUSTED_MESSAGE })}\n\n`);
-            res.end();
-            return;
-        }
+        const context = await getAIContext(req, persona, agentId, history);
 
         if (!query) {
             res.status(400).json({ error: 'Query is required' });
@@ -154,13 +136,15 @@ export const processChatStream = async (req, res) => {
                 const { tokens, cost } = calculateAICost(chunk.usage, modelUsed);
 
                 try {
-                    await supabase.from('ai_requests').insert([{
-                        organization_id: req.user.organizationId,
-                        user_id: req.user.id,
-                        model_name: modelUsed,
-                        total_tokens: tokens,
-                        cost
-                    }]);
+                    if (tokens > 0 || cost > 0) {
+                        await supabase.from('ai_requests').insert([{
+                            organization_id: req.user.organizationId,
+                            user_id: req.user.id,
+                            model_name: modelUsed,
+                            total_tokens: tokens,
+                            cost
+                        }]);
+                    }
                 } catch (e) {
                     console.error('Stream audit log failed:', e.message);
                 }
@@ -210,6 +194,18 @@ export const processChatStream = async (req, res) => {
     } finally {
         res.end();
     }
+};
+
+export const getDomainWorkspace = async (req, res) => {
+    const { domain } = req.params;
+    const view = String(req.query?.view || 'overview');
+
+    if (!aiGuidedDeskService.isSupportedDomain(domain)) {
+        throw new APIError('Unsupported AI workspace domain', 400);
+    }
+
+    const workspace = await aiGuidedDeskService.getWorkspace(domain, req.user.organizationId, view);
+    res.json(workspace);
 };
 
 export const magicFill = async (req, res) => {

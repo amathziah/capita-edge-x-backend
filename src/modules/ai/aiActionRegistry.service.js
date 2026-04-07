@@ -32,6 +32,11 @@ class AIActionRegistryService {
 
     suggestAction(query, context = {}, execution = {}) {
         const lowerQuery = String(query || '').toLowerCase();
+        const intent = execution.intent || null;
+        const isActionIntent = intent === 'action_request';
+        const isExplicitActionCommand = [
+            'create', 'add', 'new', 'open', 'show', 'go to', 'send'
+        ].some((token) => lowerQuery.includes(token));
         const asksInvoiceCreationHelp = (
             ['create invoice', 'create invoices', 'new invoice', 'new invoices', 'make invoice', 'make invoices']
                 .some((token) => lowerQuery.includes(token)) ||
@@ -46,7 +51,7 @@ class AIActionRegistryService {
             )
         );
 
-        if ((lowerQuery.includes('create') || lowerQuery.includes('add') || lowerQuery.includes('new')) &&
+        if (isActionIntent && (lowerQuery.includes('create') || lowerQuery.includes('add') || lowerQuery.includes('new')) &&
             (lowerQuery.includes('customer') || lowerQuery.includes('client'))) {
             const payload = this.extractCreateCustomerPayload(query);
             if (payload?.name) {
@@ -64,7 +69,7 @@ class AIActionRegistryService {
             }
         }
 
-        if (asksInvoiceCreationHelp) {
+        if (isActionIntent && asksInvoiceCreationHelp) {
             return {
                 type: 'open_invoice_modal',
                 requiresConfirmation: true,
@@ -76,7 +81,7 @@ class AIActionRegistryService {
             };
         }
 
-        if ((lowerQuery.includes('add') || lowerQuery.includes('create') || lowerQuery.includes('new')) &&
+        if (isActionIntent && (lowerQuery.includes('add') || lowerQuery.includes('create') || lowerQuery.includes('new')) &&
             (lowerQuery.includes('customer') || lowerQuery.includes('client'))) {
             return {
                 type: 'open_customer_modal',
@@ -89,7 +94,7 @@ class AIActionRegistryService {
             };
         }
 
-        if ((lowerQuery.includes('show') || lowerQuery.includes('open') || lowerQuery.includes('go to')) &&
+        if (isActionIntent && (lowerQuery.includes('show') || lowerQuery.includes('open') || lowerQuery.includes('go to')) &&
             lowerQuery.includes('invoice')) {
             return {
                 type: 'navigate',
@@ -103,7 +108,7 @@ class AIActionRegistryService {
             };
         }
 
-        if ((lowerQuery.includes('show') || lowerQuery.includes('open') || lowerQuery.includes('go to')) &&
+        if (isActionIntent && (lowerQuery.includes('show') || lowerQuery.includes('open') || lowerQuery.includes('go to')) &&
             (lowerQuery.includes('customer') || lowerQuery.includes('client'))) {
             return {
                 type: 'navigate',
@@ -111,6 +116,19 @@ class AIActionRegistryService {
                 confirmationMessage: 'Go to the customers page?',
                 data: {
                     to: '/customers',
+                    source: 'ai_action_registry',
+                    traceHint: execution.traceId || null
+                }
+            };
+        }
+
+        if (isActionIntent && isExplicitActionCommand) {
+            return {
+                type: 'navigate',
+                requiresConfirmation: true,
+                confirmationMessage: 'Open the relevant workspace for that action?',
+                data: {
+                    to: '/dashboard',
                     source: 'ai_action_registry',
                     traceHint: execution.traceId || null
                 }

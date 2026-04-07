@@ -329,7 +329,31 @@ class AIService {
     }
 
     analyzeQueryRisk(query, execution = {}) {
-        return this.groundingService.analyzeQueryRisk(query, execution);
+        const risk = this.groundingService.analyzeQueryRisk(query, execution);
+        risk.intent = execution.intent || null;
+        return risk;
+    }
+
+    buildConversationalAnswer(queryRisk = {}, query = '') {
+        const lowerQuery = String(query || '').toLowerCase();
+        if (lowerQuery.includes('what can you do') || lowerQuery.includes('things you can do') || lowerQuery.includes('help')) {
+            return [
+                'I can help you across three finance desks first: invoices, payments, and expenses.',
+                '',
+                '- Invoices: overdue counts, collections priority, receivables exposure, and invoice health',
+                '- Payments: recent receipts, payment timing, reconciliation, and cash-in visibility',
+                '- Expenses: spend breakdown, burn pressure, category review, and cost-control suggestions',
+                '- I can also pull business health, cash flow, and compliance context when needed',
+                '',
+                'Try asking: “Which invoices need attention?”, “What payments came in recently?”, or “What are we spending on this month?”'
+            ].join('\n');
+        }
+
+        if (lowerQuery.includes('hi') || lowerQuery.includes('hello') || lowerQuery.includes('hey') || lowerQuery.includes('how are you')) {
+            return 'Hello. Start with invoices, payments, or expenses and I will answer from your live workspace data.';
+        }
+
+        return this.buildUnverifiedAnswer(queryRisk, []);
     }
 
     buildSafetyMetadata(execution = {}, queryRisk = {}) {
@@ -344,11 +368,37 @@ class AIService {
         return this.groundingService.buildUnverifiedAnswer(queryRisk, issues);
     }
 
+    _sanitizeAssistantText(text = '') {
+        const normalized = String(text ?? '')
+            .replace(/\r\n/g, '\n')
+            .split('\n')
+            .filter((line) => {
+                const trimmed = line.trim();
+                return trimmed !== '0' && trimmed !== '';
+            })
+            .join('\n')
+            .trim();
+
+        return normalized;
+    }
+
     async generateGroundedAnswer(query, context = {}, execution = {}) {
         const userId = context.user?.id || 'anon';
         const orgId = context.organizationId;
         const budget = await this._checkPlanBudget(orgId);
         const queryRisk = this.analyzeQueryRisk(query, execution);
+
+        if ((execution.intent === 'conversational' || queryRisk.isConversationalSafe) && !queryRisk.hasToolEvidence) {
+            const answer = this.buildConversationalAnswer(queryRisk, query);
+            return {
+                text: this._sanitizeAssistantText(answer),
+                action: null,
+                data: this.buildSafetyMetadata(execution, queryRisk),
+                usage: null,
+                provider: 'system:conversational',
+                budget: await this.getBudgetStatus(userId, orgId)
+            };
+        }
 
         if (queryRisk.shouldRefuseGeneralAnswer) {
             return {
@@ -403,7 +453,7 @@ class AIService {
                             ? this.buildToolBackedFallbackAnswer(query, execution)
                             : this.buildUnverifiedAnswer(queryRisk, validation.issues);
                         return {
-                            text: fallbackText,
+                            text: this._sanitizeAssistantText(fallbackText),
                             action: null,
                             data: {
                                 ...this.buildSafetyMetadata(execution, queryRisk),
@@ -419,7 +469,7 @@ class AIService {
                     }
 
                     return {
-                        text: this.formatGroundedPayload(payload),
+                        text: this._sanitizeAssistantText(this.formatGroundedPayload(payload)),
                         action: this.extractAction(payload.next_action, query),
                         data: {
                             ...this.buildSafetyMetadata(execution, queryRisk),
@@ -432,7 +482,7 @@ class AIService {
                 }
 
                 return {
-                    text: rawText,
+                    text: this._sanitizeAssistantText(rawText),
                     action: this.extractAction(rawText, query),
                     data: this.buildSafetyMetadata(execution, queryRisk),
                     usage: response.usageMetadata,
@@ -446,6 +496,19 @@ class AIService {
             }
         }
 
+        if (lastError && this.isRetryable(lastError)) {
+            return {
+                text: this._sanitizeAssistantText(execution.toolResults?.length
+                    ? this.buildToolBackedFallbackAnswer(query, execution)
+                    : 'I’m temporarily unable to reach the AI model. Try again in a moment or ask a narrower grounded question.'),
+                action: null,
+                data: this.buildSafetyMetadata(execution, queryRisk),
+                usage: null,
+                provider: 'system:model_fallback',
+                budget: await this.getBudgetStatus(userId, orgId)
+            };
+        }
+
         throw lastError || new Error('Cloud Busy: All AI models failed. Please try again.');
     }
 
@@ -455,10 +518,23 @@ class AIService {
         const budget = await this._checkPlanBudget(orgId);
         const queryRisk = this.analyzeQueryRisk(query, execution);
 
+        if ((execution.intent === 'conversational' || queryRisk.isConversationalSafe) && !queryRisk.hasToolEvidence) {
+            yield {
+                type: 'complete',
+                text: this._sanitizeAssistantText(this.buildConversationalAnswer(queryRisk, query)),
+                action: null,
+                usage: null,
+                provider: 'system:conversational',
+                budget: await this.getBudgetStatus(userId, orgId),
+                data: this.buildSafetyMetadata(execution, queryRisk)
+            };
+            return;
+        }
+
         if (queryRisk.shouldRefuseGeneralAnswer) {
             yield {
                 type: 'complete',
-                text: this.buildUnsupportedAnswer(queryRisk),
+                text: this._sanitizeAssistantText(this.buildUnsupportedAnswer(queryRisk)),
                 action: null,
                 usage: null,
                 provider: 'system:safety_guard',
@@ -528,7 +604,7 @@ class AIService {
                             : this.buildUnverifiedAnswer(queryRisk, validation.issues);
                         yield {
                             type: 'complete',
-                            text: fallbackText,
+                        text: this._sanitizeAssistantText(fallbackText),
                             action: null,
                             usage: finalResponse?.usageMetadata,
                             provider: execution.toolResults?.length
@@ -546,7 +622,7 @@ class AIService {
 
                     yield {
                         type: 'complete',
-                        text: this.formatGroundedPayload(payload),
+                        text: this._sanitizeAssistantText(this.formatGroundedPayload(payload)),
                         action: this.extractAction(payload.next_action, query),
                         usage: finalResponse?.usageMetadata,
                         provider: `cloud:${modelName}:orchestrated`,
@@ -561,7 +637,7 @@ class AIService {
 
                 yield {
                     type: 'complete',
-                    text: rawText,
+                    text: this._sanitizeAssistantText(rawText),
                     action: this.extractAction(fullText, query),
                     usage: finalResponse?.usageMetadata,
                     provider: `cloud:${modelName}:orchestrated`,
@@ -577,6 +653,21 @@ class AIService {
                 }
                 break;
             }
+        }
+
+        if (lastError && this.isRetryable(lastError)) {
+            yield {
+                type: 'complete',
+                text: this._sanitizeAssistantText(execution.toolResults?.length
+                    ? this.buildToolBackedFallbackAnswer(query, execution)
+                    : 'I’m temporarily unable to reach the AI model. Try again in a moment or ask a narrower grounded question.'),
+                action: null,
+                usage: null,
+                provider: 'system:model_fallback',
+                budget: await this.getBudgetStatus(userId, orgId),
+                data: this.buildSafetyMetadata(execution, queryRisk)
+            };
+            return;
         }
 
         throw lastError || new Error('Cloud Busy: All AI models failed. Please try again.');

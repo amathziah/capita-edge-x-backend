@@ -325,10 +325,15 @@ Intent Categories:
 - invoices_attention: queries about overdue invoices, who owes money, collections
 - expenses_spend: queries about spend, expenses, vendor costs, where money is going
 - compliance_status: queries about upcoming deadlines, pending tax filings, GST/TDS status
-- compliance_knowledge: queries about tax rules, HR policies, general compliance (not specific workspace status)
-- customer_insights: "who is my top customer", "biggest client"
-- action_request: PURE NAVIGATION ONLY. e.g. "open invoices", "go to dashboard", "create a customer". NEVER use this if the user asks a data question (e.g. "show me my overdue invoices" should be invoices_attention).
+- compliance_knowledge: queries about tax rules, HR policies, general compliance (not workspace-specific)
+- customer_insights: "who is my top customer", "biggest client", "customer health", "regular customers"
+- action_request: PURE NAVIGATION ONLY. e.g. "open invoices", "go to dashboard", "create a customer". NEVER use this for data questions.
 - general_advice: open-ended non-data queries that do not match above.
+
+Rules for Tool Selection:
+- If the user uses possessive pronouns ("my", "our") or mentions private business entities (their invoices, their customers), you MUST select at least one relevant tool.
+- For queries about "top", "regular", or "biggest" customers/clients, you MUST use 'get_customer_insights'.
+- If you do not select a tool for a query about private data, the system will fail to provide a grounded answer.
 
 Output a valid JSON object matching the exact schema below:
 {
@@ -336,7 +341,7 @@ Output a valid JSON object matching the exact schema below:
     "toolsToRun": [{"toolId": "tool_name", "args": {}}]
 }
 
-If no tools are needed (e.g. pure conversational or pure navigation action_request), return an empty array for toolsToRun.`;
+If no tools are needed (e.g. pure conversational or pure navigation action_request with no data words), return an empty array for toolsToRun.`;
 
         const requestText = `User Query: "${query}"`;
         

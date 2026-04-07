@@ -32,6 +32,19 @@ class AIActionRegistryService {
 
     suggestAction(query, context = {}, execution = {}) {
         const lowerQuery = String(query || '').toLowerCase();
+        const asksInvoiceCreationHelp = (
+            ['create invoice', 'create invoices', 'new invoice', 'new invoices', 'make invoice', 'make invoices']
+                .some((token) => lowerQuery.includes(token)) ||
+            (
+                ['create', 'new', 'make'].some((token) => lowerQuery.includes(token)) &&
+                ['invoice', 'invoices'].some((token) => lowerQuery.includes(token))
+            ) ||
+            (
+                ['help me create', 'help me make', 'can you help me create', 'can you help me make']
+                    .some((token) => lowerQuery.includes(token)) &&
+                ['invoice', 'invoices'].some((token) => lowerQuery.includes(token))
+            )
+        );
 
         if ((lowerQuery.includes('create') || lowerQuery.includes('add') || lowerQuery.includes('new')) &&
             (lowerQuery.includes('customer') || lowerQuery.includes('client'))) {
@@ -51,7 +64,7 @@ class AIActionRegistryService {
             }
         }
 
-        if ((lowerQuery.includes('create') || lowerQuery.includes('new')) && lowerQuery.includes('invoice')) {
+        if (asksInvoiceCreationHelp) {
             return {
                 type: 'open_invoice_modal',
                 requiresConfirmation: true,

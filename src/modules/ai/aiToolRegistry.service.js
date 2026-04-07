@@ -79,6 +79,22 @@ class AIToolRegistryService {
         const mentionsWorkspace = ['workspace', 'dashboard', 'books', 'back office', 'operations'].some((token) => lowerQuery.includes(token));
         const asksForOverview = ['overall', 'everything', 'all areas', 'full picture', 'full overview', 'complete picture', 'summary'].some((token) => lowerQuery.includes(token));
         const includesAny = (tokens = []) => tokens.some((token) => lowerQuery.includes(token));
+        const asksGeneralComplianceKnowledge = includesAny([
+            'gst rules', 'tds rules', 'tax rules', 'what is gst', 'what is tds',
+            'how does gst', 'how does tds', 'must be aware', 'should know',
+            'for a freelancer', 'for freelancers', 'for freelancer', 'gst for freelancer',
+            'gst basics', 'tds basics', 'compliance basics', 'legal basics'
+        ]);
+        const asksInvoiceCreationHelp = (
+            includesAny(['create invoice', 'create invoices', 'new invoice', 'new invoices', 'make invoice', 'make invoices']) ||
+            ((includesAny(['create', 'new', 'make']) || includesAny(['help me create', 'help me make', 'can you help me create', 'can you help me make'])) &&
+                includesAny(['invoice', 'invoices']))
+        );
+        const asksWorkspaceComplianceStatus = includesAny([
+            'my gst', 'our gst', 'my tds', 'our tds', 'my compliance', 'our compliance',
+            'what is due', 'due this week', 'due this month', 'pending filing',
+            'overdue filing', 'deadline', 'filing status', 'return due', 'tax deadline'
+        ]);
         const asksBroadBusinessAdvice = includesAny([
             'business', 'financial', 'finance', 'performance', 'health', 'doing',
             'focus', 'priority', 'priorities', 'improve', 'improving', 'improvement',
@@ -122,7 +138,7 @@ class AIToolRegistryService {
             'owes me money', 'owes us money',
             'invoice pipeline', 'invoice status', 'accounts receivable', 'ar aging',
             'aging report', 'ageing report', 'bill raised', 'billed customer'
-        ])) {
+        ]) && !asksInvoiceCreationHelp) {
             pushTool('get_invoice_workspace');
         }
 
@@ -152,7 +168,7 @@ class AIToolRegistryService {
             'gst filing', 'tds filing', 'tax deadline', 'return due',
             'legal due', 'penalty risk', 'regulatory task', 'what is due this week',
             'what is due this month'
-        ])) {
+        ]) && (!asksGeneralComplianceKnowledge || asksWorkspaceComplianceStatus)) {
             pushTool('get_compliance_workspace');
         }
 

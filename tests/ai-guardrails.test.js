@@ -6,6 +6,7 @@ process.env.VITE_SUPABASE_ANON_KEY ??= 'test-anon-key';
 
 const aiService = (await import('../src/modules/ai/ai.service.js')).default;
 const aiToolRegistryService = (await import('../src/modules/ai/aiToolRegistry.service.js')).default;
+const aiActionRegistryService = (await import('../src/modules/ai/aiActionRegistry.service.js')).default;
 
 test('analyzeQueryRisk blocks private workspace questions without tool evidence', () => {
     const risk = aiService.analyzeQueryRisk('What is my current overdue amount?', {
@@ -103,6 +104,55 @@ test('buildToolBackedFallbackAnswer returns deterministic invoice text from grou
     assert.match(text, /₹6,46,109\.00/);
     assert.match(text, /ST-004-SENT-DUE-TODAY/);
     assert.match(text, /Next action:/);
+});
+
+test('buildToolBackedFallbackAnswer answers overdue invoice count directly when asked for quantity', () => {
+    const text = aiService.buildToolBackedFallbackAnswer('How many overdue invoices do I have?', {
+        toolResults: [{
+            toolId: 'get_invoice_workspace',
+            result: {
+                data: {
+                    summary: {
+                        overdueCount: 7,
+                        overdueAmount: 646109,
+                        totalOutstanding: 1264547
+                    },
+                    overdueInvoices: [
+                        { invoiceNumber: 'ST-004-SENT-DUE-TODAY', daysOverdue: 15, balanceDue: 63720 }
+                    ],
+                    currency: 'INR'
+                },
+                meta: {}
+            }
+        }]
+    });
+
+    assert.match(text, /7 overdue invoices/i);
+    assert.match(text, /₹6,46,109\.00/);
+});
+
+test('buildToolBackedFallbackAnswer treats "over due" phrasing as overdue invoice count question', () => {
+    const text = aiService.buildToolBackedFallbackAnswer('How many over due invoices do I have?', {
+        toolResults: [{
+            toolId: 'get_invoice_workspace',
+            result: {
+                data: {
+                    summary: {
+                        overdueCount: 7,
+                        overdueAmount: 646109,
+                        totalOutstanding: 1264547
+                    },
+                    overdueInvoices: [
+                        { invoiceNumber: 'ST-004-SENT-DUE-TODAY', daysOverdue: 15, balanceDue: 63720 }
+                    ],
+                    currency: 'INR'
+                },
+                meta: {}
+            }
+        }]
+    });
+
+    assert.match(text, /7 overdue invoices/i);
 });
 
 test('buildToolBackedFallbackAnswer returns runway estimate from dashboard snapshot', () => {
@@ -429,6 +479,14 @@ test('tool planner maps invoice questions to invoice workspace', async () => {
     assert.deepEqual(plan.map((entry) => entry.toolId), ['get_invoice_workspace']);
 });
 
+test('tool planner does not fetch invoice workspace for invoice creation help intent', async () => {
+    const plan = await aiToolRegistryService.planTools('Can you help me create invoices?', {
+        organizationId: 'org_123'
+    });
+
+    assert.equal(plan.some((entry) => entry.toolId === 'get_invoice_workspace'), false);
+});
+
 test('tool planner maps payment and expense questions to both workspaces', async () => {
     const plan = await aiToolRegistryService.planTools('Show my recent payments and expenses.', {
         organizationId: 'org_123'
@@ -478,6 +536,22 @@ test('tool planner maps gst filing phrasing to compliance workspace', async () =
     assert.equal(plan.some((entry) => entry.toolId === 'get_compliance_workspace'), true);
 });
 
+test('tool planner maps monthly expenses phrasing to expense workspace only', async () => {
+    const plan = await aiToolRegistryService.planTools('What are my monthly expenses?', {
+        organizationId: 'org_123'
+    });
+
+    assert.deepEqual(plan.map((entry) => entry.toolId), ['get_expense_workspace']);
+});
+
+test('tool planner does not treat general GST rules questions as workspace compliance lookups', async () => {
+    const plan = await aiToolRegistryService.planTools('What are the GST rules I must be aware of if I am a freelancer?', {
+        organizationId: 'org_123'
+    });
+
+    assert.equal(plan.some((entry) => entry.toolId === 'get_compliance_workspace'), false);
+});
+
 test('tool planner maps overview phrasing to all four workspaces', async () => {
     const plan = await aiToolRegistryService.planTools('Give me a full overview of everything.', {
         organizationId: 'org_123'
@@ -501,4 +575,11 @@ test('validateAgentPayload rejects unsupported numeric claims', () => {
 
     assert.equal(validation.ok, false);
     assert.match(validation.issues.join(','), /unsupported_numbers/);
+});
+
+test('action registry suggests opening invoice flow for invoice creation help intent', () => {
+    const action = aiActionRegistryService.suggestAction('Can you help me create invoices?', {}, { traceId: 'trace_123' });
+
+    assert.equal(action?.type, 'open_invoice_modal');
+    assert.equal(action?.requiresConfirmation, true);
 });

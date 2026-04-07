@@ -60,6 +60,20 @@ const DESK_CONFIG = {
             { id: 'due_this_week', label: 'Due This Week' },
             { id: 'recent', label: 'Recent Tasks' }
         ]
+    },
+    customers: {
+        domain: 'customers',
+        label: 'Customer Intelligence',
+        shortLabel: 'Customers',
+        specialistLabel: 'Customer Desk',
+        component: 'ai_domain_customers',
+        description: 'Customer revenue, churn risk, and top client insights.',
+        promptDescription: 'Use the customer intelligence workspace to understand your client health and identify risks.',
+        views: [
+            { id: 'overview', label: 'Overview' },
+            { id: 'top_clients', label: 'Top Clients' },
+            { id: 'risk_analysis', label: 'Risk Analysis' }
+        ]
     }
 };
 
@@ -114,15 +128,15 @@ class AIGuidedDeskService {
             ? `${preferredDesk.promptDescription} Choose a workspace to continue with live backend data.`
             : (
                 showCapabilitySummary
-                    ? 'Capita works through four dedicated finance desks with live backend data. Pick the area you want to inspect or act on.'
-                    : 'Capita only handles invoices, payments, expenses, and compliance here. Pick one to continue.'
+                    ? 'Capita works through dedicated finance desks with live backend data. Pick the area you want to inspect or act on.'
+                    : 'Capita handles invoices, payments, expenses, compliance, and customers here. Pick one to continue.'
             );
         const text = preferredDesk
             ? `I can handle this through the ${preferredDesk.shortLabel.toLowerCase()} workspace with live backend data. Choose how you want to analyze it.`
             : (
                 showCapabilitySummary
-                    ? 'I handle four things here: invoices, payments, expenses, and compliance.'
-                    : 'I can only help here through invoices, payments, expenses, or compliance.'
+                    ? 'I handle five things here: invoices, payments, expenses, compliance, and customer intelligence.'
+                    : 'I can help through invoices, payments, expenses, compliance, or customers.'
             );
 
         return {
@@ -172,6 +186,10 @@ class AIGuidedDeskService {
             return 'compliance';
         }
 
+        if (includesAny(['customer', 'customers', 'client', 'clients', 'churn', 'engagement', 'relationship'])) {
+            return 'customers';
+        }
+
         return null;
     }
 
@@ -211,7 +229,8 @@ class AIGuidedDeskService {
             invoices: () => aiReadModelService.getInvoiceWorkspace(organizationId),
             payments: () => aiReadModelService.getPaymentWorkspace(organizationId),
             expenses: () => aiReadModelService.getExpenseWorkspace(organizationId),
-            compliance: () => aiReadModelService.getComplianceWorkspace(organizationId)
+            compliance: () => aiReadModelService.getComplianceWorkspace(organizationId),
+            customers: () => aiReadModelService.getCustomerPortfolio(organizationId)
         }[desk.domain])();
 
         return {
@@ -274,6 +293,12 @@ class AIGuidedDeskService {
                 domain: 'compliance',
                 label: 'Compliance',
                 summary: 'Track urgent tasks, due-this-week items, overdue work, and open the full compliance page.'
+            },
+            {
+                id: 'capability_customers',
+                domain: 'customers',
+                label: 'Customers',
+                summary: 'Identify top clients, revenue trends, and detect churn risks early with automated scoring.'
             }
         ];
     }
@@ -303,6 +328,12 @@ class AIGuidedDeskService {
                     'Check overdue tasks first.',
                     'Review what is due this week.',
                     'Use the list to prioritize filings and closures.'
+                ];
+            case 'customers':
+                return [
+                    'Review your highest-value clients.',
+                    'Identify clients with elevated churn risk.',
+                    'Decide on retention strategies for key accounts.'
                 ];
             default:
                 return [];
@@ -356,6 +387,16 @@ class AIGuidedDeskService {
                         label: 'Open Compliance Page',
                         description: 'Go to the full compliance screen.',
                         to: '/dashboard/compliance'
+                    }
+                ];
+            case 'customers':
+                return [
+                    {
+                        id: 'open_customers_page',
+                        type: 'navigate',
+                        label: 'Open Customers Page',
+                        description: 'Go to the full customers table and detail screen.',
+                        to: '/dashboard/customers'
                     }
                 ];
             default:
@@ -487,6 +528,32 @@ class AIGuidedDeskService {
                             label: 'Review recent task updates',
                             description: 'Use the recent view to inspect the latest status changes and closures.',
                             view: 'recent'
+                        }
+                    ],
+                    selectedView
+                };
+            }
+            case 'customers': {
+                const customerData = Array.isArray(data?.customers) ? data.customers : [];
+                const customerCount = customerData.length;
+                const riskyCount = customerData.filter(c => (c.churn_risk_score || 0) > 50).length;
+                return {
+                    title: 'How To Analyze Customers',
+                    summary: riskyCount > 0
+                        ? `You have ${customerCount} total customers. ${riskyCount} show high churn risk and need attention.`
+                        : `Review your ${customerCount} customers to identify top growth opportunities.`,
+                    steps: [
+                        {
+                            id: 'customer_top',
+                            label: 'Identify top revenue clients',
+                            description: 'Focus on your most loyal and high-spending customers.',
+                            view: 'top_clients'
+                        },
+                        {
+                            id: 'customer_risk',
+                            label: riskyCount > 0 ? `Review ${riskyCount} risky clients` : 'Identify churn risk',
+                            description: 'Spot warning signs before clients churn by looking at engagement scores.',
+                            view: 'risk_analysis'
                         }
                     ],
                     selectedView

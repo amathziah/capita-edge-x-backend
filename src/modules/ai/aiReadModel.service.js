@@ -1,4 +1,4 @@
-import { supabase } from '../../core/database/supabase.js';
+ import { supabase } from '../../core/database/supabase.js';
 import analyticsService from '../analytics/analytics.service.js';
 import { mapConfigToFrontend } from '../../core/utils/configUtils.js';
 import {
@@ -127,12 +127,12 @@ class AIReadModelService {
             compliance
         ] = await Promise.all([
             this.getOrganizationContext(organizationId),
-            includeSnapshot ? this.getDashboardSnapshot(organizationId) : Promise.resolve(null),
-            includeRecentActivity ? this.getRecentActivity(organizationId) : Promise.resolve(null),
-            includeInvoices ? this.getInvoiceWorkspace(organizationId) : Promise.resolve(null),
-            includePayments ? this.getPaymentWorkspace(organizationId) : Promise.resolve(null),
-            includeExpenses ? this.getExpenseWorkspace(organizationId) : Promise.resolve(null),
-            includeCompliance ? this.getComplianceWorkspace(organizationId) : Promise.resolve(null)
+            includeSnapshot ? this.getDashboardSnapshot(organizationId).catch(() => null) : Promise.resolve(null),
+            includeRecentActivity ? this.getRecentActivity(organizationId).catch(() => null) : Promise.resolve(null),
+            includeInvoices ? this.getInvoiceWorkspace(organizationId).catch(() => null) : Promise.resolve(null),
+            includePayments ? this.getPaymentWorkspace(organizationId).catch(() => null) : Promise.resolve(null),
+            includeExpenses ? this.getExpenseWorkspace(organizationId).catch(() => null) : Promise.resolve(null),
+            includeCompliance ? this.getComplianceWorkspace(organizationId).catch(() => null) : Promise.resolve(null)
         ]);
 
         return {
@@ -190,7 +190,7 @@ class AIReadModelService {
                 id: invoice.id,
                 invoiceNumber: invoice.invoiceNumber,
                 dueDate: invoice.dueDate || invoice.due_date || null,
-                createdAt: invoice.createdAt || null,
+                createdAt: invoice.createdAt || invoice.created_at || null,
                 buyer: invoice.buyer || null,
                 total: totalAmount,
                 balanceDue,
@@ -310,7 +310,7 @@ class AIReadModelService {
         const [{ currency }, invoices, payments, expenses] = await Promise.all([
             this.getOrganizationContext(organizationId),
             supabase.from('invoices').select('*').eq('organization_id', organizationId).order('createdAt', { ascending: false }).limit(5),
-            supabase.from('payments').select('*, customers(name)').eq('organization_id', organizationId).order('date', { ascending: false }).limit(5),
+            supabase.from('payments').select('*, invoices(buyer)').eq('organization_id', organizationId).order('date', { ascending: false }).limit(5),
             supabase.from('expenses').select('*').eq('organization_id', organizationId).order('date', { ascending: false }).limit(5)
         ]);
 

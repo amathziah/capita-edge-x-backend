@@ -94,15 +94,15 @@ class AIIntentService {
             /\bhow are you doing these days\b/
         ]);
 
+        if (isHowAreWeDoing || includesAny(['how are you doing', 'how is the business doing', 'business health', 'overall', 'full picture', 'summary'])) {
+            return INTENTS.business_health.id;
+        }
+
         if (isConversational && !includesAny([
             'invoice', 'payment', 'expense', 'cash flow', 'cashflow', 'gst', 'tds',
             'compliance', 'overdue', 'runway', 'tax', 'revenue', 'profit', 'margin'
         ])) {
             return INTENTS.conversational.id;
-        }
-
-        if (isHowAreWeDoing || includesAny(['how are you doing', 'how is the business doing', 'business health', 'overall', 'full picture', 'summary'])) {
-            return INTENTS.business_health.id;
         }
 
         if (includesAny(['safe to spend', 'cash flow', 'cashflow', 'runway', 'liquidity', 'cash on hand', 'burn rate'])) {
@@ -148,7 +148,10 @@ class AIIntentService {
             /\bshow\s+(me\s+)?the\s+(invoice|payment|expense|compliance)\s*(workspace|page|screen)\b/,
             /\bcreate\s+(a\s+)?(new\s+)?(invoice|customer|expense)\b/,
             /\bsend\s+(an?\s+)?invoice\b/,
-            /\badd\s+(a\s+)?(new\s+)?(customer|expense|payment)\b/
+            /\badd\s+(a\s+)?(new\s+)?(customer|expense|payment)\b/,
+            /\bshow\s+me\s+my\s+workspaces?\b/,
+            /\bhelp\s+me\s+navigate\b/,
+            /\bexplore\s+(the\s+)?system\b/
         ])) {
             return INTENTS.action_request.id;
         }
@@ -166,6 +169,19 @@ class AIIntentService {
 
     isConversationalIntent(intentId) {
         return intentId === INTENTS.conversational.id;
+    }
+
+    getToolsForIntent(intentId) {
+        const mapping = {
+            business_health: ['get_business_advisor_context'],
+            cash_flow: ['get_dashboard_snapshot'],
+            payments_recent: ['get_payment_workspace'],
+            invoices_attention: ['get_invoice_workspace'],
+            expenses_spend: ['get_expense_workspace'],
+            compliance_status: ['get_compliance_workspace'],
+            customer_insights: ['get_customer_insights']
+        };
+        return mapping[intentId] || [];
     }
 }
 

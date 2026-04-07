@@ -18,15 +18,30 @@ class AIOrchestratorService {
 
     async buildExecutionPlan(query, context = {}) {
         const geminiPlan = await aiService.generateExecutionPlan(query, context);
-        const intent = geminiPlan.intent || 'general_advice';
+        let intent = geminiPlan.intent || 'general_advice';
+        let tools = geminiPlan.tools || [];
+
+        // Heuristic Fallback: If Gemini picks no tools but a data-driven intent is detected by keywords
+        if (tools.length === 0) {
+            const detectedIntent = aiIntentService.detect(query);
+            if (detectedIntent !== 'conversational' && detectedIntent !== 'general_advice') {
+                const fallbackTools = aiIntentService.getToolsForIntent(detectedIntent);
+                if (fallbackTools.length > 0) {
+                    console.log(`[AI Orchestrator] LLM selected no tools. Applying heuristic fallback for intent: ${detectedIntent}`);
+                    intent = detectedIntent;
+                    tools = fallbackTools.map(toolId => ({ toolId, args: {} }));
+                }
+            }
+        }
+
         const intentMeta = aiIntentService.getMetadata(intent);
         
         return {
             intent,
             primaryDomain: intentMeta.domain || 'finance',
             specialistLabel: intentMeta.specialistLabel || intentMeta.label || 'Finance Guide',
-            mode: (geminiPlan.tools && geminiPlan.tools.length > 0) ? 'grounded' : 'general',
-            tools: geminiPlan.tools || []
+            mode: (tools.length > 0) ? 'grounded' : 'general',
+            tools
         };
     }
 
@@ -83,7 +98,11 @@ class AIOrchestratorService {
      * Finance data questions must always be answered with real data, not a workspace chooser.
      */
     _shouldShowGuidedChoice(plan, query = '') {
-        if (plan.intent !== 'action_request') return false;
+        const manualIntent = aiIntentService.detect(query);
+        // If the manual detector caught a pure navigation command, prioritize it over LLM
+        const intent = manualIntent === 'action_request' ? 'action_request' : (plan.intent || manualIntent);
+
+        if (intent !== 'action_request') return false;
 
         const lowerQuery = String(query || '').toLowerCase();
         const hasFinanceKeyword = FINANCE_DATA_KEYWORDS.some(kw => lowerQuery.includes(kw));
@@ -113,7 +132,34 @@ class AIOrchestratorService {
             output: plan
         });
 
-        // ── 1. Conversational greetings / capability questions ─────────────
+        // ── 1. Pure workspace-navigation action — show chooser UI ──────────
+        const isGuidedChoice = this._shouldShowGuidedChoice(plan, query);
+        if (isGuidedChoice) {
+            const response = aiGuidedDeskService.buildGuidedChoiceResponse(query, {
+                intent: plan.intent,
+                primaryDomain: plan.primaryDomain,
+                specialistLabel: plan.specialistLabel
+            });
+            response.traceId = traceId;
+            await aiTraceService.log({
+                traceId,
+                organizationId: context.organizationId,
+                userId: context.user?.id,
+                conversationId: context.conversationId || null,
+                stage: 'final',
+                query,
+                input: { executionMode: 'guided_choice' },
+                output: {
+                    provider: response.provider,
+                    text: response.text,
+                    action: response.action,
+                    provenance: response.data?.provenance || []
+                }
+            });
+            return response;
+        }
+
+        // ── 2. Conversational greetings / capability questions ─────────────
         if (plan.intent === 'conversational') {
             const text = aiService.buildConversationalAnswer({}, query);
             const response = {
@@ -140,32 +186,6 @@ class AIOrchestratorService {
                 query,
                 input: { executionMode: 'conversational' },
                 output: { provider: response.provider, text: response.text }
-            });
-            return response;
-        }
-
-        // ── 2. Pure workspace-navigation action — show chooser UI ──────────
-        if (this._shouldShowGuidedChoice(plan, query)) {
-            const response = aiGuidedDeskService.buildGuidedChoiceResponse(query, {
-                intent: plan.intent,
-                primaryDomain: plan.primaryDomain,
-                specialistLabel: plan.specialistLabel
-            });
-            response.traceId = traceId;
-            await aiTraceService.log({
-                traceId,
-                organizationId: context.organizationId,
-                userId: context.user?.id,
-                conversationId: context.conversationId || null,
-                stage: 'final',
-                query,
-                input: { executionMode: 'guided_choice' },
-                output: {
-                    provider: response.provider,
-                    text: response.text,
-                    action: response.action,
-                    provenance: response.data?.provenance || []
-                }
             });
             return response;
         }
@@ -221,7 +241,38 @@ class AIOrchestratorService {
             output: plan
         });
 
-        // ── 1. Conversational — yield a direct text answer immediately ─────
+        // ── 1. Pure workspace navigation — yield chooser UI ────────────────
+        const isGuidedChoice = this._shouldShowGuidedChoice(plan, query);
+        if (isGuidedChoice) {
+            const event = {
+                type: 'complete',
+                ...aiGuidedDeskService.buildGuidedChoiceResponse(query, {
+                    intent: plan.intent,
+                    primaryDomain: plan.primaryDomain,
+                    specialistLabel: plan.specialistLabel
+                }),
+                traceId
+            };
+            await aiTraceService.log({
+                traceId,
+                organizationId: context.organizationId,
+                userId: context.user?.id,
+                conversationId: context.conversationId || null,
+                stage: 'final',
+                query,
+                input: { executionMode: 'guided_choice' },
+                output: {
+                    provider: event.provider,
+                    text: event.text,
+                    action: event.action,
+                    provenance: event.data?.provenance || []
+                }
+            });
+            yield event;
+            return;
+        }
+
+        // ── 2. Conversational — yield a direct text answer immediately ─────
         if (plan.intent === 'conversational') {
             const text = aiService.buildConversationalAnswer({}, query);
             const event = {
@@ -250,36 +301,6 @@ class AIOrchestratorService {
                 query,
                 input: { executionMode: 'conversational' },
                 output: { provider: event.provider, text: event.text }
-            });
-            yield event;
-            return;
-        }
-
-        // ── 2. Pure workspace navigation — yield chooser UI ────────────────
-        if (this._shouldShowGuidedChoice(plan, query)) {
-            const event = {
-                type: 'complete',
-                ...aiGuidedDeskService.buildGuidedChoiceResponse(query, {
-                    intent: plan.intent,
-                    primaryDomain: plan.primaryDomain,
-                    specialistLabel: plan.specialistLabel
-                }),
-                traceId
-            };
-            await aiTraceService.log({
-                traceId,
-                organizationId: context.organizationId,
-                userId: context.user?.id,
-                conversationId: context.conversationId || null,
-                stage: 'final',
-                query,
-                input: { executionMode: 'guided_choice' },
-                output: {
-                    provider: event.provider,
-                    text: event.text,
-                    action: event.action,
-                    provenance: event.data?.provenance || []
-                }
             });
             yield event;
             return;

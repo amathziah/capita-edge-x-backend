@@ -528,6 +528,41 @@ class AIGroundingService {
 
                 nextActions.push('clear overdue compliance items before upcoming deadlines');
             }
+
+            if (toolId === 'get_customer_insights') {
+                const customers = Array.isArray(data.customers) ? data.customers : [];
+                const topCustomers = customers.slice(0, 3).map(c => `${c.name || 'Customer'} (Revenue: ${formatCurrency(c.total_revenue || 0, currency)})`);
+                
+                sections.push([
+                    `Customer Insights: Analyzing ${customers.length} total customers.`,
+                    topCustomers.length > 0 ? `- Top customers by revenue: ${topCustomers.join('; ')}.` : null
+                ].filter(Boolean).join('\n'));
+                
+                nextActions.push('review customer portfolio health and churn risk');
+            }
+
+            if (toolId === 'get_customer_details') {
+                const intel = data.intelligence || {};
+                sections.push([
+                    `Customer Intelligence for ${intel.name || 'this client'}: Churn risk is ${intel.churn_risk_score || 0}/100.`,
+                    `- Predicted next purchase: ${intel.predicted_next_purchase || 'unknown'}.`,
+                    `- Total customer value: ${formatCurrency(intel.total_revenue || 0, currency)}.`
+                ].join('\n'));
+                
+                nextActions.push('use these insights to personalize your next follow-up');
+            }
+
+            if (toolId === 'get_overdue_invoices') {
+                const summary = data.summary || {};
+                const critical = Array.isArray(data.overdueInvoices) ? data.overdueInvoices : [];
+                
+                sections.push([
+                    `Critical Overdue Receivables: ${summary.overdueCount || 0} invoices totaling ${formatCurrency(summary.overdueAmount || 0, currency)} are overdue.`,
+                    critical.length > 0 ? `- Most urgent: ${critical.slice(0, 2).map(inv => `#${inv.invoiceNumber} from ${inv.buyer?.name || 'Client'} (${formatCurrency(inv.balanceDue, currency)})`).join('; ')}.` : null
+                ].join('\n'));
+                
+                nextActions.push('prioritize collections for the most overdue balances');
+            }
         }
 
         if (
@@ -668,7 +703,8 @@ class AIGroundingService {
             'hi', 'hello', 'hey', 'how are you', 'who are you', 'what can you do',
             'help', 'thanks', 'thank you', 'good morning', 'good evening',
             'good afternoon', 'good night', 'how are you doing', 'how are you doing these days',
-            'what are the things you can do', 'can you help', 'are you online'
+            'what are the things you can do', 'can you help', 'are you online',
+            'explore', 'navigate', 'system', 'capita', 'platform', 'capabilities'
         ];
 
         const asksForPrivateData = privateDataSignals.some((signal) => text.includes(signal));

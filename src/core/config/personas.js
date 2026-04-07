@@ -33,32 +33,33 @@ export const DEFAULT_META = {
 };
 
 export const defaultActions = [
-    { label: 'Invoice health', icon: 'FileText', query: 'Show me my invoice workspace summary', tag: 'INVOICES' },
-    { label: 'Payment health', icon: 'CreditCard', query: 'Show me my payments workspace summary', tag: 'PAYMENTS' },
-    { label: 'Expense health', icon: 'Activity', query: 'Show me my expenses workspace summary', tag: 'EXPENSES' },
-    { label: 'Compliance health', icon: 'ShieldCheck', query: 'Show me my compliance workspace summary', tag: 'COMPLIANCE' },
+    { label: 'Customer health', icon: 'Users', query: 'Who are my top customers?', tag: 'CUSTOMERS' },
 ];
 
 export const personaActions = {
     solopreneur: [
+        { label: 'Customer health', icon: 'Users', query: 'Who are my top customers?', tag: 'CUSTOMERS' },
         { label: 'Invoice health', icon: 'FileText', query: 'Which invoices need attention right now?', tag: 'INVOICES' },
         { label: 'Payments', icon: 'CreditCard', query: 'What payments came in recently?', tag: 'PAYMENTS' },
         { label: 'Expenses', icon: 'Activity', query: 'What are my biggest recent expenses?', tag: 'EXPENSES' },
         { label: 'Compliance', icon: 'ShieldCheck', query: 'Which compliance tasks are due this week?', tag: 'COMPLIANCE' },
     ],
     subscription: [
+        { label: 'Customer insights', icon: 'Users', query: 'Who are my top customers and most at risk?', tag: 'CUSTOMERS' },
         { label: 'Invoices', icon: 'FileText', query: 'Show me my invoice pipeline and overdue invoices', tag: 'INVOICES' },
         { label: 'Payments', icon: 'CreditCard', query: 'Show me recent payment collections', tag: 'PAYMENTS' },
         { label: 'Expenses', icon: 'Activity', query: 'Show me recent expenses and top categories', tag: 'EXPENSES' },
         { label: 'Compliance', icon: 'ShieldCheck', query: 'Show me open compliance work', tag: 'COMPLIANCE' },
     ],
     services_firm: [
+        { label: 'Top customers', icon: 'Users', query: 'Who are my biggest regular customers?', tag: 'CUSTOMERS' },
         { label: 'Invoices', icon: 'FileText', query: 'Show me invoice performance and overdue accounts', tag: 'INVOICES' },
         { label: 'Payments', icon: 'CreditCard', query: 'Show me the latest payments and pending collections', tag: 'PAYMENTS' },
         { label: 'Expenses', icon: 'Activity', query: 'Which expenses are driving spend right now?', tag: 'EXPENSES' },
         { label: 'Compliance', icon: 'ShieldCheck', query: 'Show me pending compliance tasks', tag: 'COMPLIANCE' },
     ],
     ecommerce: [
+        { label: 'Customer health', icon: 'Users', query: 'Show me my top regular customers and risk status', tag: 'CUSTOMERS' },
         { label: 'Invoices', icon: 'FileText', query: 'Show me current invoice and receivable status', tag: 'INVOICES' },
         { label: 'Payments', icon: 'CreditCard', query: 'Show me recent incoming payments', tag: 'PAYMENTS' },
         { label: 'Expenses', icon: 'Activity', query: 'Show me current expense pressure', tag: 'EXPENSES' },

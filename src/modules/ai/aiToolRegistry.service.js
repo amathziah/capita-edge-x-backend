@@ -48,6 +48,24 @@ const TOOL_DEFINITIONS = {
         label: 'Business Knowledge',
         description: 'Searches the user\'s uploaded business knowledge base policies, guidelines, and rules. Use for queries asking about rules, general compliance knowledge, support policies, office hours, handling refunds, etc.',
         uiComponent: null
+    },
+    get_customer_insights: {
+        id: 'get_customer_insights',
+        label: 'Customer Insights',
+        description: 'Gets insights and portfolio health scores across the entire customer base. Use for queries regarding top customers, churn risk, or customer analytics.',
+        uiComponent: 'ai_domain_customers'
+    },
+    get_customer_details: {
+        id: 'get_customer_details',
+        label: 'Customer Intelligence',
+        description: 'Gets advanced intelligence (churn risk, next purchase date) for a specific customer. Use when asking about a specific client or predicting their next purchase.',
+        uiComponent: 'ai_domain_customers'
+    },
+    get_overdue_invoices: {
+        id: 'get_overdue_invoices',
+        label: 'Overdue Invoices',
+        description: 'Retrieves highly critical overdue receivables and their ageing. Use for queries strictly focusing on overdue invoices or risky uncollected cash.',
+        uiComponent: 'ai_domain_invoices'
     }
 };
 
@@ -85,6 +103,12 @@ class AIToolRegistryService {
                 return aiReadModelService.getComplianceWorkspace(organizationId);
             case 'get_knowledge_base':
                 return aiReadModelService.getBusinessKnowledge(organizationId, args.query || context.query || '');
+            case 'get_customer_insights':
+                return aiReadModelService.getCustomerPortfolio(organizationId);
+            case 'get_customer_details':
+                return aiReadModelService.getCustomerDetail(organizationId, args.customerId || context.customerId || null);
+            case 'get_overdue_invoices':
+                return aiReadModelService.getOverdueReceivables(organizationId);
             default:
                 throw new Error(`Unknown AI tool: ${toolId}`);
         }

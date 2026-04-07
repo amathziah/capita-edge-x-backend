@@ -1,11 +1,13 @@
 import aiToolRegistryService from './aiToolRegistry.service.js';
 import aiTraceService from './aiTrace.service.js';
 import aiIntentService from './aiIntent.service.js';
+import aiEnhancedIntentService from './aiEnhancedIntent.service.js';
 import aiGuidedDeskService from './aiGuidedDesk.service.js';
 import aiService from './ai.service.js';
+import aiAgentService from './aiAgent.service.js';
+import aiCachingService from './aiCaching.service.js';
+import aiSessionManagerService from './aiSessionManager.service.js';
 
-// Finance data keywords — if ANY appear alongside a navigation verb, we answer with data,
-// not a workspace chooser.
 const FINANCE_DATA_KEYWORDS = [
     'invoice', 'invoices', 'payment', 'payments', 'expense', 'expenses',
     'compliance', 'gst', 'tds', 'overdue', 'receivable', 'receivables',
@@ -17,32 +19,83 @@ const FINANCE_DATA_KEYWORDS = [
 class AIOrchestratorService {
 
     async buildExecutionPlan(query, context = {}) {
-        const geminiPlan = await aiService.generateExecutionPlan(query, context);
-        let intent = geminiPlan.intent || 'general_advice';
-        let tools = geminiPlan.tools || [];
+        // Try cache first for simple queries
+        const cacheKey = aiCachingService.getCacheKey('plan', context.organizationId, query);
+        const cachedPlan = aiCachingService.getFromMemory(cacheKey);
+        if (cachedPlan && !context.skipCache) {
+            console.log('[Orchestrator] Using cached execution plan');
+            return cachedPlan;
+        }
 
-        // Heuristic Fallback: If Gemini picks no tools but a data-driven intent is detected by keywords
+        // Use enhanced intent detection with confidence scoring
+        const intentResult = aiEnhancedIntentService.detectWithConfidence(query, {
+            ...context,
+            lastIntent: context.lastIntent,
+            lastQuery: context.lastQuery
+        });
+
+        // Determine if we need agent-style multi-step reasoning
+        const needsAgent = intentResult.complexity === 'complex' || 
+                          intentResult.requiresComparison ||
+                          intentResult.requiresReasoning ||
+                          intentResult.isMultiStep;
+
+        let tools = [];
+        let intent = intentResult.primaryIntent;
+
+        if (needsAgent) {
+            // Use agent service for complex queries
+            console.log('[Orchestrator] Using agent service for complex query');
+            const agentPlan = await aiAgentService.generatePlan(
+                { intents: [intent, ...intentResult.secondaryIntents], complexity: intentResult.complexity },
+                context
+            );
+            
+            // Convert agent plan steps to tools
+            for (const step of agentPlan.steps) {
+                for (const toolId of step.tools) {
+                    if (!tools.find(t => t.toolId === toolId)) {
+                        tools.push({ toolId, args: {} });
+                    }
+                }
+            }
+        } else {
+            // Use standard tool selection
+            tools = aiEnhancedIntentService.getToolsForIntents([intent, ...intentResult.secondaryIntents]);
+        }
+
+        // Fallback: If no tools detected but data-driven intent found
         if (tools.length === 0) {
-            const detectedIntent = aiIntentService.detect(query);
-            if (detectedIntent !== 'conversational' && detectedIntent !== 'general_advice') {
-                const fallbackTools = aiIntentService.getToolsForIntent(detectedIntent);
+            const fallbackIntent = aiIntentService.detect(query);
+            if (fallbackIntent !== 'conversational' && fallbackIntent !== 'general_advice') {
+                const fallbackTools = aiIntentService.getToolsForIntent(fallbackIntent);
                 if (fallbackTools.length > 0) {
-                    console.log(`[AI Orchestrator] LLM selected no tools. Applying heuristic fallback for intent: ${detectedIntent}`);
-                    intent = detectedIntent;
+                    intent = fallbackIntent;
                     tools = fallbackTools.map(toolId => ({ toolId, args: {} }));
                 }
             }
         }
 
-        const intentMeta = aiIntentService.getMetadata(intent);
-        
-        return {
+        const plan = {
             intent,
-            primaryDomain: intentMeta.domain || 'finance',
-            specialistLabel: intentMeta.specialistLabel || intentMeta.label || 'Finance Guide',
-            mode: (tools.length > 0) ? 'grounded' : 'general',
-            tools
+            primaryDomain: intentResult.domain,
+            specialistLabel: intentResult.specialistLabel,
+            mode: tools.length > 0 ? 'grounded' : 'general',
+            tools,
+            confidence: intentResult.confidence,
+            complexity: intentResult.complexity,
+            isMultiStep: intentResult.isMultiStep || needsAgent,
+            requiresComparison: intentResult.requiresComparison,
+            requiresReasoning: intentResult.requiresReasoning,
+            suggestedActions: intentResult.suggestedActions,
+            timeRange: intentResult.timeRange,
+            parsedEntities: intentResult.parsedEntities
         };
+
+        // Cache the plan
+        aiCachingService.setMemoryCache(cacheKey, plan, 'intent');
+
+        return plan;
     }
 
     async executePlan(plan, context = {}) {
@@ -51,8 +104,33 @@ class AIOrchestratorService {
 
         for (const step of plan.tools || []) {
             const definition = aiToolRegistryService.getToolDefinition(step.toolId);
+            
+            // Check cache for tool results
+            const cacheKey = aiCachingService.getCacheKey(
+                'tool',
+                context.organizationId,
+                `${step.toolId}:${JSON.stringify(step.args)}`
+            );
+            const cachedResult = aiCachingService.getFromMemory(cacheKey);
+            
+            if (cachedResult) {
+                console.log(`[Orchestrator] Using cached result for ${step.toolId}`);
+                toolResults.push({
+                    toolId: step.toolId,
+                    label: definition?.label || step.toolId,
+                    uiComponent: definition?.uiComponent || null,
+                    args: step.args || {},
+                    result: cachedResult
+                });
+                continue;
+            }
+
             try {
                 const result = await aiToolRegistryService.executeTool(step.toolId, context, step.args || {});
+                
+                // Cache the result
+                aiCachingService.setMemoryCache(cacheKey, result, 'workspace');
+                
                 await aiTraceService.log({
                     traceId,
                     organizationId: context.organizationId,
@@ -67,6 +145,7 @@ class AIOrchestratorService {
                         data: result?.data || {}
                     }
                 });
+                
                 toolResults.push({
                     toolId: step.toolId,
                     label: definition?.label || step.toolId,
@@ -92,14 +171,8 @@ class AIOrchestratorService {
         return toolResults;
     }
 
-    /**
-     * Returns true only when the user is explicitly requesting to OPEN / NAVIGATE to a workspace
-     * with no specific data question attached.
-     * Finance data questions must always be answered with real data, not a workspace chooser.
-     */
     _shouldShowGuidedChoice(plan, query = '') {
         const manualIntent = aiIntentService.detect(query);
-        // If the manual detector caught a pure navigation command, prioritize it over LLM
         const intent = manualIntent === 'action_request' ? 'action_request' : (plan.intent || manualIntent);
 
         if (intent !== 'action_request') return false;
@@ -107,10 +180,8 @@ class AIOrchestratorService {
         const lowerQuery = String(query || '').toLowerCase();
         const hasFinanceKeyword = FINANCE_DATA_KEYWORDS.some(kw => lowerQuery.includes(kw));
 
-        // If the query asks about finance data at all, answer it — don't open a workspace chooser
         if (hasFinanceKeyword) return false;
 
-        // Pure navigation (e.g. "open dashboard", "go to settings") → workspace chooser is fine
         return true;
     }
 
@@ -118,7 +189,32 @@ class AIOrchestratorService {
 
     async processQuery(query, context = {}) {
         const traceId = aiTraceService.createTraceId();
-        const plan = await this.buildExecutionPlan(query, context);
+        
+        // Get or create session for context management
+        const session = await aiSessionManagerService.getOrCreateSession(
+            context.organizationId,
+            context.user?.id,
+            context.conversationId
+        );
+
+        // Build context with session info
+        const enhancedContext = {
+            ...context,
+            sessionId: session.id,
+            sessionContext: aiSessionManagerService.buildAIContext(session, query),
+            lastIntent: session.metadata.currentDomain,
+            lastQuery: session.messages.length > 0 ? session.messages[session.messages.length - 1].content : null
+        };
+
+        // Check cache for complete response
+        const cachedResponse = await aiCachingService.get('chat', context.organizationId, query);
+        if (cachedResponse && !context.skipCache) {
+            console.log('[Orchestrator] Using cached response');
+            cachedResponse.data.traceId = traceId;
+            return cachedResponse.data;
+        }
+
+        const plan = await this.buildExecutionPlan(query, enhancedContext);
         plan.traceId = traceId;
 
         await aiTraceService.log({
@@ -128,11 +224,11 @@ class AIOrchestratorService {
             conversationId: context.conversationId || null,
             stage: 'plan',
             query,
-            input: { query },
+            input: { query, complexity: plan.complexity },
             output: plan
         });
 
-        // ── 1. Pure workspace-navigation action — show chooser UI ──────────
+        // Guided choice
         const isGuidedChoice = this._shouldShowGuidedChoice(plan, query);
         if (isGuidedChoice) {
             const response = aiGuidedDeskService.buildGuidedChoiceResponse(query, {
@@ -141,25 +237,14 @@ class AIOrchestratorService {
                 specialistLabel: plan.specialistLabel
             });
             response.traceId = traceId;
-            await aiTraceService.log({
-                traceId,
-                organizationId: context.organizationId,
-                userId: context.user?.id,
-                conversationId: context.conversationId || null,
-                stage: 'final',
-                query,
-                input: { executionMode: 'guided_choice' },
-                output: {
-                    provider: response.provider,
-                    text: response.text,
-                    action: response.action,
-                    provenance: response.data?.provenance || []
-                }
-            });
+            
+            // Update session
+            aiSessionManagerService.addMessage(session, { role: 'assistant', content: response.text, intent: plan.intent, domain: plan.primaryDomain });
+            
             return response;
         }
 
-        // ── 2. Conversational greetings / capability questions ─────────────
+        // Conversational
         if (plan.intent === 'conversational') {
             const text = aiService.buildConversationalAnswer({}, query);
             const response = {
@@ -177,21 +262,50 @@ class AIOrchestratorService {
                 },
                 traceId
             };
-            await aiTraceService.log({
-                traceId,
-                organizationId: context.organizationId,
-                userId: context.user?.id,
-                conversationId: context.conversationId || null,
-                stage: 'final',
-                query,
-                input: { executionMode: 'conversational' },
-                output: { provider: response.provider, text: response.text }
-            });
+            
+            aiSessionManagerService.addMessage(session, { role: 'assistant', content: text, intent: plan.intent, domain: plan.primaryDomain });
+            
             return response;
         }
 
-        // ── 3. Finance / data question — execute tools then call Gemini ────
-        const toolResults = await this.executePlan(plan, context);
+        // Complex query - use agent service
+        if (plan.isMultiStep || plan.requiresComparison) {
+            console.log('[Orchestrator] Handling complex query with agent service');
+            
+            const agentResult = await aiAgentService.execute(query, enhancedContext);
+            
+            // Use agent's aggregated results
+            const execution = {
+                intent: plan.intent,
+                primaryDomain: plan.primaryDomain,
+                specialistLabel: plan.specialistLabel,
+                mode: 'grounded',
+                toolResults: agentResult.steps.map(s => ({
+                    toolId: s.toolId,
+                    result: s.result
+                })),
+                traceId
+            };
+
+            const response = await aiService.generateGroundedAnswer(query, enhancedContext, execution);
+            response.traceId = traceId;
+            response.data.reasoning = agentResult.reasoning;
+            response.data.steps = agentResult.steps;
+
+            // Update session with entities
+            if (plan.parsedEntities) {
+                aiSessionManagerService.extractEntities(session, plan.parsedEntities);
+            }
+            aiSessionManagerService.addMessage(session, { role: 'assistant', content: response.text, intent: plan.intent, domain: plan.primaryDomain });
+
+            // Cache response
+            await aiCachingService.set('chat', context.organizationId, query, response, { persist: true });
+
+            return response;
+        }
+
+        // Standard query execution
+        const toolResults = await this.executePlan(plan, enhancedContext);
         const execution = {
             intent: plan.intent,
             primaryDomain: plan.primaryDomain,
@@ -201,24 +315,17 @@ class AIOrchestratorService {
             traceId
         };
 
-        const response = await aiService.generateGroundedAnswer(query, context, execution);
+        const response = await aiService.generateGroundedAnswer(query, enhancedContext, execution);
         response.traceId = traceId;
 
-        await aiTraceService.log({
-            traceId,
-            organizationId: context.organizationId,
-            userId: context.user?.id,
-            conversationId: context.conversationId || null,
-            stage: 'final',
-            query,
-            input: { executionMode: execution.mode, toolsRun: toolResults.length },
-            output: {
-                provider: response.provider,
-                text: response.text,
-                action: response.action,
-                provenance: response.data?.provenance || []
-            }
-        });
+        // Update session
+        if (plan.parsedEntities) {
+            aiSessionManagerService.extractEntities(session, plan.parsedEntities);
+        }
+        aiSessionManagerService.addMessage(session, { role: 'assistant', content: response.text, intent: plan.intent, domain: plan.primaryDomain });
+
+        // Cache response
+        await aiCachingService.set('chat', context.organizationId, query, response, { persist: true });
 
         return response;
     }
@@ -227,7 +334,23 @@ class AIOrchestratorService {
 
     async *processQueryStream(query, context = {}) {
         const traceId = aiTraceService.createTraceId();
-        const plan = await this.buildExecutionPlan(query, context);
+        
+        // Get session
+        const session = await aiSessionManagerService.getOrCreateSession(
+            context.organizationId,
+            context.user?.id,
+            context.conversationId
+        );
+
+        const enhancedContext = {
+            ...context,
+            sessionId: session.id,
+            sessionContext: aiSessionManagerService.buildAIContext(session, query),
+            lastIntent: session.metadata.currentDomain,
+            lastQuery: session.messages.length > 0 ? session.messages[session.messages.length - 1].content : null
+        };
+
+        const plan = await this.buildExecutionPlan(query, enhancedContext);
         plan.traceId = traceId;
 
         await aiTraceService.log({
@@ -237,11 +360,11 @@ class AIOrchestratorService {
             conversationId: context.conversationId || null,
             stage: 'plan',
             query,
-            input: { query },
+            input: { query, complexity: plan.complexity },
             output: plan
         });
 
-        // ── 1. Pure workspace navigation — yield chooser UI ────────────────
+        // Guided choice
         const isGuidedChoice = this._shouldShowGuidedChoice(plan, query);
         if (isGuidedChoice) {
             const event = {
@@ -253,26 +376,11 @@ class AIOrchestratorService {
                 }),
                 traceId
             };
-            await aiTraceService.log({
-                traceId,
-                organizationId: context.organizationId,
-                userId: context.user?.id,
-                conversationId: context.conversationId || null,
-                stage: 'final',
-                query,
-                input: { executionMode: 'guided_choice' },
-                output: {
-                    provider: event.provider,
-                    text: event.text,
-                    action: event.action,
-                    provenance: event.data?.provenance || []
-                }
-            });
             yield event;
             return;
         }
 
-        // ── 2. Conversational — yield a direct text answer immediately ─────
+        // Conversational
         if (plan.intent === 'conversational') {
             const text = aiService.buildConversationalAnswer({}, query);
             const event = {
@@ -292,23 +400,62 @@ class AIOrchestratorService {
                 },
                 traceId
             };
-            await aiTraceService.log({
-                traceId,
-                organizationId: context.organizationId,
-                userId: context.user?.id,
-                conversationId: context.conversationId || null,
-                stage: 'final',
-                query,
-                input: { executionMode: 'conversational' },
-                output: { provider: event.provider, text: event.text }
-            });
             yield event;
             return;
         }
 
-        // ── 3. Finance / data question — execute tools then stream Gemini ──
-        // Tool execution is fast (DB reads) and happens before streaming starts.
-        const toolResults = await this.executePlan(plan, context);
+        // Complex query with agent
+        if (plan.isMultiStep || plan.requiresComparison) {
+            const stream = aiAgentService.executeStream(query, enhancedContext);
+            
+            for await (const chunk of stream) {
+                if (chunk.type === 'step_complete') {
+                    yield { type: 'progress', tool: chunk.tool, step: chunk.step };
+                }
+            }
+
+            const agentResult = await aiAgentService.execute(query, enhancedContext);
+            
+            const execution = {
+                intent: plan.intent,
+                primaryDomain: plan.primaryDomain,
+                specialistLabel: plan.specialistLabel,
+                mode: 'grounded',
+                toolResults: agentResult.steps.map(s => ({
+                    toolId: s.toolId,
+                    result: s.result
+                })),
+                traceId
+            };
+
+            const stream2 = aiService.generateGroundedAnswerStream(query, enhancedContext, execution);
+            
+            for await (const chunk of stream2) {
+                if (chunk.type === 'token') {
+                    yield chunk;
+                } else if (chunk.type === 'complete') {
+                    yield { 
+                        ...chunk, 
+                        traceId,
+                        data: {
+                            ...chunk.data,
+                            reasoning: agentResult.reasoning,
+                            steps: agentResult.steps
+                        }
+                    };
+                }
+            }
+            
+            if (plan.parsedEntities) {
+                aiSessionManagerService.extractEntities(session, plan.parsedEntities);
+            }
+            aiSessionManagerService.addMessage(session, { role: 'assistant', content: '', intent: plan.intent, domain: plan.primaryDomain });
+            
+            return;
+        }
+
+        // Standard execution
+        const toolResults = await this.executePlan(plan, enhancedContext);
         const execution = {
             intent: plan.intent,
             primaryDomain: plan.primaryDomain,
@@ -318,7 +465,7 @@ class AIOrchestratorService {
             traceId
         };
 
-        const stream = aiService.generateGroundedAnswerStream(query, context, execution);
+        const stream = aiService.generateGroundedAnswerStream(query, enhancedContext, execution);
         let lastEvent = null;
 
         for await (const chunk of stream) {
@@ -330,22 +477,9 @@ class AIOrchestratorService {
             }
         }
 
-        if (lastEvent) {
-            await aiTraceService.log({
-                traceId,
-                organizationId: context.organizationId,
-                userId: context.user?.id,
-                conversationId: context.conversationId || null,
-                stage: 'final',
-                query,
-                input: { executionMode: execution.mode, toolsRun: toolResults.length },
-                output: {
-                    provider: lastEvent.provider,
-                    text: lastEvent.text,
-                    action: lastEvent.action,
-                    provenance: lastEvent.data?.provenance || []
-                }
-            });
+        if (lastEvent && plan.parsedEntities) {
+            aiSessionManagerService.extractEntities(session, plan.parsedEntities);
+            aiSessionManagerService.addMessage(session, { role: 'assistant', content: lastEvent.text, intent: plan.intent, domain: plan.primaryDomain });
         }
     }
 }

@@ -744,14 +744,49 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
 
     extractAction(text, query) {
         const lowerQuery = query.toLowerCase();
-        if (lowerQuery.includes('create') && lowerQuery.includes('invoice')) return { type: 'open_invoice_modal', data: {} };
-        if (lowerQuery.includes('show') && lowerQuery.includes('invoice')) return { type: 'navigate', data: { to: '/invoices' } };
         
+        // Invoice actions
+        if (lowerQuery.includes('create') && lowerQuery.includes('invoice')) return { type: 'open_invoice_modal', data: {} };
+        if (lowerQuery.includes('show') && lowerQuery.includes('invoice')) return { type: 'navigate', data: { to: '/dashboard/invoices' } };
+        if (lowerQuery.includes('open') && lowerQuery.includes('invoice')) return { type: 'navigate', data: { to: '/dashboard/invoices' } };
+        if (lowerQuery.includes('view') && lowerQuery.includes('invoice')) return { type: 'navigate', data: { to: '/dashboard/invoices' } };
+        
+        // Customer actions
         if ((lowerQuery.includes('add') || lowerQuery.includes('create') || lowerQuery.includes('new')) && 
             (lowerQuery.includes('customer') || lowerQuery.includes('client'))) {
             return { type: 'open_customer_modal', data: {} };
         }
-
+        if (lowerQuery.includes('show') && lowerQuery.includes('customer')) return { type: 'navigate', data: { to: '/dashboard/customers' } };
+        if (lowerQuery.includes('open') && lowerQuery.includes('customer')) return { type: 'navigate', data: { to: '/dashboard/customers' } };
+        
+        // Payment actions
+        if (lowerQuery.includes('record') && lowerQuery.includes('payment')) return { type: 'open_payment_modal', data: {} };
+        if (lowerQuery.includes('add') && lowerQuery.includes('payment')) return { type: 'open_payment_modal', data: {} };
+        if (lowerQuery.includes('show') && lowerQuery.includes('payment')) return { type: 'navigate', data: { to: '/dashboard/payments' } };
+        
+        // Expense actions
+        if ((lowerQuery.includes('add') || lowerQuery.includes('create') || lowerQuery.includes('record')) && 
+            (lowerQuery.includes('expense') || lowerQuery.includes('spending'))) {
+            return { type: 'open_expense_modal', data: {} };
+        }
+        if (lowerQuery.includes('show') && lowerQuery.includes('expense')) return { type: 'navigate', data: { to: '/dashboard/expenses' } };
+        
+        // Dashboard / Business health
+        if (lowerQuery.includes('show') && (lowerQuery.includes('dashboard') || lowerQuery.includes('overview'))) {
+            return { type: 'navigate', data: { to: '/dashboard' } };
+        }
+        if (lowerQuery.includes('go to') && lowerQuery.includes('dashboard')) return { type: 'navigate', data: { to: '/dashboard' } };
+        
+        // Reports
+        if (lowerQuery.includes('show') && lowerQuery.includes('report')) return { type: 'navigate', data: { to: '/dashboard/reports' } };
+        if (lowerQuery.includes('generate') && lowerQuery.includes('report')) return { type: 'navigate', data: { to: '/dashboard/reports' } };
+        
+        // Compliance
+        if (lowerQuery.includes('show') && lowerQuery.includes('compliance')) return { type: 'navigate', data: { to: '/dashboard/compliance' } };
+        
+        // Settings
+        if (lowerQuery.includes('open') && lowerQuery.includes('settings')) return { type: 'navigate', data: { to: '/settings' } };
+        
         return null;
     }
 

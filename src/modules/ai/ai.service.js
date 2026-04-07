@@ -306,26 +306,65 @@ class AIService {
         });
     }
 
-    async buildToolBackedExecution(query, context = {}) {
-        const plannedTools = await aiToolRegistryService.planTools(query, context);
-        const toolResults = [];
+    async generateExecutionPlan(query, context = {}) {
+        const tools = aiToolRegistryService.getAllToolDeclarations();
+        
+        const systemPrompt = `You are the primary intelligence router for Capita, an AI finance advisor.
+Analyze the user's query and decide:
+1. The primary intent of the user.
+2. The specific tools needed to fetch data to answer the query.
 
-        for (const step of plannedTools) {
-            const definition = aiToolRegistryService.getToolDefinition(step.toolId);
-            const result = await aiToolRegistryService.executeTool(step.toolId, context, step.args || {});
-            toolResults.push({
-                toolId: step.toolId,
-                label: definition?.label || step.toolId,
-                uiComponent: definition?.uiComponent || null,
-                args: step.args || {},
-                result
+Available Tools:
+${JSON.stringify(tools, null, 2)}
+
+Intent Categories:
+- conversational: greetings, "what can you do?", or pure small-talk
+- business_health: broad queries like "how is my business", "what should I focus on"
+- cash_flow: "safe to spend", "cash runway", "liquidity"
+- payments_recent: queries specifically about recent collections or received payments
+- invoices_attention: queries about overdue invoices, who owes money, collections
+- expenses_spend: queries about spend, expenses, vendor costs, where money is going
+- compliance_status: queries about upcoming deadlines, pending tax filings, GST/TDS status
+- compliance_knowledge: queries about tax rules, HR policies, general compliance (not specific workspace status)
+- customer_insights: "who is my top customer", "biggest client"
+- action_request: PURE NAVIGATION ONLY. e.g. "open invoices", "go to dashboard", "create a customer". NEVER use this if the user asks a data question (e.g. "show me my overdue invoices" should be invoices_attention).
+- general_advice: open-ended non-data queries that do not match above.
+
+Output a valid JSON object matching the exact schema below:
+{
+    "intent": "category_name",
+    "toolsToRun": [{"toolId": "tool_name", "args": {}}]
+}
+
+If no tools are needed (e.g. pure conversational or pure navigation action_request), return an empty array for toolsToRun.`;
+
+        const requestText = `User Query: "${query}"`;
+        
+        try {
+            const rawOutput = await this.safeJsonModelCall({
+                prompt: `${systemPrompt}\n\n${requestText}`,
+                providerSuffix: 'json',
+                validator: (data) => {
+                    const intent = data?.intent;
+                    if (!intent || typeof intent !== 'string') {
+                        return { ok: false, issues: ['Missing intent'] };
+                    }
+                    return { ok: true, issues: [] };
+                }
             });
-        }
 
-        return {
-            mode: plannedTools.length > 0 ? 'grounded' : 'general',
-            toolResults
-        };
+            return {
+                intent: rawOutput.intent || 'general_advice',
+                tools: (rawOutput.toolsToRun || []).map(t => ({
+                    toolId: t.toolId || t,
+                    args: t.args || {}
+                }))
+            };
+        } catch (err) {
+            console.error('Failed to generate execution plan from Gemini:', err);
+            // Graceful fallback to general and no tools
+            return { intent: 'general_advice', tools: [] };
+        }
     }
 
     analyzeQueryRisk(query, execution = {}) {

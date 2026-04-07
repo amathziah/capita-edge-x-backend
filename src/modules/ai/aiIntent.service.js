@@ -109,11 +109,19 @@ class AIIntentService {
             return INTENTS.cash_flow.id;
         }
 
-        if (includesAny(['recent payment', 'recent payments', 'payments came in', 'payments received', 'cash came in', 'collections came in', 'received recently'])) {
+        if (includesAny([
+            'recent payment', 'recent payments', 'payments came in', 'payments received',
+            'cash came in', 'collections came in', 'received recently',
+            'payment', 'payments', 'receipt', 'receipts'
+        ])) {
             return INTENTS.payments_recent.id;
         }
 
-        if (includesAny(['overdue invoice', 'overdue invoices', 'which invoices need attention', 'invoice attention', 'invoice status', 'who owes me', 'collections'])) {
+        if (includesAny([
+            'overdue invoice', 'overdue invoices', 'which invoices need attention',
+            'invoice attention', 'invoice status', 'who owes me', 'collections',
+            'invoice', 'invoices', 'receivable', 'receivables', 'billing', 'billed'
+        ])) {
             return INTENTS.invoices_attention.id;
         }
 
@@ -131,7 +139,17 @@ class AIIntentService {
             return INTENTS.customer_insights.id;
         }
 
-        if (includesAny(['create', 'make', 'open', 'show', 'go to', 'send', 'add', 'new'])) {
+        // action_request only fires for pure navigation commands (no finance data words present)
+        // Finance queries with navigation verbs are handled by the domain intents above.
+        if (matchesAny([
+            /\bopen\s+(the\s+)?(invoice|payment|expense|compliance|dashboard)\s*(page|workspace|screen|tab)?\b/,
+            /\bgo\s+to\s+(invoice|payment|expense|compliance|dashboard)\b/,
+            /\bnavigate\s+to\s+(invoice|payment|expense|compliance|dashboard)\b/,
+            /\bshow\s+(me\s+)?the\s+(invoice|payment|expense|compliance)\s*(workspace|page|screen)\b/,
+            /\bcreate\s+(a\s+)?(new\s+)?(invoice|customer|expense)\b/,
+            /\bsend\s+(an?\s+)?invoice\b/,
+            /\badd\s+(a\s+)?(new\s+)?(customer|expense|payment)\b/
+        ])) {
             return INTENTS.action_request.id;
         }
 

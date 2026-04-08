@@ -10,7 +10,7 @@ import { errorHandler, notFoundHandler } from './core/middleware/errorHandler.js
 import { authenticateUser } from './core/middleware/auth.js';
 import { sanitizeInput } from './core/middleware/validation.js';
 import redisService from './core/services/redis.service.js';
-import aiEmbeddingIntentService from './modules/ai/aiEmbeddingIntent.service.js';
+import aiEmbeddingIntentService from './modules/ai/intent/embedding.service.js';
 
 
 // Routes

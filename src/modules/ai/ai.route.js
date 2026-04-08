@@ -1,7 +1,7 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { asyncHandler } from '../../core/middleware/errorHandler.js';
-import * as aiController from './ai.controller.js';
+import * as aiController from './controllers/ai.controller.js';
 import { LIMITS } from '../../core/config/constants.js';
 
 const router = express.Router();

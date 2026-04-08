@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url';
 import { errorHandler, notFoundHandler } from './core/middleware/errorHandler.js';
 import { authenticateUser } from './core/middleware/auth.js';
 import { sanitizeInput } from './core/middleware/validation.js';
+import redisService from './core/services/redis.service.js';
+import aiEmbeddingIntentService from './modules/ai/aiEmbeddingIntent.service.js';
 
 
 // Routes
@@ -147,8 +149,18 @@ export const createApp = () => {
 export const app = createApp();
 
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
-    app.listen(PORT, () => {
-        console.log(`✅ Backend server running on http://localhost:${PORT}`);
-        console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+    const startServer = async () => {
+        await redisService.connect();
+        await aiEmbeddingIntentService.initialize();
+        
+        app.listen(PORT, () => {
+            console.log(`✅ Backend server running on http://localhost:${PORT}`);
+            console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+        });
+    };
+    
+    startServer().catch(err => {
+        console.error('Failed to start server:', err);
+        process.exit(1);
     });
 }

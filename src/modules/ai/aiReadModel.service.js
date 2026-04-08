@@ -295,7 +295,12 @@ class AIReadModelService {
             data: {
                 ageing,
                 riskyInvoices: overdueInvoices.slice(0, 5),
-                currency
+                currency,
+                summary: {
+                    overdueCount: overdueInvoices.length,
+                    overdueAmount: ageing.totalOverdue,
+                    totalInvoices: (res.data || []).length
+                }
             },
             meta: {
                 source: 'invoices+invoiceStatus.service',

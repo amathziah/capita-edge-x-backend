@@ -8,6 +8,11 @@ import AIBudgetService from './aiBudget.service.js';
 import AIGroundingService from './aiGrounding.service.js';
 import AIRuntimeService from './aiRuntime.service.js';
 import AIStructuredTaskService from './aiStructuredTask.service.js';
+import circuitBreakerService from '../../core/services/circuitBreaker.service.js';
+import aiModelRouterService from './aiModelRouter.service.js';
+import aiCacheService from './aiCache.service.js';
+import aiDeduplicationService from './aiDeduplication.service.js';
+import aiObservabilityService from '../../core/services/aiObservability.service.js';
 
 dotenv.config();
 
@@ -42,12 +47,10 @@ class AIService {
         };
 
         // ═══════════════════════════════════════════════════════
-        // TIER CONFIG — Same model quality for ALL tiers.
+// TIER CONFIG — Same model quality for ALL tiers.
         // Strategy: Gate by FEATURES + QUERY COUNT, not model intelligence.
         // Free users get amazing answers → converts to paid.
-        // With a target of 25 early customers, we can confidently run
-        // the newest 'gemini-3-flash' model (10K RPD limit) for everyone.
-        // ═══════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════
         this.tierModels = {
             starter: ['gemini-2.5-flash'],
             free:    ['gemini-2.5-flash'],
@@ -107,6 +110,12 @@ class AIService {
                 message: 'Customer Intelligence is a Solo plan feature. Upgrade to unlock churn risk prediction, health scoring, and next-purchase date forecasting for individual customers.'
             },
         };
+
+        this.modelRouter = aiModelRouterService;
+        this.circuitBreaker = circuitBreakerService;
+        this.cacheService = aiCacheService;
+        this.dedupService = aiDeduplicationService;
+        this.observability = aiObservabilityService;
 
     }
 
@@ -427,10 +436,31 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
     }
 
     async generateGroundedAnswer(query, context = {}, execution = {}) {
+        const startTime = Date.now();
         const userId = context.user?.id || 'anon';
         const orgId = context.organizationId;
         const budget = await this._checkPlanBudget(orgId);
         const queryRisk = this.analyzeQueryRisk(query, execution);
+        const tier = budget.tier || 'starter';
+
+        const dedupCheck = await this.dedupService.checkAndMark(orgId, { query, organizationId: orgId });
+        if (!dedupCheck.canProceed) {
+            throw new Error('Duplicate request detected. Please wait.');
+        }
+
+        const cacheKey = this._cacheKey('ai:answer', `${query}:${orgId}:${execution.intent}`);
+        const cachedAnswer = await this.cacheService.get(cacheKey);
+        if (cachedAnswer) {
+            return {
+                ...cachedAnswer,
+                cached: true,
+                provider: `${cachedAnswer.provider}:cached`
+            };
+        }
+
+        const complexity = this.modelRouter.detectComplexity(query, execution.toolResults?.length || 0);
+        const selectedModel = this.modelRouter.selectModel(complexity, tier);
+        execution.modelSelection = selectedModel;
 
         if ((execution.intent === 'conversational' || queryRisk.isConversationalSafe) && !queryRisk.hasToolEvidence) {
             const answer = this.buildConversationalAnswer(queryRisk, query);
@@ -467,7 +497,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
             : this.buildEvidencePrompt(query, context, execution);
         const rawHistory = context.history || [];
         const history = this._sanitiseHistory(rawHistory);
-        const targetModels = budget.models || this.models;
+        const targetModels = [selectedModel.name, ...(budget.models || this.models).filter(m => m !== selectedModel.name)];
         let lastError = null;
 
         for (const modelName of targetModels) {
@@ -556,11 +586,55 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         throw lastError || new Error('Cloud Busy: All AI models failed. Please try again.');
     }
 
+    async _logRequestTrace(params) {
+        const latencyMs = Date.now() - (params.startTime || Date.now());
+        try {
+            await this.observability.logRequest({
+                organizationId: params.orgId,
+                userId: params.userId,
+                prompt: params.prompt,
+                model: params.model,
+                intent: params.intent,
+                domain: params.domain,
+                toolResults: params.toolResults,
+                response: params.response,
+                latencyMs,
+                cost: params.cost,
+                tokens: params.usage
+            });
+        } catch (err) {
+            console.error('[AI] Trace logging failed:', err.message);
+        }
+    }
+
     async *generateGroundedAnswerStream(query, context = {}, execution = {}) {
+        const startTime = Date.now();
         const userId = context.user?.id || 'anon';
         const orgId = context.organizationId;
         const budget = await this._checkPlanBudget(orgId);
         const queryRisk = this.analyzeQueryRisk(query, execution);
+        const tier = budget.tier || 'starter';
+
+        const dedupCheck = await this.dedupService.checkAndMark(orgId, { query, organizationId: orgId });
+        if (!dedupCheck.canProceed) {
+            throw new Error('Duplicate request detected. Please wait.');
+        }
+
+        const cacheKey = this._cacheKey('ai:answer', `${query}:${orgId}:${execution.intent}`);
+        const cachedAnswer = await this.cacheService.get(cacheKey);
+        if (cachedAnswer) {
+            yield {
+                type: 'complete',
+                ...cachedAnswer,
+                cached: true,
+                provider: `${cachedAnswer.provider}:cached`
+            };
+            return;
+        }
+
+        const complexity = this.modelRouter.detectComplexity(query, execution.toolResults?.length || 0);
+        const selectedModel = this.modelRouter.selectModel(complexity, tier);
+        execution.modelSelection = selectedModel;
 
         if ((execution.intent === 'conversational' || queryRisk.isConversationalSafe) && !queryRisk.hasToolEvidence) {
             yield {
@@ -600,7 +674,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
             : this.buildEvidencePrompt(query, context, execution);
         const rawHistory = context.history || [];
         const history = this._sanitiseHistory(rawHistory);
-        const targetModels = budget.models || this.models;
+        const targetModels = [selectedModel.name, ...(budget.models || this.models).filter(m => m !== selectedModel.name)];
         let fullText = '';
         let lastError = null;
 

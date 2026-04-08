@@ -166,14 +166,16 @@ export const PLAN_TIERS = {
     },
 };
 
-// Alias: 'free' maps to 'starter' for consistent lookups
+// Aliases
 PLAN_TIERS.free = PLAN_TIERS.starter;
+PLAN_TIERS.pro = PLAN_TIERS.solo_pro;  // DB 'pro' maps to 'solo_pro' (500 req)
 
 /**
  * Normalize tier key: handles common aliases
  */
 const normalizeTierKey = (tier) => {
     if (!tier || tier === 'free') return 'starter';
+    if (tier === 'pro') return 'solo_pro';
     return tier;
 };
 

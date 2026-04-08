@@ -182,7 +182,8 @@ export const processChatStream = async (req, res) => {
                     provider: chunk.provider,
                     conversationId,
                     budget: chunk.budget,
-                    data: chunk.data
+                    data: chunk.data,
+                    cached: chunk.cached
                 });
             }
         }

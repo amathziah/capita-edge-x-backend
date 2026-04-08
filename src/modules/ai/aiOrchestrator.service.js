@@ -16,6 +16,15 @@ const FINANCE_DATA_KEYWORDS = [
     'transaction', 'transactions', 'balance', 'due', 'outstanding'
 ];
 
+// Domain detection keywords for workspace auto-opening
+const DOMAIN_KEYWORDS = {
+    invoices: ['invoice', 'invoices', 'overdue', 'receivable', 'receivables', 'collections', 'debtor', 'aging', 'unpaid', 'outstanding'],
+    payments: ['payment', 'payments', 'receipt', 'receipts', 'cash in', 'money in', 'received', 'collections'],
+    expenses: ['expense', 'expenses', 'spend', 'spending', 'cost', 'costs', 'vendor', 'burn', 'outflow'],
+    compliance: ['compliance', 'gst', 'tds', 'tax', 'filing', 'deadline', 'return', 'due'],
+    customers: ['customer', 'customers', 'client', 'clients', 'churn', 'retention']
+};
+
 class AIOrchestratorService {
 
     async buildExecutionPlan(query, context = {}) {
@@ -171,6 +180,25 @@ class AIOrchestratorService {
         return toolResults;
     }
 
+    /**
+     * Check if query should trigger guided workspace auto-opening
+     */
+    _shouldOpenGuidedWorkspace(query = '') {
+        const lowerQuery = String(query || '').toLowerCase();
+        
+        for (const [domain, keywords] of Object.entries(DOMAIN_KEYWORDS)) {
+            const hasKeyword = keywords.some(kw => lowerQuery.includes(kw));
+            if (hasKeyword) {
+                return domain;
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * Check if we should show guided choice (legacy behavior for action_request without finance keywords)
+     */
     _shouldShowGuidedChoice(plan, query = '') {
         const manualIntent = aiIntentService.detect(query);
         const intent = manualIntent === 'action_request' ? 'action_request' : (plan.intent || manualIntent);
@@ -183,6 +211,29 @@ class AIOrchestratorService {
         if (hasFinanceKeyword) return false;
 
         return true;
+    }
+
+    /**
+     * Build workspace response for frontend - includes guided workspace data
+     */
+    _buildWorkspaceResponse(toolResults, plan, query, organizationId) {
+        // Find the primary tool with uiComponent (workspace tool)
+        const workspaceTool = toolResults.find(t => t.uiComponent);
+        
+        if (!workspaceTool) return null;
+
+        const domain = workspaceTool.uiComponent.replace('ai_domain_', '');
+        
+        // Build the guided workspace response
+        const workspace = aiGuidedDeskService.getWorkspace(domain, organizationId, 'overview');
+        
+        // This returns a Promise - we'll handle it in the caller
+        return {
+            component: workspaceTool.uiComponent,
+            domain,
+            data: workspaceTool.result?.data || {},
+            toolId: workspaceTool.toolId
+        };
     }
 
     // ── Non-streaming ─────────────────────────────────────────────────────────
@@ -228,7 +279,26 @@ class AIOrchestratorService {
             output: plan
         });
 
-        // Guided choice
+        // Check if we should auto-open a guided workspace based on query keywords
+        const autoOpenDomain = this._shouldOpenGuidedWorkspace(query);
+        console.log('[Orch] query:', query, 'autoOpenDomain:', autoOpenDomain);
+        if (autoOpenDomain) {
+            console.log(`[Orch] Auto-opening guided workspace for domain: ${autoOpenDomain}`);
+            
+            // Build guided choice response with recommended domain
+            const response = aiGuidedDeskService.buildGuidedChoiceResponse(query, {
+                intent: plan.intent,
+                primaryDomain: autoOpenDomain,
+                specialistLabel: plan.specialistLabel
+            });
+            response.traceId = traceId;
+            
+            aiSessionManagerService.addMessage(session, { role: 'assistant', content: response.text, intent: plan.intent, domain: autoOpenDomain });
+            
+            return response;
+        }
+
+        // Guided choice (legacy - for action_request without finance keywords)
         const isGuidedChoice = this._shouldShowGuidedChoice(plan, query);
         if (isGuidedChoice) {
             const response = aiGuidedDeskService.buildGuidedChoiceResponse(query, {
@@ -306,6 +376,10 @@ class AIOrchestratorService {
 
         // Standard query execution
         const toolResults = await this.executePlan(plan, enhancedContext);
+        
+        // Check if any tool has a workspace uiComponent - if so, include workspace data
+        const hasWorkspaceTool = toolResults.some(t => t.uiComponent);
+        
         const execution = {
             intent: plan.intent,
             primaryDomain: plan.primaryDomain,
@@ -317,6 +391,34 @@ class AIOrchestratorService {
 
         const response = await aiService.generateGroundedAnswer(query, enhancedContext, execution);
         response.traceId = traceId;
+
+        // If we have a workspace tool, also provide the workspace data for frontend
+        if (hasWorkspaceTool) {
+            const workspaceTool = toolResults.find(t => t.uiComponent);
+            const workspaceDomain = workspaceTool.uiComponent.replace('ai_domain_', '');
+            
+            try {
+                const workspace = await aiGuidedDeskService.getWorkspace(workspaceDomain, context.organizationId, 'overview');
+                
+                // Add workspace data to response for frontend
+                response.data = response.data || {};
+                response.data.workspace = {
+                    component: workspaceTool.uiComponent,
+                    domain: workspaceDomain,
+                    label: workspace?.label,
+                    specialistLabel: workspace?.specialistLabel,
+                    selectedView: 'overview',
+                    availableViews: workspace?.availableViews,
+                    data: workspace?.data,
+                    meta: workspace?.meta
+                };
+                
+                // Also add to response root for easier access
+                response.workspace = response.data.workspace;
+            } catch (wsError) {
+                console.error('[Orchestrator] Failed to get workspace data:', wsError.message);
+            }
+        }
 
         // Update session
         if (plan.parsedEntities) {
@@ -364,7 +466,29 @@ class AIOrchestratorService {
             output: plan
         });
 
-        // Guided choice
+        // Check if we should auto-open a guided workspace based on query keywords
+        const autoOpenDomain = this._shouldOpenGuidedWorkspace(query);
+        console.log('[Orch] query:', query, 'autoOpenDomain:', autoOpenDomain);
+        if (autoOpenDomain) {
+            console.log(`[Orch] Auto-opening guided workspace for domain: ${autoOpenDomain}`);
+            
+            const event = {
+                type: 'complete',
+                ...aiGuidedDeskService.buildGuidedChoiceResponse(query, {
+                    intent: plan.intent,
+                    primaryDomain: autoOpenDomain,
+                    specialistLabel: plan.specialistLabel
+                }),
+                traceId
+            };
+            
+            aiSessionManagerService.addMessage(session, { role: 'assistant', content: event.text, intent: plan.intent, domain: autoOpenDomain });
+            
+            yield event;
+            return;
+        }
+
+        // Guided choice (legacy)
         const isGuidedChoice = this._shouldShowGuidedChoice(plan, query);
         if (isGuidedChoice) {
             const event = {
@@ -456,6 +580,10 @@ class AIOrchestratorService {
 
         // Standard execution
         const toolResults = await this.executePlan(plan, enhancedContext);
+        
+        // Check if any tool has a workspace uiComponent
+        const hasWorkspaceTool = toolResults.some(t => t.uiComponent);
+        
         const execution = {
             intent: plan.intent,
             primaryDomain: plan.primaryDomain,
@@ -473,6 +601,47 @@ class AIOrchestratorService {
             if (chunk.type === 'token') {
                 yield chunk;
             } else if (chunk.type === 'complete') {
+                // If we have a workspace tool, include workspace data in the complete event
+                if (hasWorkspaceTool) {
+                    const workspaceTool = toolResults.find(t => t.uiComponent);
+                    const workspaceDomain = workspaceTool.uiComponent.replace('ai_domain_', '');
+                    
+                    try {
+                        const workspace = await aiGuidedDeskService.getWorkspace(workspaceDomain, context.organizationId, 'overview');
+                        
+                        yield { 
+                            ...chunk, 
+                            traceId,
+                            workspace: {
+                                component: workspaceTool.uiComponent,
+                                domain: workspaceDomain,
+                                label: workspace?.label,
+                                specialistLabel: workspace?.specialistLabel,
+                                selectedView: 'overview',
+                                availableViews: workspace?.availableViews,
+                                data: workspace?.data,
+                                meta: workspace?.meta
+                            },
+                            data: {
+                                ...chunk.data,
+                                workspace: {
+                                    component: workspaceTool.uiComponent,
+                                    domain: workspaceDomain,
+                                    label: workspace?.label,
+                                    specialistLabel: workspace?.specialistLabel,
+                                    selectedView: 'overview',
+                                    availableViews: workspace?.availableViews,
+                                    data: workspace?.data,
+                                    meta: workspace?.meta
+                                }
+                            }
+                        };
+                        continue;
+                    } catch (wsError) {
+                        console.error('[Orchestrator] Failed to get workspace data:', wsError.message);
+                    }
+                }
+                
                 yield { ...chunk, traceId };
             }
         }

@@ -844,5 +844,5 @@ class AIGroundingService {
     }
 }
 
-export default new AIGroundingService();
+export default AIGroundingService;
 

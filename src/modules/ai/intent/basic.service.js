@@ -57,13 +57,25 @@ const INTENTS = {
         id: 'action_request',
         label: 'Action Request',
         domain: 'actions',
-        specialistLabel: 'Operations Desk'
+        specialistLabel: 'CFO — Operations'
     },
     general_advice: {
         id: 'general_advice',
         label: 'General Advice',
         domain: 'finance',
-        specialistLabel: 'Finance Guide'
+        specialistLabel: 'Capita CFO'
+    },
+    spending_decision: {
+        id: 'spending_decision',
+        label: 'Spending Decision',
+        domain: 'finance',
+        specialistLabel: 'CFO — Cash Desk'
+    },
+    profitability: {
+        id: 'profitability',
+        label: 'Profitability',
+        domain: 'finance',
+        specialistLabel: 'CFO — P&L Desk'
     }
 };
 
@@ -129,6 +141,15 @@ class AIIntentService {
             return INTENTS.expenses_spend.id;
         }
 
+        // CFO-specific queries — spending decisions and profitability
+        if (includesAny(['can i afford', 'afford to', 'how much can i spend', 'how much can we spend', 'should i spend', 'should i invest', 'budget for', 'is it safe to spend'])) {
+            return INTENTS.spending_decision.id;
+        }
+
+        if (includesAny(['am i profitable', 'are we profitable', 'is the business profitable', 'making money', 'losing money', 'net profit', 'profit margin', 'revenue vs expense'])) {
+            return INTENTS.profitability.id;
+        }
+
         if (includesAny(['gst rules', 'tds rules', 'tax rules', 'gst filing', 'tds filing', 'compliance', 'due this week', 'due this month', 'deadline'])) {
             return includesAny(['what are the gst rules', 'gst rules i must be aware of', 'gst basics', 'what is gst', 'what is tds'])
                 ? INTENTS.compliance_knowledge.id
@@ -176,10 +197,12 @@ class AIIntentService {
             business_health: ['get_business_advisor_context'],
             cash_flow: ['get_dashboard_snapshot'],
             payments_recent: ['get_payment_workspace'],
-            invoices_attention: ['get_invoice_workspace'],
+            invoices_attention: ['get_invoice_workspace', 'get_overdue_invoices'],
             expenses_spend: ['get_expense_workspace'],
             compliance_status: ['get_compliance_workspace'],
-            customer_insights: ['get_customer_insights']
+            customer_insights: ['get_customer_insights'],
+            spending_decision: ['get_dashboard_snapshot', 'get_expense_workspace'],
+            profitability: ['get_dashboard_snapshot', 'get_invoice_workspace', 'get_expense_workspace']
         };
         return mapping[intentId] || [];
     }

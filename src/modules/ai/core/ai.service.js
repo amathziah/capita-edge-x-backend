@@ -391,19 +391,25 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         const lowerQuery = String(query || '').toLowerCase();
         if (lowerQuery.includes('what can you do') || lowerQuery.includes('things you can do') || lowerQuery.includes('help')) {
             return [
-                'I can help you across three finance desks first: invoices, payments, and expenses.',
+                'Think of me as your AI CFO — I read your live business data and give you financial clarity, not just information.',
                 '',
-                '- Invoices: overdue counts, collections priority, receivables exposure, and invoice health',
-                '- Payments: recent receipts, payment timing, reconciliation, and cash-in visibility',
-                '- Expenses: spend breakdown, burn pressure, category review, and cost-control suggestions',
-                '- I can also pull business health, cash flow, and compliance context when needed',
+                'Here is what I can do:',
+                '- **Receivables:** Tell you which invoices are at risk and what to collect first',
+                '- **Cash position:** Give you a verified safe-to-spend number and flag if runway is shrinking',
+                '- **Spend:** Identify where your money is going and flag categories that need attention',
+                '- **Compliance:** Surface upcoming deadlines and overdue filings before they become penalties',
+                '- **Business health:** Synthesize everything into a single verdict on where you stand',
                 '',
-                'Try asking: “Which invoices need attention?”, “What payments came in recently?”, or “What are we spending on this month?”'
+                'Start with: **"What should I focus on today?"**, **"How is my cash position?"**, or **"Which invoice needs the most attention?"**'
             ].join('\n');
         }
 
         if (lowerQuery.includes('hi') || lowerQuery.includes('hello') || lowerQuery.includes('hey') || lowerQuery.includes('how are you')) {
-            return 'Hello. Start with invoices, payments, or expenses and I will answer from your live workspace data.';
+            return [
+                'Hello — I am Capita, your AI CFO.',
+                '',
+                'I have access to your live financial workspace. Ask me about your cash position, overdue invoices, recent payments, or what you should focus on today.'
+            ].join('\n');
         }
 
         return this.buildUnverifiedAnswer(queryRisk, []);

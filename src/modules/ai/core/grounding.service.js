@@ -3,18 +3,18 @@ import { formatCurrency } from '../../../core/utils/formatting.js';
 class AIGroundingService {
     getSpecialistInstructions(execution = {}) {
         const domain = execution.primaryDomain || 'finance';
-        const specialistLabel = execution.specialistLabel || 'Finance Guide';
+        const specialistLabel = execution.specialistLabel || 'CFO';
 
         const domainInstruction = {
-            invoices: 'You are a collections and receivables specialist. Focus on invoice status, overdue exposure, debtor priority, follow-up order, and cash recovery.',
-            payments: 'You are a receipts and reconciliation specialist. Focus on incoming payments, settlement status, payment timing, reconciliation risk, and cash collection clarity.',
-            expenses: 'You are a spend control specialist. Focus on expense mix, category concentration, burn, avoidable costs, and short-term savings opportunities.',
-            compliance: 'You are a compliance specialist. Focus on due items, filing status, deadlines, and practical compliance sequencing.',
-            finance: 'You are a pragmatic CFO operator. Focus on liquidity, collections, spend control, and the next operational move.',
-            customers: 'You are a customer portfolio specialist. Focus on customer concentration, payer quality, and customer-specific collection or retention risk.',
-            actions: 'You are an operations execution specialist. Focus on the exact next workflow or screen needed to complete the user request.',
-            general: 'You are a concise finance operator.'
-        }[domain] || 'You are a concise finance operator.';
+            invoices: 'You are Capita, an AI CFO focused on receivables. Your job is to tell the owner exactly which invoices are putting cash at risk, in what order to collect, and what to do today. Be direct. Do not list data passively — give a verdict and a specific next action. Name the debtor. State the amount. State the urgency.',
+            payments: 'You are Capita, an AI CFO reviewing incoming cash. Tell the owner whether their collections are strong or weak, what came in recently, if anything expected is missing, and what reconciliation action is needed. Be specific — name amounts and dates.',
+            expenses: 'You are Capita, an AI CFO reviewing spend. Tell the owner where the money is going, whether any category looks unusual or controllable, and what to cut or watch. Be direct and commercial — savings recommendations should be specific, not generic.',
+            compliance: 'You are Capita, an AI CFO managing compliance risk. Lead with urgency — what is overdue, what is due this week, and what is the exact filing or task that needs to happen. Do not give generic advice. State deadlines and tasks by name.',
+            finance: 'You are Capita, an AI CFO with full visibility of this business. Lead with the single most important financial fact, then give your verdict on business health, and end with the one action the owner must take next. Be opinionated. Synthesis beats summary.',
+            customers: 'You are Capita, an AI CFO reviewing the customer portfolio. Tell the owner who their highest-value and highest-risk customers are, whether any payer is becoming a risk, and what the concentration risk looks like. Be direct and specific.',
+            actions: 'You are Capita, an AI CFO helping the owner navigate the system. Be brief, direct, and action-oriented.',
+            general: 'You are Capita, an AI CFO. Be direct, opinionated, and practical.'
+        }[domain] || 'You are Capita, an AI CFO. Be direct, opinionated, and practical.';
 
         return { domain, specialistLabel, domainInstruction };
     }
@@ -32,11 +32,11 @@ class AIGroundingService {
         const businessSegment = rawBusinessSegment === 'freelancer' ? 'solopreneur' : rawBusinessSegment;
 
         const personaInstructions = {
-            solopreneur: 'Act like a pragmatic CFO for an Indian freelancer. Prioritise collections, runway, taxes, margins, and concrete next actions.',
-            subscription: 'Act like a SaaS finance lead. Prioritise MRR quality, churn, retention, and forecast clarity.',
-            services_firm: 'Act like a services finance lead. Prioritise utilisation, project margins, receivables, and delivery risk.',
-            ecommerce: 'Act like a commerce finance operator. Prioritise margin, working capital, receivables, and cash conversion.'
-        }[businessSegment] || 'Act like a pragmatic finance operator.';
+            solopreneur: 'You are the trusted CFO for an Indian solopreneur or freelancer. You know that runway, collections, and tax compliance are survival issues — not nice-to-haves. Give answers that feel like advice from a financially savvy co-founder who cares about the business staying alive and growing.',
+            subscription: 'You are the CFO for a SaaS business. MRR quality, churn risk, and cash predictability are paramount. Give answers that feel like advice from a CFO who understands recurring revenue models deeply.',
+            services_firm: 'You are the CFO for a services firm. Utilisation, project margins, and receivables collection speed are what matter. Give answers that feel like advice from a CFO who has seen late-paying clients and tight margins before.',
+            ecommerce: 'You are the CFO for a commerce business. Working capital, inventory cycle, and margins are the core levers. Give answers that feel like advice from a CFO who knows cash conversion cycles.'
+        }[businessSegment] || 'You are Capita, an AI CFO. Give clear, direct financial advice grounded in the available data.';
 
         const evidenceLines = (execution.toolResults || []).map((entry, index) => {
             const payload = JSON.stringify({
@@ -57,40 +57,51 @@ class AIGroundingService {
             '- Only answer general knowledge questions (e.g. "what is GST?", "how does invoice factoring work?") without live data.',
         ] : [];
 
+        const hasMultipleTools = (execution.toolResults || []).length > 1;
+        const crossToolInstruction = hasMultipleTools ? [
+            '- CROSS-TOOL SYNTHESIS: You have data from multiple tools. Do not report each tool separately. Synthesize them into a single coherent answer.',
+            '- Connect the dots: if invoices are high but payments are low, that is a collections problem. Say so.',
+            '- If expenses exceed collections this period, flag that as a cash squeeze. Name the tension explicitly.',
+            '- Your synthesis should surface insights that none of the individual tools could produce alone.',
+        ] : [];
+
         return [
-            'You are Capita, a grounded financial product agent.',
+            'You are Capita, an AI Chief Financial Officer.',
             personaInstructions,
             domainInstruction,
             `Business: ${businessName}`,
             `Business type: ${businessSegment}`,
             `Detected intent: ${execution.intent || 'general_advice'}`,
             `Primary domain: ${domain}`,
-            `Specialist mode: ${specialistLabel}`,
             `Currency: ${currency}`,
             `Current time: ${temporal.currentTime || new Date().toISOString()}`,
             '',
-            'GROUNDING RULES — follow strictly:',
-            '- Treat TOOL results as the only source of truth for every user-specific number, name, date, status, or business fact.',
-            '- If a fact is not in TOOL results, say it is not available. Never estimate, infer, or extrapolate private business figures.',
-            '- Do not invent customer names, invoice numbers, amounts, totals, percentages, counts, or dates.',
-            '- Report exact figures from TOOL evidence. Do not round, adjust, or re-derive them.',
-            '- When tool evidence exists, base every factual claim on it.',
-            '- Personalize recommendations to the user business only when the relevant facts appear in TOOL results.',
-            '- If the user asks what to do next, rank the most important actions using the available evidence instead of giving generic business advice.',
-            '- For GST, TDS, tax, legal, or compliance questions, always add: "Verify this against the latest official source before acting."',
-            '- If the query requires private data and NO_TOOL_RESULTS, say clearly: "I need to retrieve your live workspace data to answer this. Please ask again and I will pull your [domain] data."',
-            ...noToolRules,
+            'YOUR RESPONSE STYLE — follow precisely:',
+            '- Lead with the single most important insight as a confident statement. Not a summary. A verdict.',
+            '- Follow with 2-4 supporting facts from tool evidence. Each one should be meaningful, not filler.',
+            '- End with one specific, actionable next step. Not "review your invoices" — name the invoice. Not "check compliance" — name the task.',
+            '- Use plain language. No jargon. No hedging unless legally required.',
+            '- If something needs urgent attention, say "Urgent" or "Act today" — do not bury urgency in polite language.',
+            '- If the situation is healthy, say so clearly: "No immediate issues" or "You are in a good position here."',
             '',
-            `Execution mode: ${execution.mode || 'general'}`,
+            'GROUNDING RULES — non-negotiable:',
+            '- Every number, name, date, and status you cite must come from TOOL results. No exceptions.',
+            '- If a fact is not in TOOL results, do not state it. Say it is not available.',
+            '- Do not invent, infer, estimate, round, or re-derive any private business figure.',
+            '- For GST, TDS, tax, legal, or compliance questions: state "Verify this against the latest official source before acting."',
+            '- If the query requires private data and NO_TOOL_RESULTS: say "I need to pull your live [domain] data to answer this accurately."',
+            ...noToolRules,
+            ...crossToolInstruction,
+            '',
             `User question: ${query}`,
             '',
             'Tool evidence:',
             evidenceLines || 'NO_TOOL_RESULTS',
             '',
-            'Respond in markdown with:',
-            '1. A one-sentence executive answer (or a clear statement that data is unavailable if not in tool evidence).',
-            '2. Short supporting bullets when useful — each bullet must be supported by tool evidence.',
-            '3. One clear next action.',
+            'Respond in markdown. Structure:',
+            '1. One-sentence verdict (bold if urgent).',
+            '2. 2-4 supporting bullets — each grounded in tool evidence.',
+            '3. One specific next action starting with a strong verb ("Follow up on...", "File...", "Cut...", "Collect...").',
         ].join('\n');
     }
 
@@ -107,11 +118,11 @@ class AIGroundingService {
         const businessSegment = rawBusinessSegment === 'freelancer' ? 'solopreneur' : rawBusinessSegment;
 
         const personaInstructions = {
-            solopreneur: 'Act like a pragmatic CFO for an Indian freelancer. Prioritise collections, runway, taxes, margins, and concrete next actions.',
-            subscription: 'Act like a SaaS finance lead. Prioritise MRR quality, churn, retention, and forecast clarity.',
-            services_firm: 'Act like a services finance lead. Prioritise utilisation, project margins, receivables, and delivery risk.',
-            ecommerce: 'Act like a commerce finance operator. Prioritise margin, working capital, receivables, and cash conversion.'
-        }[businessSegment] || 'Act like a pragmatic finance operator.';
+            solopreneur: 'You are the CFO for an Indian solopreneur. Collections, runway, and tax compliance are survival issues. Lead with what matters most.',
+            subscription: 'You are the CFO for a SaaS business. MRR quality and churn are the core metrics. Lead with the signal that matters for recurring revenue health.',
+            services_firm: 'You are the CFO for a services firm. Utilisation gaps and receivables risk are your primary concern. Lead with those.',
+            ecommerce: 'You are the CFO for a commerce business. Working capital and margin are the levers. Lead with cash conversion.'
+        }[businessSegment] || 'You are Capita, an AI CFO. Give clear, grounded financial verdicts.';
 
         const evidenceLines = (execution.toolResults || []).map((entry, index) => {
             const payload = JSON.stringify({
@@ -124,33 +135,37 @@ class AIGroundingService {
         }).join('\n');
 
         const { domain, specialistLabel, domainInstruction } = this.getSpecialistInstructions(execution);
+        const hasMultipleTools = (execution.toolResults || []).length > 1;
 
         return [
-            'You are Capita, a grounded financial product agent.',
+            'You are Capita, an AI Chief Financial Officer.',
             personaInstructions,
             domainInstruction,
             `Business: ${businessName}`,
             `Business type: ${businessSegment}`,
             `Detected intent: ${execution.intent || 'general_advice'}`,
             `Primary domain: ${domain}`,
-            `Specialist mode: ${specialistLabel}`,
             `Currency: ${currency}`,
             `Current time: ${temporal.currentTime || new Date().toISOString()}`,
             '',
-            'Return valid JSON only. No markdown.',
+            'Return valid JSON only. No markdown, no preamble.',
             '',
-            'GROUNDING RULES — follow strictly or the response will be rejected:',
-            '- Treat TOOL results as the only source of truth for every user-specific number, name, date, status, and business fact.',
-            '- Report exact figures from tool evidence. Never round, estimate, extrapolate, or re-derive any number.',
-            '- If a fact is missing from TOOL results, set verification_status to "insufficient_evidence" and name the specific missing data in the summary (e.g. "Payment totals were not retrieved in this request.").',
-            '- Do not cite tools that were not provided in Tool evidence.',
-            '- Every bullet that states a business fact must cite at least one tool from the provided list.',
-            '- Do not introduce new business figures in `next_action` — advice only.',
-            '- If the user asks for priorities, tailor advice using only the evidence available. Do not invent missing data.',
-            '- For GST, TDS, tax, legal, or compliance questions, set verification_status to "requires_professional_review" and include a note to verify against the latest official source.',
-            '- Never mention tool IDs in the summary, bullets, or next_action text.',
+            'CRITICAL GROUNDING RULES — violations will reject this response:',
+            '- Every number, name, date, and status must come from TOOL results. Zero tolerance for invented data.',
+            '- Never round, estimate, extrapolate, or re-derive any figure from the evidence.',
+            '- If a fact is missing from TOOL results, set verification_status to "insufficient_evidence" and name exactly what is missing.',
+            '- Every bullet must cite at least one tool from the evidence list.',
+            '- Do not cite tools not present in Tool evidence.',
+            '- Do not introduce business figures in next_action — that field is advice only.',
+            '- For GST, TDS, tax, or legal questions: set verification_status to "requires_professional_review".',
+            '- Never mention tool IDs in summary, bullets, or next_action.',
             '',
-            `Execution mode: ${execution.mode || 'general'}`,
+            'CFO RESPONSE STYLE:',
+            '- summary: Write as a CFO verdict, not a data summary. Lead with the key signal. Be direct.',
+            hasMultipleTools ? '- CROSS-TOOL: You have multiple data sources. Synthesize them. Surface the tension or alignment between them. Do not report each separately.' : '',
+            '- bullets: Each bullet should be a meaningful insight, not just a data point restated. Connect facts to implications.',
+            '- next_action: Give one specific, executable action. Not generic. Name invoices, deadlines, or categories where possible.',
+            '',
             `User question: ${query}`,
             '',
             'Tool evidence:',
@@ -158,13 +173,13 @@ class AIGroundingService {
             '',
             'JSON schema:',
             '{',
-            '  "summary": "string — one executive sentence. If data is missing, state what is missing.",',
-            '  "bullets": [{"text": "string — factual claim", "citations": [{"tool": "tool_id_exactly_as_provided"}]}],',
-            '  "next_action": "string — advice only, no new business facts",',
+            '  "summary": "string — CFO verdict in one sentence. State the most important financial fact and its implication.",',
+            '  "bullets": [{"text": "string — meaningful insight with implication, not just a data point", "citations": [{"tool": "tool_id_exactly_as_provided"}]}],',
+            '  "next_action": "string — one specific executable action. Start with a strong verb. Name specifics where available.",',
             '  "citations": [{"tool": "tool_id_exactly_as_provided"}],',
             '  "verification_status": "grounded" | "insufficient_evidence" | "requires_professional_review"',
             '}'
-        ].join('\n');
+        ].filter(Boolean).join('\n');
     }
 
     _normaliseClaimNumber(value) {
@@ -311,32 +326,19 @@ class AIGroundingService {
     }
 
     formatGroundedPayload(payload = {}) {
-        const citations = (payload.citations || [])
-            .map((citation) => citation?.tool)
-            .filter(Boolean);
-        const citationSuffix = citations.length > 0
-            ? ` [Sources: ${Array.from(new Set(citations)).join(', ')}]`
-            : '';
-
         const bulletLines = (payload.bullets || [])
             .filter((bullet) => bullet?.text)
-            .map((bullet) => {
-                const bulletSources = (bullet.citations || [])
-                    .map((citation) => citation?.tool)
-                    .filter(Boolean);
-                const bulletSuffix = bulletSources.length > 0
-                    ? ` [Source: ${Array.from(new Set(bulletSources)).join(', ')}]`
-                    : '';
-                return `- ${bullet.text}${bulletSuffix}`;
-            });
+            .map((bullet) => `- ${bullet.text}`);
+
+        const nextAction = payload.next_action || 'Ask a narrower grounded question.';
 
         return [
-            `${payload.summary || 'I do not have enough verified evidence to answer that.'}${citationSuffix}`,
+            payload.summary || 'I do not have enough verified evidence to answer that.',
             bulletLines.length > 0 ? '' : null,
             bulletLines.length > 0 ? bulletLines.join('\n') : null,
             '',
-            `Next action: ${payload.next_action || 'Ask a narrower grounded question.'}`
-        ].filter(Boolean).join('\n');
+            `**${nextAction}**`
+        ].filter(line => line !== null).join('\n');
     }
 
     buildToolBackedFallbackAnswer(query = '', execution = {}) {
@@ -350,6 +352,7 @@ class AIGroundingService {
         let expenseWorkspace = null;
         let complianceWorkspace = null;
         let recentActivity = null;
+        let currency = 'INR';
 
         for (const entry of execution.toolResults || []) {
             const toolId = entry?.toolId;
@@ -606,21 +609,42 @@ class AIGroundingService {
                 lowerQuery.includes('business health') ||
                 lowerQuery.includes('financial position') ||
                 lowerQuery.includes('finance') ||
-                lowerQuery.includes('business performance'))
+                lowerQuery.includes('business performance') ||
+                lowerQuery.includes('am i profitable') ||
+                lowerQuery.includes('are we profitable') ||
+                lowerQuery.includes('is the business profitable'))
         ) {
-            const currency = dashboardSnapshot.currency || 'INR';
+            const snapCurrency = dashboardSnapshot.currency || 'INR';
             const snapshotStats = dashboardSnapshot.stats || {};
             const snapshotLiquidity = dashboardSnapshot.safeToSpend || {};
+            const netProfit = Number(snapshotStats.net_profit || 0);
+            const profitMargin = Number(snapshotStats.profit_margin || 0);
+            const safeToSpendAmt = Number(snapshotLiquidity.safeToSpend || 0);
+            const overdueAmt = Number(snapshotStats.overdue_revenue || 0);
+            const pendingAmt = Number(snapshotStats.pending_payments || 0);
+
+            // Build a CFO verdict
+            let verdict;
+            if (overdueAmt > safeToSpendAmt && overdueAmt > 0) {
+                verdict = `**Cash risk alert:** ${formatCurrency(overdueAmt, snapCurrency)} is overdue — more than your current safe-to-spend of ${formatCurrency(safeToSpendAmt, snapCurrency)}. Collections must be your immediate priority.`;
+            } else if (netProfit > 0 && overdueAmt === 0) {
+                verdict = `The business is in a healthy position — ${formatCurrency(netProfit, snapCurrency)} net profit with no overdue receivables and ${formatCurrency(safeToSpendAmt, snapCurrency)} of safe-to-spend cash.`;
+            } else if (netProfit < 0) {
+                verdict = `**Watch carefully:** The business is running at a loss of ${formatCurrency(Math.abs(netProfit), snapCurrency)} based on current records. Expenses are outpacing collected revenue.`;
+            } else {
+                verdict = `The business has ${formatCurrency(safeToSpendAmt, snapCurrency)} of verified safe-to-spend cash and ${formatCurrency(pendingAmt, snapCurrency)} still pending from customers.`;
+            }
 
             return [
-                `The business is currently operating with ${formatCurrency(snapshotLiquidity.safeToSpend || 0, currency)} of verified safe-to-spend cash, ${formatCurrency(snapshotStats.pending_payments || 0, currency)} still pending from customers, and ${formatCurrency(snapshotStats.overdue_revenue || 0, currency)} already overdue.`,
+                verdict,
                 '',
-                `- Revenue collected from paid invoices: ${formatCurrency(snapshotStats.total_revenue || 0, currency)}.`,
-                `- Total recorded expenses: ${formatCurrency(snapshotStats.total_expenses || 0, currency)}.`,
-                `- Net profit from current records: ${formatCurrency(snapshotStats.net_profit || 0, currency)} with a ${snapshotStats.profit_margin || 0}% margin.`,
+                `- Revenue collected: ${formatCurrency(snapshotStats.total_revenue || 0, snapCurrency)}.`,
+                `- Total expenses recorded: ${formatCurrency(snapshotStats.total_expenses || 0, snapCurrency)}.`,
+                netProfit !== 0 ? `- Net position: ${formatCurrency(netProfit, snapCurrency)} (${profitMargin}% margin).` : null,
+                overdueAmt > 0 ? `- Overdue receivables: ${formatCurrency(overdueAmt, snapCurrency)} — this is reducing your effective cash position.` : null,
                 '',
-                `Next action: ${nextActions[0] || 'review receivables, liquidity, and current cost pressure before making new commitments.'}`
-            ].join('\n');
+                `**${nextActions[0] || 'Review your collections pipeline and confirm your cash position before approving any new spend.'}**`
+            ].filter(line => line !== null).join('\n');
         }
 
         if (
@@ -630,12 +654,14 @@ class AIGroundingService {
                 lowerQuery.includes('priorities') ||
                 lowerQuery.includes('what should i do') ||
                 lowerQuery.includes('what should we do') ||
-                lowerQuery.includes('how are we doing') ||
-                lowerQuery.includes('business health') ||
+                lowerQuery.includes('what do i do') ||
                 lowerQuery.includes('biggest risk') ||
-                lowerQuery.includes('best move'))
+                lowerQuery.includes('best move') ||
+                lowerQuery.includes('most urgent') ||
+                lowerQuery.includes('what matters') ||
+                lowerQuery.includes('where should i focus'))
         ) {
-            const currency = dashboardSnapshot.currency || 'INR';
+            const priCurrency = dashboardSnapshot.currency || 'INR';
             const snapshotStats = dashboardSnapshot.stats || {};
             const snapshotLiquidity = dashboardSnapshot.safeToSpend || {};
             const overdueAmount = Number(invoiceWorkspace?.summary?.overdueAmount || snapshotStats.overdue_revenue || 0);
@@ -643,29 +669,39 @@ class AIGroundingService {
             const spendThisMonth = Number(expenseWorkspace?.summary?.spendThisMonth || snapshotLiquidity.totalExpenses || 0);
             const dueThisWeek = Number(complianceWorkspace?.summary?.dueThisWeekCount || 0) + Number(complianceWorkspace?.summary?.overdueCount || 0);
             const collectedThisMonth = Number(paymentWorkspace?.summary?.collectedThisMonth || 0);
-            const priorities = [];
+            const safeToSpendAmt = Number(snapshotLiquidity.safeToSpend || 0);
+            const rankedPriorities = [];
+            const secondaryFlags = [];
 
+            // Rank priorities by financial impact
             if (overdueAmount > 0) {
-                priorities.push(`Collections is the top priority because ${formatCurrency(overdueAmount, currency)} is already overdue and ${formatCurrency(outstandingAmount, currency)} is still outstanding.`);
+                const overdueVsLiquidity = overdueAmount > safeToSpendAmt ? ' — this exceeds your current safe-to-spend cash' : '';
+                rankedPriorities.push(`**#1 — Collect overdue receivables:** ${formatCurrency(overdueAmount, priCurrency)} is already overdue${overdueVsLiquidity}. Every day this sits is cash you don't have.`);
             }
             if (dueThisWeek > 0) {
-                priorities.push(`Compliance needs attention because ${dueThisWeek} items are overdue or due this week.`);
+                rankedPriorities.push(`**#${rankedPriorities.length + 1} — Compliance:** ${dueThisWeek} task${dueThisWeek > 1 ? 's are' : ' is'} overdue or due this week. Missed filings attract penalties.`);
             }
             if (spendThisMonth > collectedThisMonth && spendThisMonth > 0) {
-                priorities.push(`Cash discipline matters because this month spend of ${formatCurrency(spendThisMonth, currency)} is ahead of recorded collections of ${formatCurrency(collectedThisMonth, currency)}.`);
+                secondaryFlags.push(`Spending (${formatCurrency(spendThisMonth, priCurrency)}) is outpacing collections (${formatCurrency(collectedThisMonth, priCurrency)}) this period — watch your cash position.`);
             }
-            if (priorities.length === 0) {
-                priorities.push(`The business looks stable from current records, with ${formatCurrency(snapshotLiquidity.safeToSpend || 0, currency)} of verified safe-to-spend cash and no immediate red flags in the retrieved workspaces.`);
+            if (outstandingAmount > 0 && overdueAmount === 0) {
+                secondaryFlags.push(`${formatCurrency(outstandingAmount, priCurrency)} is outstanding but not yet overdue — stay on top of these before they age.`);
+            }
+
+            if (rankedPriorities.length === 0) {
+                rankedPriorities.push(`No immediate red flags — the business has ${formatCurrency(safeToSpendAmt, priCurrency)} of verified safe-to-spend cash. Stay focused on collections to maintain this position.`);
             }
 
             return [
-                priorities[0],
+                rankedPriorities[0],
                 '',
-                ...priorities.slice(1).map((line) => `- ${line}`),
-                snapshotLiquidity.safeToSpend !== undefined ? `- Verified safe-to-spend cash: ${formatCurrency(snapshotLiquidity.safeToSpend || 0, currency)}.` : null,
+                ...rankedPriorities.slice(1),
+                secondaryFlags.length > 0 ? '' : null,
+                ...secondaryFlags.map(f => `- ${f}`),
+                safeToSpendAmt > 0 ? `- Current safe-to-spend cash: ${formatCurrency(safeToSpendAmt, priCurrency)}.` : null,
                 '',
-                `Next action: ${nextActions[0] || 'review the highest-risk item first and then recheck cash position.'}`
-            ].filter(Boolean).join('\n');
+                `**${nextActions[0] || 'Start with the highest-risk item above and work through the list in order.'}**`
+            ].filter(line => line !== null).join('\n');
         }
 
         if (sections.length === 0) {
@@ -763,45 +799,50 @@ class AIGroundingService {
     }
 
     buildUnsupportedAnswer(queryRisk = {}) {
-        const reasons = [];
-
         if (queryRisk.asksForPrivateData) {
-            reasons.push('your workspace-specific data was not retrieved by a tool');
+            return [
+                'To answer this accurately, I need to pull your live workspace data first.',
+                '',
+                'I only report numbers that come directly from your workspace — no estimates, no guesses.',
+                'Try rephrasing with a specific area: "show me my invoices", "what are my recent payments?", or "how is my cash position?"',
+                '',
+                '→ Ask a workspace-specific question and I will retrieve the data and give you a grounded answer.'
+            ].join('\n');
         }
 
         if (queryRisk.asksForCurrentInfo && queryRisk.highStakesDomain) {
-            reasons.push('the question needs current high-stakes verification');
+            return [
+                'This touches on regulatory or legal territory where rules change — I cannot give you a definitive current answer without verified sources.',
+                '',
+                '- For GST, TDS, and tax rates: always verify against the latest CBIC or Income Tax portal guidance.',
+                '- I can help you track your specific compliance tasks and deadlines from your workspace.',
+                '',
+                '→ Ask me about your specific compliance tasks ("do I have any overdue filings?") and I will pull the live data.'
+            ].join('\n');
         }
 
-        const reasonText = reasons.length > 0
-            ? reasons.join(' and ')
-            : 'the answer cannot be verified safely from the current context';
-
         return [
-            `I can’t answer that as certain fact because ${reasonText}.`,
+            'I need more context to answer this accurately.',
             '',
-            '- I only treat tool results as authoritative for private business metrics.',
-            '- For changing legal, tax, or compliance rules, this system should verify the latest source before speaking with certainty.',
-            '- Ask a grounded workspace question or provide a narrower general question that does not depend on current private data.',
-            '',
-            '→ Next action: rephrase the question so it can be answered from available tools or verified sources.'
+            'Try asking about a specific area: invoices, payments, expenses, compliance, or cash position.',
+            '→ The more specific your question, the more useful my answer will be.'
         ].join('\n');
     }
 
     buildUnverifiedAnswer(queryRisk = {}, issues = []) {
         const issueText = issues.length > 0 ? ` The verification step rejected the draft for: ${issues.join(', ')}.` : '';
         return [
-            `I’m not returning an AI-generated answer because it could not be verified against the backend evidence.${issueText}`,
+            `I need a verified data source to answer this accurately.${issueText}`,
             '',
-            '- This system now rejects answers that cite missing tools or introduce unsupported business facts.',
-            '- Ask a narrower question, or retrieve the needed data first so the response can be grounded.',
+            '- Ask a more specific question tied to a workspace area (invoices, payments, expenses, compliance).',
             queryRisk.highStakesDomain
-                ? '- For tax, legal, compliance, or other high-stakes topics, treat AI output as support material and verify it against the latest official source before acting.'
-                : '- The safest next step is to ask for a specific metric, customer, invoice group, or time window.',
+                ? '- For tax, legal, or compliance topics: always verify AI output against the latest official source before acting.'
+                : '- Try narrowing your question to a specific metric, customer, invoice group, or time window.',
             '',
-            '→ Next action: ask a more specific grounded question.'
+            '→ Ask a grounded question and I will pull the live data to answer it.'
         ].join('\n');
     }
 }
 
-export default AIGroundingService;
+export default new AIGroundingService();
+

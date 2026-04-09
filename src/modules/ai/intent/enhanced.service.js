@@ -239,6 +239,41 @@ class AIEnhancedIntentService {
                     /tips/i,
                     /ideas/i
                 ]
+            },
+            spending_decision: {
+                weight: 0.92,
+                patterns: [
+                    /can i afford/i,
+                    /should i (spend|buy|invest|hire|pay for)/i,
+                    /is it (safe|okay|ok) to spend/i,
+                    /do i have enough/i,
+                    /can i pay for/i,
+                    /is this a good time to (spend|invest|buy)/i,
+                    /afford to hire/i,
+                    /afford to pay/i,
+                    /how much can i spend/i,
+                    /how much can we spend/i,
+                    /budget for/i,
+                    /should i take on/i,
+                    /should we invest/i
+                ]
+            },
+            profitability: {
+                weight: 0.88,
+                patterns: [
+                    /am i profitable/i,
+                    /are we profitable/i,
+                    /is the business profitable/i,
+                    /making money/i,
+                    /losing money/i,
+                    /profit.*this (month|year|quarter)/i,
+                    /net profit/i,
+                    /profit margin/i,
+                    /how much.*made/i,
+                    /how much.*earned/i,
+                    /revenue vs expense/i,
+                    /income vs cost/i
+                ]
             }
         };
 
@@ -255,23 +290,27 @@ class AIEnhancedIntentService {
             comparison: 'finance',
             trend: 'finance',
             action_request: 'actions',
-            general_advice: 'finance'
+            general_advice: 'finance',
+            spending_decision: 'finance',
+            profitability: 'finance'
         };
 
         this.specialistMapping = {
-            conversational: 'Front Desk',
-            business_health: 'Finance Lead',
-            cash_flow: 'Liquidity Desk',
-            payments_recent: 'Payments Desk',
-            invoices_attention: 'Collections Desk',
-            expenses_spend: 'Spend Desk',
-            compliance_status: 'Compliance Desk',
-            compliance_knowledge: 'Compliance Desk',
-            customer_insights: 'Customer Desk',
-            comparison: 'Analytics Desk',
-            trend: 'Analytics Desk',
-            action_request: 'Operations Desk',
-            general_advice: 'Finance Guide'
+            conversational: 'Capita CFO',
+            business_health: 'CFO — Business Health',
+            cash_flow: 'CFO — Liquidity Desk',
+            payments_recent: 'CFO — Collections Desk',
+            invoices_attention: 'CFO — Receivables Desk',
+            expenses_spend: 'CFO — Spend Desk',
+            compliance_status: 'CFO — Compliance Desk',
+            compliance_knowledge: 'CFO — Compliance Desk',
+            customer_insights: 'CFO — Customer Portfolio',
+            comparison: 'CFO — Analytics Desk',
+            trend: 'CFO — Analytics Desk',
+            action_request: 'CFO — Operations',
+            general_advice: 'Capita CFO',
+            spending_decision: 'CFO — Cash Desk',
+            profitability: 'CFO — P&L Desk'
         };
 
         this.confidenceModifiers = {
@@ -476,7 +515,9 @@ class AIEnhancedIntentService {
             customer_insights: ['get_customer_insights', 'get_customer_details'],
             comparison: ['get_dashboard_snapshot', 'get_invoice_workspace', 'get_payment_workspace'],
             trend: ['get_dashboard_snapshot'],
-            action_request: []
+            action_request: [],
+            spending_decision: ['get_dashboard_snapshot', 'get_expense_workspace'],
+            profitability: ['get_dashboard_snapshot', 'get_invoice_workspace', 'get_expense_workspace']
         };
 
         const tools = new Set();

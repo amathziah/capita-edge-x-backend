@@ -592,76 +592,151 @@ class PDFService {
             try {
                 const doc = new PDFDocument({ size: 'A4', margin: 50 });
                 const stream = fs.createWriteStream(outputPath);
-
                 doc.pipe(stream);
 
-                // Header with logo
-                await this.addHeader(doc, settings);
+                const theme = this.getTheme(invoice?.persona || settings?.businessType);
+                const buyer = this.getBuyer(invoice);
 
-                // Title
-                doc.fontSize(24)
-                    .font('Helvetica-Bold')
-                    .fillColor('#0D9488') // Teal-600
-                    .text('PAYMENT RECEIPT', 50, 150);
+                // Header — pass invoice so number/date/status render correctly
+                let y = await this.addHeader(doc, settings, invoice);
 
-                doc.fontSize(10)
-                    .font('Helvetica')
-                    .fillColor('#000000')
-                    .text(`Receipt #: REC-${payment.id.split('-')[0].toUpperCase()}`, 400, 155)
-                    .text(`Date: ${new Date(payment.date || payment.createdAt).toLocaleDateString()}`, 400, 170);
-
-                doc.moveDown(2);
-
-                // Payment Details
-                doc.fontSize(12)
-                    .font('Helvetica-Bold')
-                    .text('Payment Details', 50, 220);
-
-                doc.fontSize(10)
-                    .font('Helvetica')
-                    .text(`Linked Invoice: ${invoice.invoiceNumber}`, 50, 240)
-                    .text(`Payment Method: ${payment.method}`, 50, 255)
-                    .text(`Status: ${payment.status || 'Completed'}`, 50, 270);
-
-                // Amount Box
-                doc.rect(400, 220, 150, 60)
-                    .fillAndStroke('#F0FDFA', '#B2F5EA');
-
-                doc.fontSize(10)
+                // ── Receipt Title + Meta ──────────────────────────────────────
+                doc.fontSize(20)
                     .font('Helvetica-Bold')
                     .fillColor('#0D9488')
-                    .text('AMOUNT PAID', 410, 230);
+                    .text('PAYMENT RECEIPT', 50, y);
 
-                doc.fontSize(16)
+                const receiptNum = `REC-${payment.id.split('-')[0].toUpperCase()}`;
+                const receiptDate = this.formatDate(payment.date || payment.createdAt);
+
+                doc.fontSize(9)
+                    .font('Helvetica')
+                    .fillColor('#6B7280')
+                    .text(`Receipt No: ${receiptNum}`, 350, y, { width: 195, align: 'right' })
+                    .text(`Date: ${receiptDate}`, 350, y + 13, { width: 195, align: 'right' });
+
+                y += 36;
+                this.drawDivider(doc, y, theme.border);
+                y += 16;
+
+                // ── Customer Details ──────────────────────────────────────────
+                const customerLines = [
+                    buyer?.name || 'Customer',
+                    buyer?.address || buyer?.addressLine1 || '',
+                    buyer?.addressLine2 || '',
+                    [buyer?.city, buyer?.state, buyer?.pincode].filter(Boolean).join(', '),
+                    buyer?.email || '',
+                    buyer?.phone || '',
+                    buyer?.gstin ? `GSTIN: ${buyer.gstin}` : '',
+                ].filter(Boolean);
+
+                doc.fontSize(8)
                     .font('Helvetica-Bold')
-                    .text(`Rs. ${Number(payment.amount).toFixed(2)}`, 410, 250);
-
-                doc.fillColor('#000000');
-                doc.moveDown(4);
-
-                // Invoice Summary
-                doc.fontSize(12)
-                    .font('Helvetica-Bold')
-                    .text('Invoice Summary', 50, 320);
+                    .fillColor(theme.muted)
+                    .text('RECEIVED FROM', 50, y);
 
                 doc.fontSize(10)
                     .font('Helvetica')
-                    .text(`Invoice Total: Rs. ${Number(invoice.total).toFixed(2)}`, 50, 340);
+                    .fillColor('#111827')
+                    .text(customerLines.join('\n'), 50, y + 14, { width: 250, lineGap: 2 });
 
-                // Final balance (simple calculation)
-                const balance = Number(invoice.total) - Number(payment.amount);
-                if (balance > 0) {
-                    doc.text(`Remaining Balance: Rs. ${balance.toFixed(2)}`, 50, 355);
+                // ── Amount Paid Box ───────────────────────────────────────────
+                doc.roundedRect(350, y, 195, 70, 8)
+                    .fillAndStroke('#F0FDFA', '#99F6E4');
+
+                doc.fontSize(9)
+                    .font('Helvetica-Bold')
+                    .fillColor('#0D9488')
+                    .text('AMOUNT PAID', 360, y + 12, { width: 175, align: 'center' });
+
+                doc.fontSize(22)
+                    .font('Helvetica-Bold')
+                    .fillColor('#065F46')
+                    .text(this.formatAmount(payment.amount, settings), 360, y + 30, { width: 175, align: 'center' });
+
+                const customerBlockHeight = Math.max(
+                    doc.heightOfString(customerLines.join('\n'), { width: 250, lineGap: 2 }) + 14,
+                    80
+                );
+                y += customerBlockHeight + 12;
+                this.drawDivider(doc, y, theme.border);
+                y += 16;
+
+                // ── Payment Details ───────────────────────────────────────────
+                doc.fontSize(11)
+                    .font('Helvetica-Bold')
+                    .fillColor('#111827')
+                    .text('Payment Details', 50, y);
+                y += 18;
+
+                const methodRaw = payment.payment_mode || payment.method || 'Other';
+                const methodDisplay = methodRaw.toUpperCase();
+                const detailRows = [
+                    ['Linked Invoice', invoice.invoiceNumber || '-'],
+                    ['Payment Method', methodDisplay],
+                    ['Payment Status', (payment.status || 'Completed').toUpperCase()],
+                ];
+                if (payment.reference_number) detailRows.push(['Reference No.', payment.reference_number]);
+                if (payment.upi_transaction_id) detailRows.push(['UPI Transaction ID', payment.upi_transaction_id]);
+                if (payment.notes) detailRows.push(['Notes', payment.notes]);
+
+                detailRows.forEach(([label, value]) => {
+                    doc.fontSize(9).font('Helvetica-Bold').fillColor('#6B7280')
+                        .text(label, 50, y, { width: 160 });
+                    doc.fontSize(10).font('Helvetica').fillColor('#111827')
+                        .text(value, 215, y, { width: 330 });
+                    y += 18;
+                });
+
+                y += 8;
+                this.drawDivider(doc, y, theme.border);
+                y += 16;
+
+                // ── Invoice Summary ───────────────────────────────────────────
+                doc.fontSize(11)
+                    .font('Helvetica-Bold')
+                    .fillColor('#111827')
+                    .text('Invoice Summary', 50, y);
+                y += 18;
+
+                const invoiceTotal = Number(invoice.total || 0);
+                const totalPaid = Number(invoice.amount_paid || payment.amount || 0);
+                const balanceDue = Math.max(invoiceTotal - totalPaid, 0);
+
+                const summaryRows = [
+                    ['Invoice Total', this.formatAmount(invoiceTotal, settings)],
+                    ['Total Paid (incl. this)', this.formatAmount(totalPaid, settings)],
+                ];
+                const labelX = 345;
+                const valueX = 450;
+
+                doc.fontSize(10).font('Helvetica').fillColor('#374151');
+                summaryRows.forEach(([label, value]) => {
+                    doc.text(label, labelX, y, { width: 95, align: 'right' });
+                    doc.text(value, valueX, y, { width: 85, align: 'right' });
+                    y += 18;
+                });
+
+                doc.strokeColor('#111827').lineWidth(1.5)
+                    .moveTo(labelX, y + 2).lineTo(535, y + 2).stroke();
+                y += 10;
+
+                if (balanceDue > 0) {
+                    doc.fontSize(12).font('Helvetica-Bold').fillColor(theme.accent)
+                        .text('Balance Due', labelX, y, { width: 95, align: 'right' })
+                        .text(this.formatAmount(balanceDue, settings), valueX, y, { width: 85, align: 'right' });
                 } else {
-                    doc.font('Helvetica-Bold').fillColor('#059669')
-                        .text('INVOICE FULLY PAID', 50, 355);
+                    doc.fontSize(12).font('Helvetica-Bold').fillColor('#059669')
+                        .text('Fully Paid', labelX, y, { width: 95, align: 'right' })
+                        .text(this.formatAmount(0, settings), valueX, y, { width: 85, align: 'right' });
                 }
 
-                // Footer
-                this.addFooter(doc, settings);
+                y += 32;
+
+                // Footer — pass invoice so signature logic works
+                this.addFooter(doc, settings, invoice, y);
 
                 doc.end();
-
                 stream.on('finish', () => resolve(outputPath));
                 stream.on('error', reject);
             } catch (error) {

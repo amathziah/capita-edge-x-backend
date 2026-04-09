@@ -44,7 +44,7 @@ export const createPayment = async (req, res) => {
         }
 
         const rawMode = (req.body.paymentMode || req.body.method || 'other').toString().toLowerCase().trim();
-        const validModes = ['upi', 'neft', 'imps', 'rtgs', 'cheque', 'cash', 'razorpay', 'stripe', 'other'];
+        const validModes = ['upi', 'neft', 'imps', 'rtgs', 'cheque', 'cash', 'card', 'bank_transfer', 'razorpay', 'stripe', 'other'];
         const paymentMode = validModes.includes(rawMode) ? rawMode : 'other';
 
         // Insert payment

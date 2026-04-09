@@ -372,31 +372,23 @@ export const createInvoice = async (req, res) => {
     const calculatedTax = calculatedSubtotal * ((taxRate || 0) / 100);
     const calculatedTotal = calculatedSubtotal + calculatedTax;
 
-    // Create Invoice with Jittered Exponential Backoff for High Concurrency
+    // If user provided a custom invoice number, try it; otherwise auto-generate
+    const userProvidedNumber = (invoiceNumber || '').trim();
     let invoice = null;
     let insertError = null;
-    let finalInvoiceNumber = invoiceNumber;
+    let finalInvoiceNumber = userProvidedNumber || await findNextAvailableNumber(req.user.organizationId);
+    let isCustomNumber = Boolean(userProvidedNumber);
     let attempts = 0;
-    const maxAttempts = 50; // Increased for high concurrency (100+ requests)
-
-    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-    // Initial Staggered Start: Random delay to prevent thundering herd on first attempt
-    const initialJitter = Math.random() * 500;
-    await sleep(initialJitter);
+    const maxAttempts = 5;
 
     while (attempts < maxAttempts) {
-        // If we don't have a number or this is a retry, get a fresh "next" number
-        if (!finalInvoiceNumber || attempts > 0) {
-            if (attempts > 0) {
-                // Exponential backoff with jitter: wider spread for high concurrency
-                const baseDelay = Math.min(Math.pow(1.5, attempts) * 100, 3000);
-                const jitter = Math.random() * 200;
-                const delay = baseDelay + jitter;
-                console.log(`⚠️ Collision on ${finalInvoiceNumber || 'INV-next'}. Attempt ${attempts}/${maxAttempts}. Retrying in ${Math.round(delay)}ms...`);
-                await sleep(delay);
+        if (attempts > 0) {
+            if (isCustomNumber) {
+                // Custom number collided — don't silently retry with a different number
+                throw new APIError(`Invoice number "${userProvidedNumber}" already exists. Please choose a different number.`, 409);
             }
-            finalInvoiceNumber = await findNextAvailableNumber(req.user.organizationId);
+            // Auto-generated number collided — get a fresh one from DB
+            finalInvoiceNumber = await findNextInvoiceNumberPreview(req.user.organizationId);
         }
 
         const { data, error } = await supabase

@@ -6,7 +6,7 @@ import {
     getDaysOverdue,
     getInvoiceAmounts,
     resolveInvoiceStatus
-} from '../invoices/invoiceStatus.service.js';
+} from '../../invoices/invoiceStatus.service.js';
 
 class AIReadModelService {
     async getOrganizationContext(organizationId) {

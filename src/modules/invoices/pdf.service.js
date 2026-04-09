@@ -198,7 +198,10 @@ class PDFService {
     /**
      * Add header with logo
      */
-    async addHeader(doc, settings, invoice) {
+    /**
+     * Add header with logo
+     */
+    async addHeader(doc, settings, invoice, title = null) {
         const theme = this.getTheme(invoice?.persona || settings?.businessType);
         const seller = this.getSeller(invoice, settings);
         const logoPath = settings.logoPath;
@@ -232,25 +235,27 @@ class PDFService {
             doc.text(line, 130, y + 26 + (index * 13), { width: 220 });
         });
 
-        doc.roundedRect(rightX, y, 185, 76, 10)
-            .fillAndStroke(theme.primarySoft, theme.border);
+        if (!title) {
+            // Plain invoice header — right-aligned, no colored box
+            doc.font('Helvetica-Bold').fontSize(18).fillColor('#111827')
+                .text(this.getDocumentTitle(invoice), rightX, y, { width: 185, align: 'right' });
 
-        doc.font('Helvetica-Bold')
-            .fontSize(22)
-            .fillColor(theme.accent)
-            .text(this.getDocumentTitle(invoice), rightX + 16, y + 14, { width: 150 });
+            doc.font('Helvetica-Bold').fontSize(8).fillColor('#6B7280')
+                .text('INVOICE #', rightX, y + 28, { width: 185, align: 'right' });
+            doc.font('Helvetica').fontSize(10).fillColor('#111827')
+                .text(this.safeText(invoice?.invoiceNumber), rightX, y + 40, { width: 185, align: 'right' });
 
-        const status = this.safeText(invoice?.status || 'draft').replace(/_/g, ' ').toUpperCase();
-        doc.roundedRect(rightX + 118, y + 14, 50, 18, 9)
-            .fill(theme.primary);
-        doc.font('Helvetica-Bold')
-            .fontSize(7)
-            .fillColor('#FFFFFF')
-            .text(status, rightX + 118, y + 19, { width: 50, align: 'center' });
+            doc.font('Helvetica-Bold').fontSize(8).fillColor('#6B7280')
+                .text(`Issued: ${this.formatDate(invoice?.date || new Date())}  |  Due: ${this.formatDate(invoice?.dueDate)}`, rightX, y + 58, { width: 185, align: 'right' });
+        } else {
+            // Receipt / other document header
+            doc.font('Helvetica-Bold').fontSize(18).fillColor('#111827')
+                .text(title, rightX, y, { width: 185, align: 'right' });
 
-        this.drawKeyValue(doc, 'Invoice #', this.safeText(invoice?.invoiceNumber), rightX + 16, y + 40, 70);
-        this.drawKeyValue(doc, 'Issued', this.formatDate(invoice?.date || invoice?.createdAt), rightX + 92, y + 40, 45);
-        this.drawKeyValue(doc, 'Due', this.formatDate(invoice?.dueDate), rightX + 138, y + 40, 31);
+            doc.font('Helvetica').fontSize(9).fillColor('#6B7280')
+                .text(`Receipt No: ${invoice?.invoiceNumber || invoice?.id?.split('-')[0].toUpperCase()}`, rightX, y + 28, { width: 185, align: 'right' });
+            doc.text(`Date: ${this.formatDate(new Date())}`, rightX, y + 40, { width: 185, align: 'right' });
+        }
 
         const nextY = 142;
         this.drawDivider(doc, nextY);
@@ -264,12 +269,12 @@ class PDFService {
         const buyer = this.getBuyer(invoice);
         const seller = this.getSeller(invoice, settings);
         const theme = this.getTheme(invoice?.persona || settings?.businessType);
-        let y = startY;
+        let y = startY + 10;
         const leftX = doc.page.margins.left;
         const rightX = 315;
         const columnWidth = 225;
 
-        doc.fontSize(9)
+        doc.fontSize(8.5)
             .font('Helvetica-Bold')
             .fillColor(theme.muted)
             .text('BILL FROM', leftX, y)
@@ -295,14 +300,14 @@ class PDFService {
             buyer?.pan ? `PAN: ${buyer.pan}` : '',
         ].filter(Boolean);
 
-        doc.font('Helvetica').fontSize(10).fillColor('#111827');
-        const leftHeight = doc.heightOfString(sellerLines.join('\n'), { width: columnWidth, lineGap: 2 });
-        const rightHeight = doc.heightOfString(buyerLines.join('\n'), { width: columnWidth, lineGap: 2 });
+        doc.font('Helvetica').fontSize(10.5).fillColor('#111827');
+        const leftHeight = doc.heightOfString(sellerLines.join('\n'), { width: columnWidth, lineGap: 2.5 });
+        const rightHeight = doc.heightOfString(buyerLines.join('\n'), { width: columnWidth, lineGap: 2.5 });
 
-        doc.text(sellerLines.join('\n'), leftX, y + 16, { width: columnWidth, lineGap: 2 });
-        doc.text(buyerLines.join('\n'), rightX, y + 16, { width: columnWidth, lineGap: 2 });
+        doc.text(sellerLines.join('\n'), leftX, y + 18, { width: columnWidth, lineGap: 2.8 });
+        doc.text(buyerLines.join('\n'), rightX, y + 18, { width: columnWidth, lineGap: 2.8 });
 
-        let nextY = y + 26 + Math.max(leftHeight, rightHeight);
+        let nextY = y + 28 + Math.max(leftHeight, rightHeight);
         const complianceBits = [
             invoice?.placeOfSupply ? `Place of Supply: ${invoice.placeOfSupply}` : '',
             invoice?.projectName ? `Project: ${invoice.projectName}` : '',
@@ -312,13 +317,12 @@ class PDFService {
         if (complianceBits.length > 0) {
             doc.font('Helvetica')
                 .fontSize(9)
-                .fillColor('#4B5563')
+                .fillColor('#64748B')
                 .text(complianceBits.join('    '), leftX, nextY + 8, { width: 500 });
-            nextY += 24;
+            nextY += 28;
         }
 
-        this.drawDivider(doc, nextY + 10);
-        return nextY + 24;
+        return nextY + 12;
     }
 
     /**
@@ -327,17 +331,21 @@ class PDFService {
     addItemsTable(doc, invoice, settings, startY) {
         const items = this.getItems(invoice);
         const theme = this.getTheme(invoice?.persona || settings?.businessType);
+        
         const drawHeader = (headerY) => {
-            doc.roundedRect(50, headerY, 495, 24, 6)
-                .fillAndStroke(theme.primarySoft, theme.border);
+            // No rounded box for 'Clean & Simple'
+            this.drawDivider(doc, headerY, '#E2E8F0');
+            
             doc.font('Helvetica-Bold')
-                .fontSize(8)
-                .fillColor(theme.accent)
-                .text('DESCRIPTION', 60, headerY + 8, { width: 235 })
-                .text('QTY', 300, headerY + 8, { width: 50, align: 'center' })
-                .text('RATE', 360, headerY + 8, { width: 85, align: 'right' })
-                .text('AMOUNT', 450, headerY + 8, { width: 85, align: 'right' });
-            return headerY + 32;
+                .fontSize(8.5)
+                .fillColor('#374151')
+                .text('DESCRIPTION', 60, headerY + 12, { width: 235 })
+                .text('QTY', 300, headerY + 12, { width: 50, align: 'center' })
+                .text('RATE', 360, headerY + 12, { width: 85, align: 'right' })
+                .text('AMOUNT', 450, headerY + 12, { width: 85, align: 'right' });
+            
+            this.drawDivider(doc, headerY + 34, '#F1F5F9');
+            return headerY + 44;
         };
 
         let y = drawHeader(startY);
@@ -345,10 +353,9 @@ class PDFService {
         if (items.length === 0) {
             doc.font('Helvetica')
                 .fontSize(10)
-                .fillColor('#6B7280')
-                .text('No line items added.', 60, y + 6);
-            this.drawDivider(doc, y + 24);
-            return y + 36;
+                .fillColor('#94A3B8')
+                .text('No line items added.', 60, y + 10);
+            return y + 40;
         }
 
         for (const item of items) {
@@ -358,31 +365,37 @@ class PDFService {
             const itemCode = item.hsnCode || item.hsn_code || item.sacCode || item.sac_code;
             const descriptionLines = [
                 this.safeText(item.description || 'Item'),
-                itemCode ? `${item.hsnCode || item.hsn_code ? 'HSN' : 'SAC'}: ${itemCode}` : '',
             ].filter(Boolean).join('\n');
 
             const rowHeight = Math.max(
-                24,
-                doc.heightOfString(descriptionLines, { width: 235, lineGap: 2 }) + 8
+                28,
+                doc.heightOfString(descriptionLines, { width: 235, lineGap: 2 }) + 12
             );
 
             y = this.ensureSpace(doc, y, rowHeight + 10, () => drawHeader(50));
 
+            doc.font('Helvetica-Bold')
+                .fontSize(10.5)
+                .fillColor('#1E293B')
+                .text(descriptionLines, 60, y, { width: 235, lineGap: 2 });
+            
+            if (itemCode) {
+                doc.font('Helvetica')
+                    .fontSize(8)
+                    .fillColor('#64748B')
+                    .text(`${item.hsnCode || item.hsn_code ? 'HSN' : 'SAC'}: ${itemCode}`, 60, doc.y + 2);
+            }
+
             doc.font('Helvetica')
-                .fontSize(10)
-                .fillColor('#111827')
-                .text(descriptionLines, 60, y, { width: 235, lineGap: 2 })
+                .fontSize(10.5)
+                .fillColor('#1E293B')
                 .text(`${quantity}${item.unit ? ` ${item.unit}` : ''}`, 300, y, { width: 50, align: 'center' })
                 .text(this.formatAmount(price, settings), 360, y, { width: 85, align: 'right' })
                 .text(this.formatAmount(amount, settings), 450, y, { width: 85, align: 'right' });
 
-            doc.strokeColor('#E5E7EB')
-                .lineWidth(1)
-                .moveTo(50, y + rowHeight)
-                .lineTo(545, y + rowHeight)
-                .stroke();
-
             y += rowHeight + 8;
+            this.drawDivider(doc, y, '#F1F5F9');
+            y += 12;
         }
 
         return y + 8;
@@ -398,6 +411,7 @@ class PDFService {
         const shipping = Number(invoice.shipping || 0);
         const taxAmount = Number(invoice.taxAmount || invoice.tax || 0);
         const total = Number(invoice.total || 0);
+        
         const summaryRows = [
             ['Subtotal', this.formatAmount(subtotal, settings)],
         ];
@@ -416,94 +430,92 @@ class PDFService {
 
         if (invoice.tdsApplicable && Number(invoice.tdsAmount || 0) > 0) {
             summaryRows.push([`TDS @ ${Number(invoice.tdsRate || 10)}%`, `-${this.formatAmount(invoice.tdsAmount, settings)}`]);
-            summaryRows.push(['Net Receivable', this.formatAmount(invoice.netReceivable || (total - Number(invoice.tdsAmount || 0)), settings)]);
         }
 
-        let y = this.ensureSpace(doc, startY, (summaryRows.length + 3) * 18, () => 50);
-        const labelX = 345;
+        let y = this.ensureSpace(doc, startY, (summaryRows.length + 3) * 22, () => 50);
+        const labelX = 320;
         const valueX = 450;
 
-        doc.font('Helvetica').fontSize(10).fillColor('#374151');
+        doc.font('Helvetica').fontSize(10.5).fillColor('#475569');
         summaryRows.forEach(([label, value]) => {
-            doc.text(label, labelX, y, { width: 90, align: 'right' });
+            doc.text(label, labelX, y, { width: 120, align: 'right' });
             doc.text(value, valueX, y, { width: 85, align: 'right' });
-            y += 18;
+            y += 22;
         });
 
-        doc.strokeColor('#111827')
-            .lineWidth(1.5)
-            .moveTo(labelX, y + 2)
-            .lineTo(535, y + 2)
-            .stroke();
+        this.drawDivider(doc, y + 4, '#CBD5E1');
 
-        y += 10;
+        y += 18;
 
         doc.font('Helvetica-Bold')
-            .fontSize(12)
-            .fillColor(theme.accent)
-            .text('Total', labelX, y, { width: 90, align: 'right' })
+            .fontSize(14)
+            .fillColor('#0F172A')
+            .text('Amount Due', labelX, y, { width: 120, align: 'right' })
             .text(this.formatAmount(total, settings), valueX, y, { width: 85, align: 'right' });
 
-        return y + 28;
+        return y + 40;
     }
 
     /**
-     * Add payment info and QR code
+     * Add payment info and QR code — Minimalist & High-end
      */
     async addPaymentInfo(doc, invoice, settings, startY) {
         const theme = this.getTheme(invoice?.persona || settings?.businessType);
         const seller = this.getSeller(invoice, settings);
         const paymentLines = [
-            seller.upiId ? `UPI: ${seller.upiId}` : '',
+            seller.upiId ? `UPI ID: ${seller.upiId}` : '',
             seller.bankName ? `Bank: ${seller.bankName}` : '',
-            seller.accountNumber ? `A/C: ${seller.accountNumber}` : '',
+            seller.accountNumber ? `Account: ${seller.accountNumber}` : '',
             seller.ifscCode ? `IFSC: ${seller.ifscCode}` : '',
-            !seller.bankName && settings.bankDetails ? settings.bankDetails : '',
         ].filter(Boolean);
         const paymentBody = paymentLines.join('\n');
         const hasQr = Boolean(seller.paymentQrPath || seller.upiId);
-        const blockHeight = Math.max(paymentBody ? doc.heightOfString(paymentBody, { width: 310, lineGap: 3 }) + 42 : 0, hasQr ? 140 : 0, 100);
-        let y = this.ensureSpace(doc, startY, blockHeight + 16, () => 50);
+        const blockHeight = Math.max(paymentBody ? doc.heightOfString(paymentBody, { width: 280, lineGap: 3.5 }) + 45 : 0, hasQr ? 120 : 0, 80);
+        let y = this.ensureSpace(doc, startY, blockHeight + 30, () => 50);
 
-        doc.roundedRect(50, y, 495, blockHeight, 8)
-            .fillAndStroke(theme.primarySoft, theme.border);
+        // No box background, just clean typography and layout
+        this.drawDivider(doc, y, '#E2E8F0');
+        y += 18;
 
         doc.font('Helvetica-Bold')
-            .fontSize(10)
-            .fillColor('#111827')
-            .text('Payment Details', 64, y + 14);
+            .fontSize(9)
+            .fillColor(theme.muted)
+            .text('PAYMENT INFORMATION', 50, y);
 
         doc.font('Helvetica')
-            .fontSize(9)
-            .fillColor('#475569')
+            .fontSize(10)
+            .fillColor('#0F172A')
             .text(
-                paymentBody || 'Please make payment by the due date using the details shared by the seller.',
-                64,
-                y + 32,
-                { width: hasQr ? 305 : 455, lineGap: 3 }
+                paymentBody || 'Alternative payment instructions provided on request.',
+                50,
+                y + 18,
+                { width: hasQr ? 300 : 495, lineGap: 3.5 }
             );
 
         if (hasQr) {
             try {
+                const qrX = 415;
+                const qrY = y - 10;
                 if (seller.paymentQrPath && fs.existsSync(seller.paymentQrPath)) {
-                    doc.image(seller.paymentQrPath, 412, y + 18, { width: 95, height: 95, fit: [95, 95] });
+                    doc.image(seller.paymentQrPath, qrX, qrY, { width: 90, height: 90, fit: [90, 90] });
                 } else if (seller.upiId) {
                     const payableAmount = this.getPayableAmount(invoice);
                     const qrData = `upi://pay?pa=${seller.upiId}&pn=${encodeURIComponent(seller.name || settings.businessName || 'Business')}&am=${payableAmount.toFixed(2)}&cu=INR`;
                     const qrCodeDataUrl = await QRCode.toDataURL(qrData, { margin: 0, width: 120 });
                     const qrBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
-                    doc.image(qrBuffer, 412, y + 18, { width: 95, height: 95 });
+                    doc.image(qrBuffer, qrX, qrY, { width: 90, height: 90 });
                 }
+                
                 doc.font('Helvetica-Bold')
-                    .fontSize(8)
-                    .fillColor('#334155')
-                    .text('Scan to Pay', 402, y + 118, { width: 115, align: 'center' });
+                    .fontSize(7.5)
+                    .fillColor('#64748B')
+                    .text('Scan for instant payment', qrX - 5, qrY + 98, { width: 100, align: 'center' });
             } catch (err) {
                 console.error('Payment QR render error:', err);
             }
         }
 
-        return y + blockHeight + 18;
+        return y + blockHeight + 10;
     }
 
     addNotesAndTerms(doc, invoice, settings, startY) {
@@ -587,6 +599,27 @@ class PDFService {
     /**
      * Generate payment receipt PDF — fully self-contained, no addHeader reuse
      */
+    /**
+     * Generate payment receipt PDF — Clean and Simple Redesign
+     */
+    formatPaymentMethod(raw) {
+        const map = {
+            upi: 'UPI',
+            neft: 'NEFT',
+            imps: 'IMPS',
+            rtgs: 'RTGS',
+            cheque: 'Cheque',
+            cash: 'Cash',
+            card: 'Credit/Debit Card',
+            bank_transfer: 'Bank Transfer',
+            razorpay: 'Razorpay',
+            stripe: 'Stripe',
+            other: 'Other',
+        };
+        const key = (raw || 'other').toString().toLowerCase().trim();
+        return map[key] || raw;
+    }
+
     async generateReceiptPDF(payment, invoice, settings = {}, outputPath) {
         return new Promise(async (resolve, reject) => {
             try {
@@ -594,200 +627,165 @@ class PDFService {
                 const stream = fs.createWriteStream(outputPath);
                 doc.pipe(stream);
 
-                const L = doc.page.margins.left;   // 50
-                const R = doc.page.width - doc.page.margins.right; // 545
-                const FULL_W = R - L;               // 495
-                const theme = this.getTheme(invoice?.persona || settings?.businessType);
-                const seller = this.getSeller(invoice, settings);
+                const L = doc.page.margins.left;
+                const R = doc.page.width - doc.page.margins.right;
+                const W = R - L;
                 const buyer = this.getBuyer(invoice);
+                const seller = this.getSeller(invoice, settings);
+                const paymentDate = payment.date || payment.createdAt;
+                const labelCol = L;
+                const valueCol = L + 160;
+                const valueW = W - 160;
+
+                // Helper: draw a label-value row at fixed y, returns next y
+                const row = (label, value, atY, opts = {}) => {
+                    const fSize = opts.fontSize || 10;
+                    const labelFont = opts.labelBold ? 'Helvetica-Bold' : 'Helvetica';
+                    const valueFont = opts.valueBold ? 'Helvetica-Bold' : 'Helvetica';
+                    const labelColor = opts.labelColor || '#4B5563';
+                    const valueColor = opts.valueColor || '#111827';
+                    doc.font(labelFont).fontSize(fSize).fillColor(labelColor)
+                        .text(label, labelCol, atY, { width: 155 });
+                    doc.font(valueFont).fontSize(fSize).fillColor(valueColor)
+                        .text(String(value || '-'), valueCol, atY, { width: valueW });
+                    return atY + fSize + 8;
+                };
+
+                // Helper: section heading
+                const heading = (title, atY) => {
+                    doc.font('Helvetica-Bold').fontSize(10).fillColor('#111827')
+                        .text(title, L, atY, { width: W });
+                    return atY + 18;
+                };
+
+                // Helper: divider line
+                const divider = (atY) => {
+                    doc.strokeColor('#D1D5DB').lineWidth(0.5)
+                        .moveTo(L, atY).lineTo(R, atY).stroke();
+                    return atY + 16;
+                };
+
+                let y = 50;
+
+                // ── HEADER ──────────────────────────────────────────────────
+                // Company name + details on left
                 const logoPath = settings.logoPath;
-
-                // ── 1. RECEIPT HEADER ─────────────────────────────────────────
-                let y = 48;
-
-                // Logo (left)
+                let nameX = L;
                 if (logoPath && fs.existsSync(logoPath)) {
                     try {
-                        doc.image(logoPath, L, y, { fit: [56, 56] });
-                    } catch (_) {}
+                        doc.image(logoPath, L, y, { width: 48, height: 48, fit: [48, 48] });
+                        nameX = L + 58;
+                    } catch (_) { /* skip logo on error */ }
                 }
 
-                const nameX = logoPath && fs.existsSync(logoPath) ? L + 68 : L;
-                const nameW = 230;
-
-                // Business name
-                doc.font('Helvetica-Bold').fontSize(16).fillColor('#111827')
-                    .text(seller.name || 'Business', nameX, y, { width: nameW });
-
-                // Business sub-details
-                const sellerLines = [
-                    seller.address,
-                    seller.phone,
-                    seller.email,
+                doc.font('Helvetica-Bold').fontSize(14).fillColor('#111827')
+                    .text(seller.name, nameX, y, { width: 230 });
+                let infoY = y + 18;
+                const companyInfo = [
+                    seller.address, seller.phone, seller.email,
                     seller.taxId ? `GSTIN: ${seller.taxId}` : '',
-                    settings.pan ? `PAN: ${settings.pan}` : '',
                 ].filter(Boolean);
-
-                doc.font('Helvetica').fontSize(8.5).fillColor('#4B5563');
-                sellerLines.forEach((line, i) => {
-                    doc.text(line, nameX, y + 22 + i * 12, { width: nameW });
+                doc.font('Helvetica').fontSize(8).fillColor('#6B7280');
+                companyInfo.forEach((line) => {
+                    doc.text(line, nameX, infoY, { width: 230 });
+                    infoY += 11;
                 });
 
-                const leftColBottom = y + 22 + sellerLines.length * 12;
+                // "PAYMENT RECEIPT" title on right
+                doc.font('Helvetica-Bold').fontSize(16).fillColor('#111827')
+                    .text('PAYMENT RECEIPT', R - 200, y, { width: 200, align: 'right' });
 
-                // Receipt title box (right)
-                const boxX = 340;
-                const boxW = R - boxX;
-                const receiptNum = `REC-${payment.id.split('-')[0].toUpperCase()}`;
-                const receiptDate = this.formatDate(payment.date || payment.createdAt);
-                const paymentDate = this.formatDate(payment.date || payment.createdAt);
+                doc.font('Helvetica').fontSize(9).fillColor('#4B5563')
+                    .text(`Receipt #: RCT-${(payment.id || '').split('-')[0].toUpperCase()}`, R - 200, y + 22, { width: 200, align: 'right' });
+                doc.font('Helvetica').fontSize(9).fillColor('#4B5563')
+                    .text(`Date: ${this.formatDate(paymentDate)}`, R - 200, y + 34, { width: 200, align: 'right' });
+                doc.font('Helvetica').fontSize(9).fillColor('#4B5563')
+                    .text(`Invoice #: ${invoice.invoiceNumber || '-'}`, R - 200, y + 46, { width: 200, align: 'right' });
 
-                doc.roundedRect(boxX, y, boxW, 80, 8)
-                    .fillAndStroke(theme.primarySoft, theme.border);
+                y = Math.max(infoY, y + 60) + 12;
+                y = divider(y);
 
-                doc.font('Helvetica-Bold').fontSize(14).fillColor(theme.accent)
-                    .text('PAYMENT RECEIPT', boxX + 10, y + 10, { width: boxW - 20, align: 'center' });
+                // ── AMOUNT RECEIVED ─────────────────────────────────────────
+                doc.font('Helvetica').fontSize(10).fillColor('#4B5563')
+                    .text('Amount Received', L, y, { width: 155 });
+                doc.font('Helvetica-Bold').fontSize(18).fillColor('#111827')
+                    .text(this.formatAmount(payment.amount, settings), valueCol, y - 3, { width: valueW });
+                y += 30;
+                y = divider(y);
 
-                doc.font('Helvetica').fontSize(8.5).fillColor(theme.muted)
-                    .text('Receipt No', boxX + 12, y + 36, { width: 60 });
-                doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827')
-                    .text(receiptNum, boxX + 12, y + 47, { width: boxW - 24 });
+                // ── RECEIVED FROM ───────────────────────────────────────────
+                y = heading('RECEIVED FROM', y);
+                y = row('Name', buyer?.name || 'Customer', y, { valueBold: true });
+                if (buyer?.email) y = row('Email', buyer.email, y);
+                if (buyer?.phone) y = row('Phone', buyer.phone, y);
+                if (buyer?.address) y = row('Address', buyer.address, y);
+                y += 4;
+                y = divider(y);
 
-                doc.font('Helvetica').fontSize(8.5).fillColor(theme.muted)
-                    .text('Date', boxX + 12, y + 60, { width: 60 });
-                doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827')
-                    .text(paymentDate, boxX + 12, y + 71, { width: boxW - 24 });
+                // ── PAYMENT DETAILS ─────────────────────────────────────────
+                y = heading('PAYMENT DETAILS', y);
 
-                const rightColBottom = y + 86;
+                const methodRaw = payment.payment_mode || payment.method || 'other';
+                y = row('Payment Method', this.formatPaymentMethod(methodRaw), y, { valueBold: true });
+                y = row('Payment Date', this.formatDate(paymentDate), y);
 
-                // Advance y past both columns
-                y = Math.max(leftColBottom, rightColBottom) + 14;
-                this.drawDivider(doc, y, theme.border);
-                y += 16;
+                const refNum = payment.reference_number || payment.referenceNumber;
+                if (refNum) y = row('Reference Number', refNum, y);
 
-                // ── 2. RECEIVED FROM + AMOUNT PAID ────────────────────────────
-                const customerLines = [
-                    buyer?.name || 'Customer',
-                    buyer?.address || buyer?.addressLine1 || '',
-                    buyer?.addressLine2 || '',
-                    [buyer?.city, buyer?.state, buyer?.pincode].filter(Boolean).join(', '),
-                    buyer?.email || '',
-                    buyer?.phone || '',
-                    buyer?.gstin ? `GSTIN: ${buyer.gstin}` : '',
-                ].filter(Boolean);
+                const upiTxn = payment.upi_transaction_id || payment.upiTransactionId;
+                if (upiTxn) y = row('UPI Transaction ID', upiTxn, y);
 
-                const customerText = customerLines.join('\n');
-                // Measure BEFORE rendering
-                const customerTextH = doc.heightOfString(customerText, { width: 240, lineGap: 2 });
-                const sectionH = Math.max(customerTextH + 22, 80);
+                y = row('Status', (payment.status || 'completed') === 'completed' ? 'Completed' : 'Pending', y);
 
-                // Left: RECEIVED FROM
-                doc.font('Helvetica-Bold').fontSize(8).fillColor(theme.muted)
-                    .text('RECEIVED FROM', L, y);
-                doc.font('Helvetica').fontSize(10).fillColor('#111827')
-                    .text(customerText, L, y + 14, { width: 240, lineGap: 2 });
+                if (payment.notes) y = row('Notes', payment.notes, y);
 
-                // Right: AMOUNT PAID box — fixed 80px tall, right-aligned
-                const amtBoxX = 360;
-                const amtBoxW = R - amtBoxX;
-                doc.roundedRect(amtBoxX, y, amtBoxW, 80, 8)
-                    .fillAndStroke('#F0FDFA', '#99F6E4');
-                doc.font('Helvetica-Bold').fontSize(8).fillColor('#0D9488')
-                    .text('AMOUNT PAID', amtBoxX + 8, y + 10, { width: amtBoxW - 16, align: 'center' });
-                doc.font('Helvetica-Bold').fontSize(20).fillColor('#065F46')
-                    .text(this.formatAmount(payment.amount, settings), amtBoxX + 8, y + 28, { width: amtBoxW - 16, align: 'center' });
+                y += 4;
+                y = divider(y);
 
-                y += sectionH + 12;
-                this.drawDivider(doc, y, theme.border);
-                y += 16;
+                // ── BILLING SUMMARY ─────────────────────────────────────────
+                y = heading('BILLING SUMMARY', y);
 
-                // ── 3. PAYMENT DETAILS ────────────────────────────────────────
-                doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
-                    .text('Payment Details', L, y);
-                y += 18;
-
-                const methodRaw = payment.payment_mode || payment.method || 'Other';
-                const methodDisplay = methodRaw.toUpperCase();
-
-                const detailRows = [
-                    ['Linked Invoice', invoice.invoiceNumber || '-'],
-                    ['Payment Method', methodDisplay],
-                    ['Payment Date', receiptDate],
-                    ['Payment Status', (payment.status || 'Completed').toUpperCase()],
-                ];
-                if (payment.reference_number) detailRows.push(['Reference No.', payment.reference_number]);
-                if (payment.upi_transaction_id) detailRows.push(['UPI Transaction ID', payment.upi_transaction_id]);
-                if (payment.notes) detailRows.push(['Notes', payment.notes]);
-
-                const colLabelW = 150;
-                const colValX = L + colLabelW + 12;
-                const colValW = FULL_W - colLabelW - 12;
-
-                detailRows.forEach(([label, value]) => {
-                    // Measure value height (notes can wrap)
-                    const valH = doc.heightOfString(String(value), { width: colValW });
-                    const rowH = Math.max(valH, 14) + 6;
-
-                    y = this.ensureSpace(doc, y, rowH + 4, () => L + 50);
-
-                    doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#6B7280')
-                        .text(label, L, y, { width: colLabelW });
-                    doc.font('Helvetica').fontSize(9.5).fillColor('#111827')
-                        .text(String(value), colValX, y, { width: colValW });
-
-                    y += rowH;
-                });
-
-                y += 8;
-                this.drawDivider(doc, y, theme.border);
-                y += 16;
-
-                // ── 4. INVOICE SUMMARY ────────────────────────────────────────
-                doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
-                    .text('Invoice Summary', L, y);
-                y += 18;
-
-                const invoiceTotal = Number(invoice.total || 0);
-                const totalPaid = Number(invoice.amount_paid || payment.amount || 0);
+                const invoiceTotal = Number(invoice.net_receivable ?? invoice.total ?? 0);
+                const totalPaid = Number(invoice.amount_paid || 0);
                 const balanceDue = Math.max(invoiceTotal - totalPaid, 0);
 
-                const summaryRows = [
-                    ['Invoice Total', this.formatAmount(invoiceTotal, settings), false],
-                    ['Total Paid (incl. this payment)', this.formatAmount(totalPaid, settings), false],
-                ];
+                // Right-aligned amounts
+                const amountRow = (label, amount, atY, bold) => {
+                    doc.font('Helvetica').fontSize(10).fillColor('#4B5563')
+                        .text(label, L, atY, { width: W - 140 });
+                    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10)
+                        .fillColor('#111827')
+                        .text(this.formatAmount(amount, settings), R - 135, atY, { width: 135, align: 'right' });
+                    return atY + 20;
+                };
 
-                const labelX = 320;
-                const valueX = 455;
-                const labelW = valueX - labelX - 8;
-                const valueW = R - valueX;
+                y = amountRow('Invoice Total', invoiceTotal, y, false);
+                y = amountRow('This Payment', payment.amount, y, false);
+                y = amountRow('Total Collected', totalPaid, y, false);
 
-                doc.font('Helvetica').fontSize(10).fillColor('#374151');
-                summaryRows.forEach(([label, value]) => {
-                    doc.text(label, labelX, y, { width: labelW, align: 'right' });
-                    doc.text(value, valueX, y, { width: valueW, align: 'right' });
-                    y += 18;
-                });
+                // Final line
+                doc.strokeColor('#9CA3AF').lineWidth(0.75)
+                    .moveTo(L, y).lineTo(R, y).stroke();
+                y += 10;
 
-                // Divider line
-                doc.strokeColor('#374151').lineWidth(1)
-                    .moveTo(labelX, y + 3).lineTo(R, y + 3).stroke();
-                y += 12;
-
-                // Total row
                 if (balanceDue > 0) {
-                    doc.font('Helvetica-Bold').fontSize(12).fillColor(theme.accent)
-                        .text('Balance Due', labelX, y, { width: labelW, align: 'right' })
-                        .text(this.formatAmount(balanceDue, settings), valueX, y, { width: valueW, align: 'right' });
+                    doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
+                        .text('Balance Remaining', L, y, { width: W - 140 });
+                    doc.font('Helvetica-Bold').fontSize(11).fillColor('#111827')
+                        .text(this.formatAmount(balanceDue, settings), R - 135, y, { width: 135, align: 'right' });
                 } else {
-                    doc.font('Helvetica-Bold').fontSize(12).fillColor('#059669')
-                        .text('Fully Paid ✓', labelX, y, { width: labelW, align: 'right' })
-                        .text(this.formatAmount(0, settings), valueX, y, { width: valueW, align: 'right' });
+                    doc.font('Helvetica-Bold').fontSize(11).fillColor('#059669')
+                        .text('INVOICE FULLY SETTLED', L, y, { width: W, align: 'center' });
                 }
 
-                y += 36;
+                y += 40;
+                y = divider(y);
 
-                // ── 5. FOOTER ─────────────────────────────────────────────────
-                this.addFooter(doc, settings, invoice, y);
+                // ── FOOTER ──────────────────────────────────────────────────
+                doc.font('Helvetica').fontSize(9).fillColor('#6B7280')
+                    .text('Thank you for your payment.', L, y, { width: W, align: 'center' });
+
+                this.addFooter(doc, settings, invoice, y + 24);
 
                 doc.end();
                 stream.on('finish', () => resolve(outputPath));

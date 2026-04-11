@@ -35,7 +35,7 @@ class AIEmbeddingIntentService {
 
         try {
             this.genAI = new GoogleGenerativeAI(apiKey);
-            this.model = this.genAI.getEmbeddingModel();
+            this.model = this.genAI.getGenerativeModel({ model: 'gemini-embedding-001' });
             
             const embeddings = await Promise.all(
                 INTENT_EXAMPLES.map(async (intent) => {

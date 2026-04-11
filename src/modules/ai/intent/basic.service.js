@@ -103,7 +103,12 @@ class AIIntentService {
             /\bhow are you\b/,
             /\bhow are u\b/,
             /\bhow are you doing\b/,
-            /\bhow are you doing these days\b/
+            /\bhow are you doing these days\b/,
+            /questions?\s+(i\s+)?can\s+(i\s+)?ask/,
+            /what\s+(should|can)\s+i\s+ask/,
+            /list\s+of\s+questions/,
+            /things\s+(i\s+)?can\s+ask/,
+            /what.*questions.*ask/
         ]);
 
         if (isHowAreWeDoing || includesAny(['how are you doing', 'how is the business doing', 'business health', 'overall', 'full picture', 'summary'])) {

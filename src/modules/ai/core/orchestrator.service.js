@@ -293,9 +293,12 @@ class AIOrchestratorService {
             return response;
         }
 
-        // Conversational
-        if (plan.intent === 'conversational') {
-            const text = aiService.buildConversationalAnswer({}, query);
+        // Simple greetings — static response to avoid unnecessary LLM calls
+        const lowerQuery = String(query || '').toLowerCase().trim();
+        const isSimpleGreeting = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night))[\s!.?]*$/i.test(lowerQuery)
+            || /^how are you[\s!?.]*$/i.test(lowerQuery);
+        if (isSimpleGreeting) {
+            const text = 'Hello — I am Capita, your AI CFO.\n\nI have access to your live financial workspace. Ask me about your cash position, overdue invoices, recent payments, or what you should focus on today.';
             const response = {
                 text,
                 action: null,
@@ -311,16 +314,14 @@ class AIOrchestratorService {
                 },
                 traceId
             };
-            
             aiSessionManagerService.addMessage(session, { role: 'assistant', content: text, intent: plan.intent, domain: plan.primaryDomain });
-            
             return response;
         }
 
         // Complex query - use agent service
         if (plan.isMultiStep || plan.requiresComparison) {
             console.log('[Orchestrator] Handling complex query with agent service');
-            
+
             const agentResult = await aiAgentService.execute(query, enhancedContext);
             
             // Use agent's aggregated results
@@ -465,12 +466,14 @@ class AIOrchestratorService {
             return;
         }
 
-        // Conversational
-        if (plan.intent === 'conversational') {
-            const text = aiService.buildConversationalAnswer({}, query);
-            const event = {
+        // Simple greetings — static response to avoid unnecessary LLM calls
+        const lowerQueryStream = String(query || '').toLowerCase().trim();
+        const isSimpleGreetingStream = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night))[\s!.?]*$/i.test(lowerQueryStream)
+            || /^how are you[\s!?.]*$/i.test(lowerQueryStream);
+        if (isSimpleGreetingStream) {
+            yield {
                 type: 'complete',
-                text,
+                text: 'Hello — I am Capita, your AI CFO.\n\nI have access to your live financial workspace. Ask me about your cash position, overdue invoices, recent payments, or what you should focus on today.',
                 action: null,
                 usage: null,
                 provider: 'system:conversational',
@@ -485,14 +488,13 @@ class AIOrchestratorService {
                 },
                 traceId
             };
-            yield event;
             return;
         }
 
         // Complex query with agent
         if (plan.isMultiStep || plan.requiresComparison) {
             const stream = aiAgentService.executeStream(query, enhancedContext);
-            
+
             for await (const chunk of stream) {
                 if (chunk.type === 'step_complete') {
                     yield { type: 'progress', tool: chunk.tool, step: chunk.step };

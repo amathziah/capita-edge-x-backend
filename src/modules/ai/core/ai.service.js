@@ -389,30 +389,8 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
 
     buildConversationalAnswer(queryRisk = {}, query = '') {
         const lowerQuery = String(query || '').toLowerCase();
-        if (lowerQuery.includes('what can you do') || lowerQuery.includes('things you can do') || lowerQuery.includes('help')) {
-            return [
-                'Think of me as your AI CFO — I read your live business data and give you financial clarity, not just information.',
-                '',
-                'Here is what I can do:',
-                '- **Receivables:** Tell you which invoices are at risk and what to collect first',
-                '- **Cash position:** Give you a verified safe-to-spend number and flag if runway is shrinking',
-                '- **Spend:** Identify where your money is going and flag categories that need attention',
-                '- **Compliance:** Surface upcoming deadlines and overdue filings before they become penalties',
-                '- **Business health:** Synthesize everything into a single verdict on where you stand',
-                '',
-                'Start with: **"What should I focus on today?"**, **"How is my cash position?"**, or **"Which invoice needs the most attention?"**'
-            ].join('\n');
-        }
-
-        if (lowerQuery.includes('hi') || lowerQuery.includes('hello') || lowerQuery.includes('hey') || lowerQuery.includes('how are you')) {
-            return [
-                'Hello — I am Capita, your AI CFO.',
-                '',
-                'I have access to your live financial workspace. Ask me about your cash position, overdue invoices, recent payments, or what you should focus on today.'
-            ].join('\n');
-        }
-
-        return this.buildUnverifiedAnswer(queryRisk, []);
+        // No longer used — all queries flow through the LLM for generative responses
+        return 'I am Capita, your AI CFO. How can I help you today?';
     }
 
     buildSafetyMetadata(execution = {}, queryRisk = {}) {
@@ -470,18 +448,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         const selectedModel = this.modelRouter.selectModel(complexity, tier);
         execution.modelSelection = selectedModel;
 
-        if ((execution.intent === 'conversational' || queryRisk.isConversationalSafe) && !queryRisk.hasToolEvidence) {
-            const answer = this.buildConversationalAnswer(queryRisk, query);
-            this.dedupService.markComplete(orgId, dedupParams).catch(() => {});
-            return {
-                text: this._sanitizeAssistantText(answer),
-                action: null,
-                data: this.buildSafetyMetadata(execution, queryRisk),
-                usage: null,
-                provider: 'system:conversational',
-                budget: await this.getBudgetStatus(userId, orgId)
-            };
-        }
+        // Conversational queries now flow through the LLM for generative responses
 
         if (queryRisk.shouldRefuseGeneralAnswer) {
             this.dedupService.markComplete(orgId, dedupParams).catch(() => {});
@@ -496,6 +463,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         }
 
         if (!this.genAI || this.isCircuitOpen() || !budget.allowed || !this._canMakeRequest()) {
+            console.error('[AI] Blocked:', { hasGenAI: !!this.genAI, circuitOpen: this.isCircuitOpen(), budgetAllowed: budget.allowed, canMakeRequest: this._canMakeRequest() });
             if (!budget.allowed) {
                 throw new Error(AI_ACCESS_EXHAUSTED_MESSAGE);
             }
@@ -596,6 +564,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
                     budget: budgetStatus
                 };
             } catch (error) {
+                console.error(`[AI] Model ${modelName} failed:`, error.message, error.status || '');
                 lastError = error;
                 if (this.isRetryable(error)) continue;
                 break;
@@ -603,6 +572,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         }
 
         if (lastError && this.isRetryable(lastError)) {
+            console.error('[AI] All models exhausted. Last error:', lastError.message);
             return {
                 text: this._sanitizeAssistantText(execution.toolResults?.length
                     ? this.buildToolBackedFallbackAnswer(query, execution)
@@ -670,19 +640,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         const selectedModel = this.modelRouter.selectModel(complexity, tier);
         execution.modelSelection = selectedModel;
 
-        if ((execution.intent === 'conversational' || queryRisk.isConversationalSafe) && !queryRisk.hasToolEvidence) {
-            this.dedupService.markComplete(orgId, streamDedupParams).catch(() => {});
-            yield {
-                type: 'complete',
-                text: this._sanitizeAssistantText(this.buildConversationalAnswer(queryRisk, query)),
-                action: null,
-                usage: null,
-                provider: 'system:conversational',
-                budget: await this.getBudgetStatus(userId, orgId),
-                data: this.buildSafetyMetadata(execution, queryRisk)
-            };
-            return;
-        }
+        // Conversational queries now flow through the LLM for generative responses
 
         if (queryRisk.shouldRefuseGeneralAnswer) {
             this.dedupService.markComplete(orgId, streamDedupParams).catch(() => {});

@@ -54,7 +54,8 @@ class AIGroundingService {
             '- NO_TOOL_RESULTS: This query did not retrieve any live workspace data.',
             '- If the user is asking about their own invoices, payments, expenses, customers, or any private business figure: respond that you need to retrieve their data first and cannot answer without it.',
             '- Do not mention, estimate, or approximate any private business number (revenue, count, amount, name, date) that is not in TOOL results.',
-            '- Only answer general knowledge questions (e.g. "what is GST?", "how does invoice factoring work?") without live data.',
+            '- You can answer general knowledge questions (e.g. "what is GST?", "how does invoice factoring work?") and questions about yourself (e.g. "what can you do?", "give me questions I can ask you", "who are you") without live data.',
+            '- When the user asks what you can do or what questions they can ask, respond naturally as Capita — describe your capabilities across invoices, payments, expenses, compliance, cash flow, business health, and customers. Provide example questions they can try.',
         ] : [];
 
         const hasMultipleTools = (execution.toolResults || []).length > 1;

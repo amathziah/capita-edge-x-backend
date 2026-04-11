@@ -27,7 +27,12 @@ class AIEnhancedIntentService {
                     /thank(s| you)/i,
                     /help/i,
                     /what are the things you can do/i,
-                    /capabilities/i
+                    /capabilities/i,
+                    /questions?\s+(i\s+)?can\s+(i\s+)?ask/i,
+                    /what\s+(should|can)\s+i\s+ask/i,
+                    /list\s+of\s+questions/i,
+                    /things\s+(i\s+)?can\s+ask/i,
+                    /what.*questions.*ask/i
                 ],
                 requiredConfidence: 0.8
             },

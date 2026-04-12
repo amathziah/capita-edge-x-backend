@@ -505,11 +505,14 @@ export const createInvoice = async (req, res) => {
 
     // Update Capita client intelligence
     if (customer_id) {
-        supabase.rpc('update_customer_intelligence', {
-            p_customer_id: customer_id
-        }).catch(err =>
-            console.error('Intelligence update failed:', err)
-        );
+        void (async () => {
+            const { error: intelligenceError } = await supabase.rpc('update_customer_intelligence', {
+                p_customer_id: customer_id
+            });
+            if (intelligenceError) {
+                console.error('Intelligence update failed:', intelligenceError);
+            }
+        })();
     }
 };
 

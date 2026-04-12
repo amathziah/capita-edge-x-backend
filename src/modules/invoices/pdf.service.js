@@ -749,7 +749,7 @@ class PDFService {
                 // ── PAYMENT DETAILS ─────────────────────────────────────────
                 y = heading('PAYMENT DETAILS', y);
 
-                const methodRaw = payment.payment_mode || payment.method || 'other';
+                const methodRaw = payment.method || payment.payment_mode || 'other';
                 y = row('Payment Method', this.formatPaymentMethod(methodRaw), y, { valueBold: true });
                 y = row('Payment Date', this.formatDate(paymentDate), y);
 

@@ -16,9 +16,12 @@ export const getInvoiceAmounts = (invoice = {}) => {
     const totalAmount = Number(invoice.net_receivable ?? invoice.netReceivable ?? invoice.total ?? 0);
     const totalPaid = Number(invoice.amount_paid ?? invoice.amountPaid ?? 0);
     const persistedBalanceDue = invoice.balance_due ?? invoice.balanceDue;
-    const balanceDue = persistedBalanceDue !== undefined
-        ? Math.max(Number(persistedBalanceDue || 0), 0)
-        : Math.max(totalAmount - totalPaid, 0);
+    const computedBalanceDue = Math.max(totalAmount - totalPaid, 0);
+    const balanceDue = (totalAmount > 0 || totalPaid > 0)
+        ? computedBalanceDue
+        : persistedBalanceDue !== undefined
+            ? Math.max(Number(persistedBalanceDue || 0), 0)
+            : computedBalanceDue;
 
     return { totalAmount, totalPaid, balanceDue };
 };

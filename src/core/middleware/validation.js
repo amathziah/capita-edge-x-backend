@@ -76,7 +76,19 @@ export const validateInvoice = [
 export const validatePayment = [
     body('invoiceId').trim().notEmpty().withMessage('Invoice ID is required'),
     body('amount').isFloat({ min: 0 }).withMessage('Amount must be positive'),
-    body('method').optional().isIn(['cash', 'bank_transfer', 'upi', 'card', 'cheque']).withMessage('Invalid payment method'),
+    body('method').optional().isIn([
+        'cash',
+        'bank_transfer',
+        'upi',
+        'card',
+        'cheque',
+        'neft',
+        'imps',
+        'rtgs',
+        'razorpay',
+        'stripe',
+        'other'
+    ]).withMessage('Invalid payment method'),
     body('date').optional().isISO8601().withMessage('Invalid date format'),
     handleValidationErrors
 ];

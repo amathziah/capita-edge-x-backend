@@ -19,6 +19,68 @@ const generateOTP = () => {
 };
 
 /**
+ * Normalize a company name into a readable slug base.
+ */
+const normalizeOrganizationSlug = (companyName = '') => {
+    const slug = companyName
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+
+    return slug || 'organization';
+};
+
+/**
+ * Supabase surfaces Postgres constraint errors as plain messages.
+ */
+const isDuplicateOrganizationSlugError = (error) => {
+    const message = error?.message?.toLowerCase() ?? '';
+    return message.includes('duplicate key value') && message.includes('organizations_slug_key');
+};
+
+/**
+ * Create an organization while keeping slugs readable and collision-safe.
+ */
+const createOrganization = async (companyName) => {
+    const baseSlug = normalizeOrganizationSlug(companyName);
+    const maxAttempts = 6;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const slugSuffix = attempt === 0 ? '' : `-${crypto.randomBytes(2).toString('hex')}`;
+        const slug = `${baseSlug}${slugSuffix}`;
+
+        const { data: org, error: orgError } = await supabase
+            .from('organizations')
+            .insert([{
+                name: companyName,
+                slug,
+                plan_tier: DEFAULTS.PLAN_TIER
+            }])
+            .select()
+            .single();
+
+        if (!orgError) {
+            return org;
+        }
+
+        if (isDuplicateOrganizationSlugError(orgError) && attempt < maxAttempts - 1) {
+            continue;
+        }
+
+        if (isDuplicateOrganizationSlugError(orgError)) {
+            throw new Error(`Organization initialization failed: unable to allocate a unique slug for "${companyName}"`);
+        }
+
+        throw new Error(`Organization initialization failed: ${orgError.message}`);
+    }
+
+    throw new Error(`Organization initialization failed: unable to allocate a unique slug for "${companyName}"`);
+};
+
+/**
  * Helper to find a user by email via admin API (handles pagination)
  */
 const findUserByEmail = async (email) => {
@@ -98,17 +160,7 @@ export const provisionOrganization = async (req, res) => {
         const selectedPersona = businessType || req.user.user_metadata?.business_type || DEFAULTS.DEFAULT_PERSONA;
 
         // 2. Create the Organization
-        const { data: org, error: orgError } = await supabase
-            .from('organizations')
-            .insert([{
-                name: companyName,
-                slug: companyName.toLowerCase().replace(/ /g, '-').replace(/[^\w-]/g, ''),
-                plan_tier: DEFAULTS.PLAN_TIER
-            }])
-            .select()
-            .single();
-
-        if (orgError) throw new Error(`Organization initialization failed: ${orgError.message}`);
+        const org = await createOrganization(companyName);
         createdOrgId = org.id;
 
         // 3. Link User as Owner

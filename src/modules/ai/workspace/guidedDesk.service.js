@@ -1,6 +1,48 @@
 import aiReadModelService from './readModel.service.js';
 
-const DESK_CONFIG = {
+const FREELANCER_DESK_CONFIG = {
+    invoices: {
+        domain: 'invoices',
+        label: 'Get Paid',
+        shortLabel: 'Invoices',
+        specialistLabel: 'Collections',
+        component: 'ai_domain_invoices',
+        description: 'Overdue invoices and quick actions to get paid faster.',
+        promptDescription: 'View overdue invoices and create follow-ups.',
+        views: [
+            { id: 'overdue', label: 'Overdue' },
+            { id: 'quick', label: 'Quick Create' }
+        ]
+    },
+    payments: {
+        domain: 'payments',
+        label: 'Money In',
+        shortLabel: 'Payments',
+        specialistLabel: 'Receipts',
+        component: 'ai_domain_payments',
+        description: 'Recent payments received and monthly summary.',
+        promptDescription: 'Check what payments have come in this month.',
+        views: [
+            { id: 'recent', label: 'Recent' },
+            { id: 'monthly', label: 'This Month' }
+        ]
+    },
+    expenses: {
+        domain: 'expenses',
+        label: 'Money Out',
+        shortLabel: 'Expenses',
+        specialistLabel: 'Spend',
+        component: 'ai_domain_expenses',
+        description: 'This month expenses and top categories.',
+        promptDescription: 'See where your money is going.',
+        views: [
+            { id: 'overview', label: 'This Month' },
+            { id: 'categories', label: 'Categories' }
+        ]
+    }
+};
+
+const FULL_DESK_CONFIG = {
     invoices: {
         domain: 'invoices',
         label: 'Invoice Workspace',
@@ -77,7 +119,14 @@ const DESK_CONFIG = {
     }
 };
 
+const DESK_CONFIG = FREELANCER_DESK_CONFIG;
+
 class AIGuidedDeskService {
+    setBusinessType(businessType = 'solopreneur') {
+        const isFreelancer = businessType === 'solopreneur';
+        DESK_CONFIG = isFreelancer ? FREELANCER_DESK_CONFIG : FULL_DESK_CONFIG;
+    }
+
     getSupportedDomains() {
         return Object.keys(DESK_CONFIG);
     }
@@ -118,26 +167,16 @@ class AIGuidedDeskService {
     buildGuidedChoiceResponse(query = '', execution = {}) {
         const preferredDomain = this._resolvePreferredDomain(query, execution.primaryDomain);
         const preferredDesk = preferredDomain ? this.getDesk(preferredDomain) : null;
-        const specialistLabel = preferredDesk?.specialistLabel || 'Front Desk';
-        const showCapabilitySummary = this._shouldShowCapabilitySummary(query, execution.intent, preferredDomain);
 
         const promptTitle = preferredDesk
             ? `Open ${preferredDesk.label}`
-            : (showCapabilitySummary ? 'What Capita Can Do' : 'Choose A Workspace');
+            : 'What would you like to check?';
         const promptDescription = preferredDesk
-            ? `${preferredDesk.promptDescription} Choose a workspace to continue with live backend data.`
-            : (
-                showCapabilitySummary
-                    ? 'Capita works through dedicated finance desks with live backend data. Pick the area you want to inspect or act on.'
-                    : 'Capita handles invoices, payments, expenses, compliance, and customers here. Pick one to continue.'
-            );
+            ? `${preferredDesk.promptDescription}`
+            : 'Pick one to see your live numbers.';
         const text = preferredDesk
-            ? `I can handle this through the ${preferredDesk.shortLabel.toLowerCase()} workspace with live backend data. Choose how you want to analyze it.`
-            : (
-                showCapabilitySummary
-                    ? 'I handle five things here: invoices, payments, expenses, compliance, and customer intelligence.'
-                    : 'I can help through invoices, payments, expenses, compliance, or customers.'
-            );
+            ? `Opening ${preferredDesk.label}...`
+            : 'Pick an area to see your numbers.';
 
         return {
             text,
@@ -150,13 +189,13 @@ class AIGuidedDeskService {
                 promptTitle,
                 promptDescription,
                 promptSteps: preferredDomain ? this._getChoiceSteps(preferredDomain) : this._getFrontDeskSteps(),
-                capabilitySummary: showCapabilitySummary ? this._getCapabilitySummary() : [],
+                capabilitySummary: this._getCapabilitySummary(),
                 recommendedDomain: preferredDomain,
                 supportedDomains: this.getSupportedDomains(),
                 choices: this.getChoices(preferredDomain),
                 intent: execution.intent || null,
                 domain: preferredDomain || null,
-                specialistLabel,
+                specialistLabel: preferredDesk?.specialistLabel || 'Capita',
                 provenance: []
             }
         };
@@ -168,26 +207,17 @@ class AIGuidedDeskService {
         }
 
         const lowerQuery = String(query || '').toLowerCase();
-        const includesAny = (tokens = []) => tokens.some((token) => lowerQuery.includes(token));
 
-        if (includesAny(['invoice', 'invoices', 'receivable', 'receivables', 'collections', 'billing'])) {
+        if (lowerQuery.includes('invoice') || lowerQuery.includes('paid') || lowerQuery.includes('receivable') || lowerQuery.includes('collection') || lowerQuery.includes('overdue') || lowerQuery.includes('client')) {
             return 'invoices';
         }
 
-        if (includesAny(['payment', 'payments', 'receipt', 'receipts', 'cash in', 'collections received'])) {
+        if (lowerQuery.includes('payment') || lowerQuery.includes('received') || lowerQuery.includes('money in') || lowerQuery.includes('cash') || lowerQuery.includes('receipt')) {
             return 'payments';
         }
 
-        if (includesAny(['expense', 'expenses', 'spend', 'spending', 'cost', 'vendor'])) {
+        if (lowerQuery.includes('expense') || lowerQuery.includes('spent') || lowerQuery.includes('cost') || lowerQuery.includes('vendor')) {
             return 'expenses';
-        }
-
-        if (includesAny(['compliance', 'gst', 'tds', 'tax', 'filing', 'deadline', 'return'])) {
-            return 'compliance';
-        }
-
-        if (includesAny(['customer', 'customers', 'client', 'clients', 'churn', 'engagement', 'relationship'])) {
-            return 'customers';
         }
 
         return null;
@@ -229,6 +259,40 @@ class AIGuidedDeskService {
             invoices: () => aiReadModelService.getInvoiceWorkspace(organizationId),
             payments: () => aiReadModelService.getPaymentWorkspace(organizationId),
             expenses: () => aiReadModelService.getExpenseWorkspace(organizationId),
+        }[desk.domain])();
+
+        return {
+            component: desk.component,
+            domain: desk.domain,
+            label: desk.label,
+            specialistLabel: desk.specialistLabel,
+            selectedView: view,
+            availableViews: desk.views,
+            data: {
+                ...(response?.data || {}),
+                selectedView: view,
+                availableViews: desk.views,
+                workspaceLabel: desk.label,
+                workspaceDomain: desk.domain,
+                specialistLabel: desk.specialistLabel,
+                guidance: this._buildWorkspaceGuidance(desk.domain, response?.data || {}, view),
+                actions: this._getDomainActions(desk.domain)
+            },
+            meta: {
+                ...(response?.meta || {}),
+                component: desk.component,
+                domain: desk.domain,
+                selected_view: view,
+                label: desk.label
+            }
+        };
+    }
+}
+
+        const response = await ({
+            invoices: () => aiReadModelService.getInvoiceWorkspace(organizationId),
+            payments: () => aiReadModelService.getPaymentWorkspace(organizationId),
+            expenses: () => aiReadModelService.getExpenseWorkspace(organizationId),
             compliance: () => aiReadModelService.getComplianceWorkspace(organizationId),
             customers: () => aiReadModelService.getCustomerPortfolio(organizationId)
         }[desk.domain])();
@@ -262,9 +326,9 @@ class AIGuidedDeskService {
 
     _getFrontDeskSteps() {
         return [
-            'Choose the finance area you want to inspect.',
-            'Open the live workspace to review backend data.',
-            'Use the guided views to analyze the issue step by step.'
+            'Pick an area to focus on.',
+            'See your live numbers.',
+            'Take action right away.'
         ];
     }
 
@@ -273,32 +337,20 @@ class AIGuidedDeskService {
             {
                 id: 'capability_invoices',
                 domain: 'invoices',
-                label: 'Invoices',
-                summary: 'Review overdue invoices, outstanding amounts, top debtors, and open the full invoices table or create a new invoice.'
+                label: 'Get Paid',
+                summary: 'See overdue invoices and create new ones quickly.'
             },
             {
                 id: 'capability_payments',
                 domain: 'payments',
-                label: 'Payments',
-                summary: 'Check recent receipts, this month collections, pending items, and open the full payments page.'
+                label: 'Money In',
+                summary: 'Check what payments you have received this month.'
             },
             {
                 id: 'capability_expenses',
                 domain: 'expenses',
-                label: 'Expenses',
-                summary: 'Analyze spend, recent expenses, top categories, and open the full expenses page.'
-            },
-            {
-                id: 'capability_compliance',
-                domain: 'compliance',
-                label: 'Compliance',
-                summary: 'Track urgent tasks, due-this-week items, overdue work, and open the full compliance page.'
-            },
-            {
-                id: 'capability_customers',
-                domain: 'customers',
-                label: 'Customers',
-                summary: 'Identify top clients, revenue trends, and detect churn risks early with automated scoring.'
+                label: 'Money Out',
+                summary: 'See where your money is going this month.'
             }
         ];
     }
@@ -307,33 +359,18 @@ class AIGuidedDeskService {
         switch (domain) {
             case 'invoices':
                 return [
-                    'Check the overdue queue first.',
-                    'Identify the highest-value debtors.',
-                    'Decide who to follow up with first.'
+                    'See who owes you money.',
+                    'Pick someone to follow up with.'
                 ];
             case 'payments':
                 return [
-                    'Review the most recent receipts.',
-                    'Compare collections for this month.',
-                    'Check if any payments are still pending.'
+                    'See recent payments.',
+                    'Check this month total.'
                 ];
             case 'expenses':
                 return [
-                    'Review current month spend.',
-                    'Inspect the top cost categories.',
-                    'Look for unusual or avoidable outflows.'
-                ];
-            case 'compliance':
-                return [
-                    'Check overdue tasks first.',
-                    'Review what is due this week.',
-                    'Use the list to prioritize filings and closures.'
-                ];
-            case 'customers':
-                return [
-                    'Review your highest-value clients.',
-                    'Identify clients with elevated churn risk.',
-                    'Decide on retention strategies for key accounts.'
+                    'See this month spending.',
+                    'Check top categories.'
                 ];
             default:
                 return [];
@@ -345,17 +382,10 @@ class AIGuidedDeskService {
             case 'invoices':
                 return [
                     {
-                        id: 'open_invoice_table',
-                        type: 'navigate',
-                        label: 'Open Full Invoice Table',
-                        description: 'Go to the full invoices screen with the complete table and filters.',
-                        to: '/dashboard/invoices'
-                    },
-                    {
                         id: 'create_invoice',
                         type: 'navigate',
                         label: 'Create Invoice',
-                        description: 'Open the dedicated invoice creation screen.',
+                        description: 'Quick create a new invoice.',
                         to: '/dashboard/invoices/new'
                     }
                 ];
@@ -364,8 +394,8 @@ class AIGuidedDeskService {
                     {
                         id: 'open_payments_page',
                         type: 'navigate',
-                        label: 'Open Payments Page',
-                        description: 'Go to the full payments screen.',
+                        label: 'View Payments',
+                        description: 'Go to payments page.',
                         to: '/dashboard/payments'
                     }
                 ];
@@ -374,29 +404,9 @@ class AIGuidedDeskService {
                     {
                         id: 'open_expenses_page',
                         type: 'navigate',
-                        label: 'Open Expenses Page',
-                        description: 'Go to the full expenses screen.',
+                        label: 'View Expenses',
+                        description: 'Go to expenses page.',
                         to: '/dashboard/expenses'
-                    }
-                ];
-            case 'compliance':
-                return [
-                    {
-                        id: 'open_compliance_page',
-                        type: 'navigate',
-                        label: 'Open Compliance Page',
-                        description: 'Go to the full compliance screen.',
-                        to: '/dashboard/compliance'
-                    }
-                ];
-            case 'customers':
-                return [
-                    {
-                        id: 'open_customers_page',
-                        type: 'navigate',
-                        label: 'Open Customers Page',
-                        description: 'Go to the full customers table and detail screen.',
-                        to: '/dashboard/customers'
                     }
                 ];
             default:
@@ -409,32 +419,25 @@ class AIGuidedDeskService {
             case 'invoices': {
                 const overdueCount = Number(data?.summary?.overdueCount || 0);
                 const overdueAmount = Number(data?.summary?.overdueAmount || 0);
-                const topDebtor = Array.isArray(data?.topDebtors) ? data.topDebtors[0] : null;
                 return {
-                    title: 'How To Analyze Invoices',
+                    title: 'Invoices',
                     summary: overdueCount > 0
-                        ? `Start with the overdue queue. There are ${overdueCount} overdue invoices totaling ${overdueAmount.toLocaleString()}.`
-                        : 'Start with the recent invoice feed, then check debtor concentration and outstanding balances.',
+                        ? `You have ${overdueCount} overdue invoices worth ₹${overdueAmount.toLocaleString()}.`
+                        : 'No overdue invoices. Great!',
                     steps: [
                         {
                             id: 'invoice_overdue',
-                            label: overdueCount > 0 ? `Review ${overdueCount} overdue invoices` : 'Review overdue queue',
+                            label: overdueCount > 0 ? `${overdueCount} Overdue` : 'All Good',
                             description: overdueCount > 0
-                                ? 'Use the overdue view to decide which customers need collection follow-up first.'
-                                : 'Use this view to check whether any receivables have slipped into overdue status.',
+                                ? 'See who to chase.'
+                                : 'No action needed.',
                             view: 'overdue'
                         },
                         {
-                            id: 'invoice_recent',
-                            label: 'Check recent invoice activity',
-                            description: 'Use the recent view to verify draft, sent, and recently raised invoices.',
-                            view: 'recent'
-                        },
-                        {
-                            id: 'invoice_debtors',
-                            label: topDebtor?.name ? `Inspect ${topDebtor.name}` : 'Inspect top debtors',
-                            description: 'Use the debtor view to see where receivable concentration is building up.',
-                            view: 'debtors'
+                            id: 'invoice_create',
+                            label: 'Create Invoice',
+                            description: 'Quick create a new invoice.',
+                            view: 'quick'
                         }
                     ],
                     selectedView
@@ -442,30 +445,23 @@ class AIGuidedDeskService {
             }
             case 'payments': {
                 const monthCollected = Number(data?.summary?.collectedThisMonth || 0);
-                const pendingCount = Number(data?.summary?.pendingCount || 0);
                 return {
-                    title: 'How To Analyze Payments',
+                    title: 'Money In',
                     summary: monthCollected > 0
-                        ? `Start with this month. Collections recorded so far are ${monthCollected.toLocaleString()}.`
-                        : 'Start with recent receipts, then check whether anything is still pending.',
+                        ? `You've received ₹${monthCollected.toLocaleString()} this month.`
+                        : 'No payments recorded this month.',
                     steps: [
                         {
                             id: 'payment_recent',
-                            label: 'Review recent receipts',
-                            description: 'Use the recent view to verify incoming payments and spot missing references.',
+                            label: 'Recent Payments',
+                            description: 'See latest payments.',
                             view: 'recent'
                         },
                         {
                             id: 'payment_monthly',
-                            label: 'Check this month collection trend',
-                            description: 'Use the monthly view to understand current cash-in performance.',
+                            label: 'This Month',
+                            description: 'Total received.',
                             view: 'monthly'
-                        },
-                        {
-                            id: 'payment_pending',
-                            label: pendingCount > 0 ? `Review ${pendingCount} pending items` : 'Review pending items',
-                            description: 'Use the pending view to isolate payments that are not fully settled yet.',
-                            view: 'pending'
                         }
                     ],
                     selectedView
@@ -473,87 +469,23 @@ class AIGuidedDeskService {
             }
             case 'expenses': {
                 const spendThisMonth = Number(data?.summary?.spendThisMonth || 0);
-                const topCategory = Array.isArray(data?.topCategories) ? data.topCategories[0] : null;
                 return {
-                    title: 'How To Analyze Expenses',
+                    title: 'Money Out',
                     summary: spendThisMonth > 0
-                        ? `Start with current month spend. Recorded outflow so far is ${spendThisMonth.toLocaleString()}.`
-                        : 'Start with recent expenses, then inspect category concentration.',
+                        ? `You've spent ₹${spendThisMonth.toLocaleString()} this month.`
+                        : 'No expenses recorded.',
                     steps: [
                         {
                             id: 'expense_monthly',
-                            label: 'Review current month spend',
-                            description: 'Use the monthly view to understand present cost pressure.',
-                            view: 'monthly'
-                        },
-                        {
-                            id: 'expense_recent',
-                            label: 'Inspect recent expense entries',
-                            description: 'Use the recent view to verify the latest expense records and vendor entries.',
-                            view: 'recent'
+                            label: 'This Month',
+                            description: 'Total spent.',
+                            view: 'overview'
                         },
                         {
                             id: 'expense_categories',
-                            label: topCategory?.category ? `Inspect ${topCategory.category}` : 'Inspect top categories',
-                            description: 'Use the categories view to find where most of the money is going.',
+                            label: 'Categories',
+                            description: 'Top spending categories.',
                             view: 'categories'
-                        }
-                    ],
-                    selectedView
-                };
-            }
-            case 'compliance': {
-                const overdueCount = Number(data?.summary?.overdueCount || 0);
-                const dueThisWeekCount = Number(data?.summary?.dueThisWeekCount || 0);
-                return {
-                    title: 'How To Analyze Compliance',
-                    summary: overdueCount > 0
-                        ? `Start with overdue tasks. There are ${overdueCount} items already past due.`
-                        : `Start with what is due this week. There are ${dueThisWeekCount} upcoming items to review.`,
-                    steps: [
-                        {
-                            id: 'compliance_urgent',
-                            label: overdueCount > 0 ? `Resolve ${overdueCount} overdue items` : 'Review urgent tasks',
-                            description: 'Use the urgent view to focus on the most time-sensitive tasks first.',
-                            view: 'urgent'
-                        },
-                        {
-                            id: 'compliance_week',
-                            label: dueThisWeekCount > 0 ? `Check ${dueThisWeekCount} tasks due this week` : 'Check due this week',
-                            description: 'Use this view to plan the immediate filing and submission workload.',
-                            view: 'due_this_week'
-                        },
-                        {
-                            id: 'compliance_recent',
-                            label: 'Review recent task updates',
-                            description: 'Use the recent view to inspect the latest status changes and closures.',
-                            view: 'recent'
-                        }
-                    ],
-                    selectedView
-                };
-            }
-            case 'customers': {
-                const customerData = Array.isArray(data?.customers) ? data.customers : [];
-                const customerCount = customerData.length;
-                const riskyCount = customerData.filter(c => (c.churn_risk_score || 0) > 50).length;
-                return {
-                    title: 'How To Analyze Customers',
-                    summary: riskyCount > 0
-                        ? `You have ${customerCount} total customers. ${riskyCount} show high churn risk and need attention.`
-                        : `Review your ${customerCount} customers to identify top growth opportunities.`,
-                    steps: [
-                        {
-                            id: 'customer_top',
-                            label: 'Identify top revenue clients',
-                            description: 'Focus on your most loyal and high-spending customers.',
-                            view: 'top_clients'
-                        },
-                        {
-                            id: 'customer_risk',
-                            label: riskyCount > 0 ? `Review ${riskyCount} risky clients` : 'Identify churn risk',
-                            description: 'Spot warning signs before clients churn by looking at engagement scores.',
-                            view: 'risk_analysis'
                         }
                     ],
                     selectedView

@@ -119,7 +119,7 @@ const FULL_DESK_CONFIG = {
     }
 };
 
-const DESK_CONFIG = FREELANCER_DESK_CONFIG;
+let DESK_CONFIG = FREELANCER_DESK_CONFIG;
 
 class AIGuidedDeskService {
     setBusinessType(businessType = 'solopreneur') {
@@ -255,47 +255,19 @@ class AIGuidedDeskService {
             throw new Error(`Unsupported AI workspace domain: ${domain}`);
         }
 
-        const response = await ({
-            invoices: () => aiReadModelService.getInvoiceWorkspace(organizationId),
-            payments: () => aiReadModelService.getPaymentWorkspace(organizationId),
-            expenses: () => aiReadModelService.getExpenseWorkspace(organizationId),
-        }[desk.domain])();
-
-        return {
-            component: desk.component,
-            domain: desk.domain,
-            label: desk.label,
-            specialistLabel: desk.specialistLabel,
-            selectedView: view,
-            availableViews: desk.views,
-            data: {
-                ...(response?.data || {}),
-                selectedView: view,
-                availableViews: desk.views,
-                workspaceLabel: desk.label,
-                workspaceDomain: desk.domain,
-                specialistLabel: desk.specialistLabel,
-                guidance: this._buildWorkspaceGuidance(desk.domain, response?.data || {}, view),
-                actions: this._getDomainActions(desk.domain)
-            },
-            meta: {
-                ...(response?.meta || {}),
-                component: desk.component,
-                domain: desk.domain,
-                selected_view: view,
-                label: desk.label
-            }
-        };
-    }
-}
-
-        const response = await ({
+        const workspaceLoader = ({
             invoices: () => aiReadModelService.getInvoiceWorkspace(organizationId),
             payments: () => aiReadModelService.getPaymentWorkspace(organizationId),
             expenses: () => aiReadModelService.getExpenseWorkspace(organizationId),
             compliance: () => aiReadModelService.getComplianceWorkspace(organizationId),
             customers: () => aiReadModelService.getCustomerPortfolio(organizationId)
-        }[desk.domain])();
+        }[desk.domain]);
+
+        if (!workspaceLoader) {
+            throw new Error(`No workspace loader configured for domain: ${desk.domain}`);
+        }
+
+        const response = await workspaceLoader();
 
         return {
             component: desk.component,

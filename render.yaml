@@ -5,6 +5,7 @@ services:
     plan: free # Change to 'starter' if you need a persistent disk later
     buildCommand: npm install
     startCommand: npm start
+    healthCheckPath: /health   # Render pings this to confirm the service is live
     envVars:
       - key: NODE_VERSION
         value: 20

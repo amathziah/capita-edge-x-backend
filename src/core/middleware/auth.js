@@ -10,7 +10,15 @@ export const authenticateUser = async (req, res, next) => {
         return res.status(401).json({ error: 'No authorization header provided' });
     }
 
-    const token = authHeader.replace('Bearer ', '');
+    // Use slice(7) instead of replace() to correctly handle case-sensitive
+    // "Bearer " prefix and avoid issues with double-spaces or lowercase.
+    if (!authHeader.startsWith('Bearer ') || authHeader.length <= 7) {
+        return res.status(401).json({ error: 'Malformed authorization header' });
+    }
+    const token = authHeader.slice(7).trim();
+    if (!token) {
+        return res.status(401).json({ error: 'No token provided' });
+    }
 
     try {
         // --- DEVELOPER BYPASS ---

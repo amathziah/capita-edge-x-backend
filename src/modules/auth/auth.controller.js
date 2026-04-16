@@ -81,37 +81,32 @@ const createOrganization = async (companyName) => {
 };
 
 /**
- * Helper to find a user by email via admin API (handles pagination)
+ * Helper to find a user by email via admin API.
+ * Uses the `filter` parameter introduced in supabase-js v2 to avoid a
+ * full-table scan across all users — critical for performance at scale.
  */
 const findUserByEmail = async (email) => {
     const searchEmail = email.trim().toLowerCase();
-    
+
     try {
-        console.log(`[Auth] Searching for user: ${searchEmail} using admin listUsers...`);
-        
-        // Paginated search through the user directory (non-mutating)
-        let page = 1;
-        while (true) {
-            const { data: { users, nextPageToken }, error } = await supabase.auth.admin.listUsers({
-                page,
-                perPage: 100 // Maximize capture per request
-            });
+        // Pass `filter` so Supabase only returns rows matching the email,
+        // then take the first page with a single result to keep it cheap.
+        const { data: { users }, error } = await supabase.auth.admin.listUsers({
+            page: 1,
+            perPage: 1,
+            filter: `email=${searchEmail}`,
+        });
 
-            if (error) throw error;
+        if (error) throw error;
 
-            const foundUser = users.find(u => u.email?.toLowerCase() === searchEmail);
-            if (foundUser) {
-                console.log('[Auth] Found user via admin listUsers');
-                return foundUser;
-            }
-
-            if (!nextPageToken) break;
-            page++;
+        const found = users?.[0]?.email?.toLowerCase() === searchEmail ? users[0] : null;
+        if (found) {
+            console.log('[Auth] Found user via admin listUsers (filtered)');
+            return found;
         }
 
-        console.log('[Auth] Detected: NEITHER (New User).');
+        console.log('[Auth] User not found:', searchEmail);
         return null;
-
     } catch (err) {
         console.error('[Auth] User lookup exception:', err);
         return null;

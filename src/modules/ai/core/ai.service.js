@@ -682,18 +682,26 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
                 const chat = modelInstance.startChat({ history });
                 const currentResult = await chat.sendMessageStream(prompt);
 
-                for await (const chunk of currentResult.stream) {
-                    try {
-                        const chunkText = chunk.text();
-                        if (chunkText) {
-                            fullText += chunkText;
-                            if (!useJsonMode) {
-                                yield { type: 'token', text: chunkText };
+                try {
+                    for await (const chunk of currentResult.stream) {
+                        try {
+                            const chunkText = chunk.text();
+                            if (chunkText) {
+                                fullText += chunkText;
+                                if (!useJsonMode) {
+                                    yield { type: 'token', text: chunkText };
+                                }
                             }
+                        } catch {
+                            // Ignore malformed chunk
                         }
-                    } catch {
-                        // Ignore empty chunks
                     }
+                } catch (streamErr) {
+                    // Stream-level error (parse failure, safety filter, etc.) — retry next model
+                    console.error(`[AI] Stream failed mid-way on ${modelName}:`, streamErr.message);
+                    fullText = '';
+                    lastError = streamErr;
+                    continue;
                 }
 
                 const finalResponse = await currentResult.response;

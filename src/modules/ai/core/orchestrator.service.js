@@ -293,12 +293,15 @@ class AIOrchestratorService {
             return response;
         }
 
-        // Simple greetings — static response to avoid unnecessary LLM calls
+        // Simple greetings / short acknowledgments — static response to avoid LLM calls
         const lowerQuery = String(query || '').toLowerCase().trim();
-        const isSimpleGreeting = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night))[\s!.?]*$/i.test(lowerQuery)
+        const isSimpleGreeting = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night)|okay|ok|alright|sure|got it|great|cool|sounds good|noted)[\s!.?]*$/i.test(lowerQuery)
             || /^how are you[\s!?.]*$/i.test(lowerQuery);
         if (isSimpleGreeting) {
-            const text = 'Hello — I am Capita, your AI CFO.\n\nI have access to your live financial workspace. Ask me about your cash position, overdue invoices, recent payments, or what you should focus on today.';
+            const isAck = /^(okay|ok|alright|sure|got it|great|cool|sounds good|noted)[\s!.?]*$/i.test(lowerQuery);
+            const text = isAck
+                ? 'What would you like to know? I can help with invoices, payments, expenses, compliance, GST, cash flow, or any general finance question.'
+                : 'Hello! I\'m Capita — your finance assistant.\n\nI can answer questions about invoices, payments, expenses, compliance, GST, cash flow, and more. I can also pull your live workspace data when you need specific numbers.\n\nWhat would you like to know?';
             const response = {
                 text,
                 action: null,

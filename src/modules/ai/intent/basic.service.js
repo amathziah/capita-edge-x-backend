@@ -136,8 +136,10 @@ class AIIntentService {
 
         if (includesAny([
             'overdue invoice', 'overdue invoices', 'which invoices need attention',
-            'invoice attention', 'invoice status', 'who owes me', 'collections',
-            'invoice', 'invoices', 'receivable', 'receivables', 'billing', 'billed'
+            'invoice attention', 'invoice status', 'who owes me', 'who owes',
+            'owe me', 'owes me', 'clients owe', 'customers owe', 'money owed',
+            'collections', 'invoice', 'invoices', 'receivable', 'receivables',
+            'billing', 'billed'
         ])) {
             return INTENTS.invoices_attention.id;
         }

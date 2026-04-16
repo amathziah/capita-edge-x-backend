@@ -52,9 +52,10 @@ class AIGroundingService {
 
         const noToolRules = !evidenceLines ? [
             '- NO_TOOL_RESULTS: This query did not retrieve any live workspace data.',
-            '- If the user is asking about their own invoices, payments, expenses, customers, or any private business figure: respond that you need to retrieve their data first and cannot answer without it.',
-            '- Do not mention, estimate, or approximate any private business number (revenue, count, amount, name, date) that is not in TOOL results.',
-            '- You can answer general knowledge questions (e.g. "what is GST?", "how does invoice factoring work?") and questions about yourself (e.g. "what can you do?", "give me questions I can ask you", "who are you") without live data.',
+            '- If the user is asking about their OWN invoices, payments, expenses, customers, or any private business figures (using "my", "our", "I have", "do I", etc.): say you need to retrieve their live data first and cannot answer without it.',
+            '- Do NOT mention, estimate, or approximate any private business number (revenue, count, amount, name, date) that is not in TOOL results.',
+            '- HOWEVER: If the question is general or educational (e.g. "what is GST?", "how does invoice factoring work?", "what are standard payment terms?", "explain TDS", "should I use net-30?"), answer it fully and helpfully as a knowledgeable CFO. No live data is needed for these.',
+            '- You can answer any general finance, tax, accounting, or business question that does not require the user\'s private data.',
             '- When the user asks what you can do or what questions they can ask, respond naturally as Capita — describe your capabilities across invoices, payments, expenses, compliance, cash flow, business health, and customers. Provide example questions they can try.',
         ] : [];
 
@@ -726,11 +727,14 @@ class AIGroundingService {
             return pattern.test(text);
         };
 
-        const privateDataSignals = [
-            'my ', 'our ', 'business', 'workspace', 'dashboard', 'revenue', 'profit',
-            'margin', 'cash flow', 'cashflow', 'safe to spend', 'overdue', 'invoice',
-            'invoices', 'customer', 'customers', 'client', 'clients', 'payment', 'payments',
-            'expense', 'expenses', 'receivable', 'receivables', 'runway'
+        // Only treat as private data when the user is asking about THEIR specific business
+        // state. Generic domain words alone (invoice, payment, expense) are not private.
+        const POSSESSIVE_RE = /\b(my|our|i have|do i|am i|are my|we have|i've|we've)\b/i;
+        const SPECIFIC_DATA_PHRASES = [
+            'safe to spend', 'cash flow', 'cashflow', 'runway',
+            'overdue amount', 'outstanding balance', 'total outstanding',
+            'how much (is |are )?(overdue|outstanding|pending)',
+            'what.*(i|we) owe', 'what.*(owe|owed)'
         ];
         const temporalSignals = [
             'today', 'current', 'currently', 'latest', 'recent', 'recently',
@@ -754,7 +758,15 @@ class AIGroundingService {
             'explore', 'navigate', 'system', 'capita', 'platform', 'capabilities'
         ];
 
-        const asksForPrivateData = privateDataSignals.some((signal) => text.includes(signal));
+        // Educational / general knowledge questions should always flow through to the LLM
+        const EDUCATIONAL_RE = /^(what is|what are|what's|how does|how do|how can|how should|explain|can you explain|tell me about|describe|define|what'?s the difference|why is|why are|when (is|are|should|do)|which|give me an? (overview|example|summary)|what (does|do)|what (would|should|could)|help me understand|is (it|there|a)|are (there|these)|should i|can i|do i need|what happens|how (much|many) (does|do|should|would|is|are|can))\b/i;
+        const isEducational = EDUCATIONAL_RE.test(text.trim());
+
+        const hasPossessiveIntent = POSSESSIVE_RE.test(text);
+        const hasSpecificDataPhrase = SPECIFIC_DATA_PHRASES.some(s =>
+            typeof s === 'string' ? text.includes(s) : new RegExp(s, 'i').test(text)
+        );
+        const asksForPrivateData = hasPossessiveIntent || hasSpecificDataPhrase;
         const asksForCurrentInfo = temporalSignals.some((signal) => text.includes(signal));
         const highStakesDomain = highStakesSignals.some((signal) => text.includes(signal));
         const isDomainQuestion = domainSignals.some((signal) => text.includes(signal));
@@ -762,9 +774,9 @@ class AIGroundingService {
         const requestsGuarantee = ['100%', 'guarantee', 'guaranteed', 'always correct', 'perfect answer']
             .some((signal) => text.includes(signal));
 
-        const shouldRefuseGeneralAnswer = !hasToolEvidence && !isConversationalSafe && (
+        const shouldRefuseGeneralAnswer = !hasToolEvidence && !isConversationalSafe && !isEducational && (
             asksForPrivateData ||
-            (highStakesDomain && asksForCurrentInfo)
+            (highStakesDomain && asksForCurrentInfo && !isEducational)
         );
 
         const confidence = hasToolEvidence ? 'grounded' : (shouldRefuseGeneralAnswer ? 'blocked' : 'general');
@@ -776,6 +788,7 @@ class AIGroundingService {
             highStakesDomain,
             isDomainQuestion,
             isConversationalSafe,
+            isEducational,
             requestsGuarantee,
             shouldRefuseGeneralAnswer,
             confidence
@@ -802,31 +815,36 @@ class AIGroundingService {
     buildUnsupportedAnswer(queryRisk = {}) {
         if (queryRisk.asksForPrivateData) {
             return [
-                'To answer this accurately, I need to pull your live workspace data first.',
+                'To answer this accurately, I need to retrieve your live workspace data.',
                 '',
-                'I only report numbers that come directly from your workspace — no estimates, no guesses.',
-                'Try rephrasing with a specific area: "show me my invoices", "what are my recent payments?", or "how is my cash position?"',
+                'I only report figures that come directly from your records — no estimates or guesses.',
                 '',
-                '→ Ask a workspace-specific question and I will retrieve the data and give you a grounded answer.'
+                'Try one of these:',
+                '- "Show me my invoices"',
+                '- "What are my recent payments?"',
+                '- "How is my cash position?"',
+                '- "Do I have any overdue filings?"',
+                '',
+                '→ Pick a workspace below to load your live data.'
             ].join('\n');
         }
 
         if (queryRisk.asksForCurrentInfo && queryRisk.highStakesDomain) {
             return [
-                'This touches on regulatory or legal territory where rules change — I cannot give you a definitive current answer without verified sources.',
+                'This involves regulatory rules that change — I cannot give a definitive current answer without verified sources.',
                 '',
-                '- For GST, TDS, and tax rates: always verify against the latest CBIC or Income Tax portal guidance.',
-                '- I can help you track your specific compliance tasks and deadlines from your workspace.',
+                '- For GST, TDS, and tax rates: always verify against the latest CBIC or Income Tax portal.',
+                '- I can track your specific compliance tasks and deadlines from your workspace.',
                 '',
-                '→ Ask me about your specific compliance tasks ("do I have any overdue filings?") and I will pull the live data.'
+                '→ Ask "do I have any overdue filings?" and I will pull your live compliance data.'
             ].join('\n');
         }
 
         return [
-            'I need more context to answer this accurately.',
+            'I need more context to give a useful answer.',
             '',
             'Try asking about a specific area: invoices, payments, expenses, compliance, or cash position.',
-            '→ The more specific your question, the more useful my answer will be.'
+            '→ The more specific your question, the more grounded my answer will be.'
         ].join('\n');
     }
 

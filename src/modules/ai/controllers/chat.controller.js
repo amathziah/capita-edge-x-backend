@@ -199,7 +199,12 @@ export const processChatStream = async (req, res) => {
     } catch (error) {
         console.error('processChatStream error:', error.message);
         if (!aborted) {
-            send({ type: 'error', message: error.message || 'AI processing failed.' });
+            const userMessage = error.message?.includes('GoogleGenerativeAI') ||
+                error.message?.includes('parse stream') ||
+                error.message?.includes('fetch failed')
+                ? 'The AI service hit a temporary issue. Please try again.'
+                : (error.message || 'AI processing failed.');
+            send({ type: 'error', message: userMessage });
         }
     } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);

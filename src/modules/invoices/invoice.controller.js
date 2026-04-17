@@ -842,11 +842,6 @@ export const sendInvoiceEmail = async (req, res) => {
         if (vaultPass) settingsObj.smtp_pass = vaultPass;
     }
 
-    // Email Service Validation
-    if (!settingsObj?.smtp_user || !settingsObj?.smtp_pass) {
-        throw new APIError('Email service not configured. Please go to Settings to connect your Gmail account.', 400);
-    }
-
     if (settingsObj.logoFilename) settingsObj.logoPath = fileService.getFilePath(settingsObj.logoFilename);
 
     // PDF Logic

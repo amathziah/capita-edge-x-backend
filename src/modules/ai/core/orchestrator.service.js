@@ -4,7 +4,6 @@ import aiIntentService from '../intent/basic.service.js';
 import aiEnhancedIntentService from '../intent/enhanced.service.js';
 import aiGuidedDeskService from '../workspace/guidedDesk.service.js';
 import aiService from './ai.service.js';
-import aiAgentService from '../agent/agent.service.js';
 import aiCachingService from '../infra/cache.service.js';
 import aiSessionManagerService from '../agent/session.service.js';
 
@@ -43,35 +42,8 @@ class AIOrchestratorService {
             lastQuery: context.lastQuery
         });
 
-        // Determine if we need agent-style multi-step reasoning
-        const needsAgent = intentResult.complexity === 'complex' || 
-                          intentResult.requiresComparison ||
-                          intentResult.requiresReasoning ||
-                          intentResult.isMultiStep;
-
-        let tools = [];
+        let tools = aiEnhancedIntentService.getToolsForIntents([intentResult.primaryIntent, ...intentResult.secondaryIntents]);
         let intent = intentResult.primaryIntent;
-
-        if (needsAgent) {
-            // Use agent service for complex queries
-            console.log('[Orchestrator] Using agent service for complex query');
-            const agentPlan = await aiAgentService.generatePlan(
-                { intents: [intent, ...intentResult.secondaryIntents], complexity: intentResult.complexity },
-                context
-            );
-            
-            // Convert agent plan steps to tools
-            for (const step of agentPlan.steps) {
-                for (const toolId of step.tools) {
-                    if (!tools.find(t => t.toolId === toolId)) {
-                        tools.push({ toolId, args: {} });
-                    }
-                }
-            }
-        } else {
-            // Use standard tool selection
-            tools = aiEnhancedIntentService.getToolsForIntents([intent, ...intentResult.secondaryIntents]);
-        }
 
         // Fallback: If no tools detected but data-driven intent found
         if (tools.length === 0) {
@@ -93,9 +65,6 @@ class AIOrchestratorService {
             tools,
             confidence: intentResult.confidence,
             complexity: intentResult.complexity,
-            isMultiStep: intentResult.isMultiStep || needsAgent,
-            requiresComparison: intentResult.requiresComparison,
-            requiresReasoning: intentResult.requiresReasoning,
             suggestedActions: intentResult.suggestedActions,
             timeRange: intentResult.timeRange,
             parsedEntities: intentResult.parsedEntities
@@ -108,14 +77,11 @@ class AIOrchestratorService {
     }
 
     async executePlan(plan, context = {}) {
-        const toolResults = [];
-        const failedTools = [];
         const traceId = plan.traceId || null;
+        const steps = plan.tools || [];
 
-        for (const step of plan.tools || []) {
+        const settled = await Promise.allSettled(steps.map(async (step) => {
             const definition = aiToolRegistryService.getToolDefinition(step.toolId);
-
-            // Check cache for tool results
             const cacheKey = aiCachingService.getCacheKey(
                 'tool',
                 context.organizationId,
@@ -124,56 +90,60 @@ class AIOrchestratorService {
             const cachedResult = aiCachingService.getFromMemory(cacheKey);
 
             if (cachedResult) {
-                toolResults.push({
+                return {
                     toolId: step.toolId,
                     label: definition?.label || step.toolId,
                     uiComponent: definition?.uiComponent || null,
                     args: step.args || {},
                     result: cachedResult
-                });
-                continue;
+                };
             }
 
-            try {
-                const result = await aiToolRegistryService.executeTool(step.toolId, context, step.args || {});
+            const result = await aiToolRegistryService.executeTool(step.toolId, context, step.args || {});
+            aiCachingService.setMemoryCache(cacheKey, result, 'workspace');
 
-                aiCachingService.setMemoryCache(cacheKey, result, 'workspace');
+            aiTraceService.log({
+                traceId,
+                organizationId: context.organizationId,
+                userId: context.user?.id,
+                conversationId: context.conversationId || null,
+                stage: 'tool',
+                toolId: step.toolId,
+                query: context.query || null,
+                input: { args: step.args || {} },
+                output: { meta: result?.meta || {}, data: result?.data || {} }
+            }).catch(() => {});
 
-                await aiTraceService.log({
+            return {
+                toolId: step.toolId,
+                label: definition?.label || step.toolId,
+                uiComponent: definition?.uiComponent || null,
+                args: step.args || {},
+                result
+            };
+        }));
+
+        const toolResults = [];
+        const failedTools = [];
+
+        settled.forEach((outcome, i) => {
+            if (outcome.status === 'fulfilled') {
+                toolResults.push(outcome.value);
+            } else {
+                const step = steps[i];
+                console.error(`[Orchestrator] Tool ${step.toolId} failed:`, outcome.reason?.message);
+                failedTools.push({ toolId: step.toolId, error: outcome.reason?.message || String(outcome.reason) });
+                aiTraceService.log({
                     traceId,
                     organizationId: context.organizationId,
                     userId: context.user?.id,
-                    conversationId: context.conversationId || null,
-                    stage: 'tool',
-                    toolId: step.toolId,
-                    query: context.query || null,
-                    input: { args: step.args || {} },
-                    output: { meta: result?.meta || {}, data: result?.data || {} }
-                });
-
-                toolResults.push({
-                    toolId: step.toolId,
-                    label: definition?.label || step.toolId,
-                    uiComponent: definition?.uiComponent || null,
-                    args: step.args || {},
-                    result
-                });
-            } catch (error) {
-                console.error(`[Orchestrator] Tool ${step.toolId} failed:`, error.message);
-                failedTools.push({ toolId: step.toolId, error: error?.message || String(error) });
-                await aiTraceService.log({
-                    traceId,
-                    organizationId: context.organizationId,
-                    userId: context.user?.id,
-                    conversationId: context.conversationId || null,
                     stage: 'error',
                     toolId: step.toolId,
-                    query: context.query || null,
                     input: { args: step.args || {} },
-                    output: { error: error?.message || String(error) }
-                });
+                    output: { error: outcome.reason?.message || String(outcome.reason) }
+                }).catch(() => {});
             }
-        }
+        });
 
         return { toolResults, failedTools };
     }
@@ -321,42 +291,6 @@ class AIOrchestratorService {
             return response;
         }
 
-        // Complex query - use agent service
-        if (plan.isMultiStep || plan.requiresComparison) {
-            console.log('[Orchestrator] Handling complex query with agent service');
-
-            const agentResult = await aiAgentService.execute(query, enhancedContext);
-            
-            // Use agent's aggregated results
-            const execution = {
-                intent: plan.intent,
-                primaryDomain: plan.primaryDomain,
-                specialistLabel: plan.specialistLabel,
-                mode: 'grounded',
-                toolResults: agentResult.steps.map(s => ({
-                    toolId: s.toolId,
-                    result: s.result
-                })),
-                traceId
-            };
-
-            const response = await aiService.generateGroundedAnswer(query, enhancedContext, execution);
-            response.traceId = traceId;
-            response.data.reasoning = agentResult.reasoning;
-            response.data.steps = agentResult.steps;
-
-            // Update session with entities
-            if (plan.parsedEntities) {
-                aiSessionManagerService.extractEntities(session, plan.parsedEntities);
-            }
-            aiSessionManagerService.addMessage(session, { role: 'assistant', content: response.text, intent: plan.intent, domain: plan.primaryDomain });
-
-            // Cache response
-            await aiCachingService.set('chat', context.organizationId, query, response, { persist: true });
-
-            return response;
-        }
-
         // Standard query execution
         const { toolResults, failedTools } = await this.executePlan(plan, enhancedContext);
 
@@ -491,56 +425,6 @@ class AIOrchestratorService {
                 },
                 traceId
             };
-            return;
-        }
-
-        // Complex query with agent
-        if (plan.isMultiStep || plan.requiresComparison) {
-            const stream = aiAgentService.executeStream(query, enhancedContext);
-
-            for await (const chunk of stream) {
-                if (chunk.type === 'step_complete') {
-                    yield { type: 'progress', tool: chunk.tool, step: chunk.step };
-                }
-            }
-
-            const agentResult = await aiAgentService.execute(query, enhancedContext);
-            
-            const execution = {
-                intent: plan.intent,
-                primaryDomain: plan.primaryDomain,
-                specialistLabel: plan.specialistLabel,
-                mode: 'grounded',
-                toolResults: agentResult.steps.map(s => ({
-                    toolId: s.toolId,
-                    result: s.result
-                })),
-                traceId
-            };
-
-            const stream2 = aiService.generateGroundedAnswerStream(query, enhancedContext, execution);
-            
-            for await (const chunk of stream2) {
-                if (chunk.type === 'token') {
-                    yield chunk;
-                } else if (chunk.type === 'complete') {
-                    yield { 
-                        ...chunk, 
-                        traceId,
-                        data: {
-                            ...chunk.data,
-                            reasoning: agentResult.reasoning,
-                            steps: agentResult.steps
-                        }
-                    };
-                }
-            }
-            
-            if (plan.parsedEntities) {
-                aiSessionManagerService.extractEntities(session, plan.parsedEntities);
-            }
-            aiSessionManagerService.addMessage(session, { role: 'assistant', content: '', intent: plan.intent, domain: plan.primaryDomain });
-            
             return;
         }
 

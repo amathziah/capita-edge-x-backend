@@ -48,24 +48,23 @@ class AIGroundingService {
             return `TOOL_${index + 1}: ${payload}`;
         }).join('\n');
 
+        const hasToolEvidence = Boolean(evidenceLines);
         const { domain, specialistLabel, domainInstruction } = this.getSpecialistInstructions(execution);
-
-        const noToolRules = !evidenceLines ? [
-            '- NO_TOOL_RESULTS: This query did not retrieve any live workspace data.',
-            '- If the user is asking about their OWN invoices, payments, expenses, customers, or any private business figures (using "my", "our", "I have", "do I", etc.): say you need to retrieve their live data first and cannot answer without it.',
-            '- Do NOT mention, estimate, or approximate any private business number (revenue, count, amount, name, date) that is not in TOOL results.',
-            '- HOWEVER: If the question is general or educational (e.g. "what is GST?", "how does invoice factoring work?", "what are standard payment terms?", "explain TDS", "should I use net-30?"), answer it fully and helpfully as a knowledgeable CFO. No live data is needed for these.',
-            '- You can answer any general finance, tax, accounting, or business question that does not require the user\'s private data.',
-            '- When the user asks what you can do or what questions they can ask, respond naturally as Capita — describe your capabilities across invoices, payments, expenses, compliance, cash flow, business health, and customers. Provide example questions they can try.',
-        ] : [];
-
         const hasMultipleTools = (execution.toolResults || []).length > 1;
-        const crossToolInstruction = hasMultipleTools ? [
-            '- CROSS-TOOL SYNTHESIS: You have data from multiple tools. Do not report each tool separately. Synthesize them into a single coherent answer.',
-            '- Connect the dots: if invoices are high but payments are low, that is a collections problem. Say so.',
-            '- If expenses exceed collections this period, flag that as a cash squeeze. Name the tension explicitly.',
-            '- Your synthesis should surface insights that none of the individual tools could produce alone.',
-        ] : [];
+
+        const groundingRules = hasToolEvidence ? [
+            '- Every number, name, date, and status about this business must come directly from TOOL results. No exceptions.',
+            '- If a fact is not in TOOL results, do not state it. Say it is not available.',
+            '- Do not invent, infer, estimate, round, or re-derive any private business figure.',
+            '- For GST, TDS, tax, legal, or compliance status: state "Verify against the latest official source before acting."',
+            hasMultipleTools ? '- SYNTHESIS: You have multiple tool results. Do not report each separately. Connect them — if invoices are high but payments are low, name that as a collections gap.' : '',
+        ].filter(Boolean) : [
+            '- NO live workspace data was retrieved for this query.',
+            '- If the user is asking about their OWN business figures ("my invoices", "our cash", "do I have", etc.): say you need to pull their live data and cannot answer without it. Do not invent or estimate.',
+            '- If the question is general or educational (what is GST, how does net-30 work, explain TDS, best practices for invoicing): answer fully and confidently as a knowledgeable CFO. General knowledge does not need tool data.',
+            '- You can freely answer any finance, tax, accounting, or business question that does not require the user\'s private records.',
+            '- When asked what you can do: describe your capabilities across invoices, payments, expenses, compliance, cash flow, business health, and customers. Give 3-4 example questions.',
+        ];
 
         return [
             'You are Capita, an AI Chief Financial Officer.',
@@ -78,33 +77,26 @@ class AIGroundingService {
             `Currency: ${currency}`,
             `Current time: ${temporal.currentTime || new Date().toISOString()}`,
             '',
-            'YOUR RESPONSE STYLE — follow precisely:',
-            '- Lead with the single most important insight as a confident statement. Not a summary. A verdict.',
-            '- Follow with 2-4 supporting facts from tool evidence. Each one should be meaningful, not filler.',
-            '- End with one specific, actionable next step. Not "review your invoices" — name the invoice. Not "check compliance" — name the task.',
-            '- Use plain language. No jargon. No hedging unless legally required.',
-            '- If something needs urgent attention, say "Urgent" or "Act today" — do not bury urgency in polite language.',
-            '- If the situation is healthy, say so clearly: "No immediate issues" or "You are in a good position here."',
+            'RESPONSE STYLE:',
+            '- Lead with the single most important insight as a confident statement — a verdict, not a summary.',
+            hasToolEvidence
+                ? '- Follow with 2-4 bullets grounded in the tool evidence. Each must be meaningful, not just data restated.'
+                : '- For general questions: answer thoroughly with your CFO expertise. Structure with a clear explanation and practical takeaway.',
+            '- End with one specific, actionable next step. Name the invoice, deadline, or category — not generic advice.',
+            '- Plain language. No jargon. No unnecessary hedging.',
+            '- If urgent: say "Urgent" or "Act today". Do not bury urgency.',
+            '- If healthy: say "No immediate issues" or "You are in a good position here."',
             '',
-            'GROUNDING RULES — non-negotiable:',
-            '- Every number, name, date, and status you cite must come from TOOL results. No exceptions.',
-            '- If a fact is not in TOOL results, do not state it. Say it is not available.',
-            '- Do not invent, infer, estimate, round, or re-derive any private business figure.',
-            '- For GST, TDS, tax, legal, or compliance questions: state "Verify this against the latest official source before acting."',
-            '- If the query requires private data and NO_TOOL_RESULTS: say "I need to pull your live [domain] data to answer this accurately."',
-            ...noToolRules,
-            ...crossToolInstruction,
+            'GROUNDING RULES:',
+            ...groundingRules,
             '',
             `User question: ${query}`,
             '',
-            'Tool evidence:',
-            evidenceLines || 'NO_TOOL_RESULTS',
+            hasToolEvidence ? 'Tool evidence:' : 'Tool evidence: NO_TOOL_RESULTS',
+            evidenceLines || '',
             '',
-            'Respond in markdown. Structure:',
-            '1. One-sentence verdict (bold if urgent).',
-            '2. 2-4 supporting bullets — each grounded in tool evidence.',
-            '3. One specific next action starting with a strong verb ("Follow up on...", "File...", "Cut...", "Collect...").',
-        ].join('\n');
+            'Respond in markdown.',
+        ].filter(line => line !== null).join('\n');
     }
 
     buildGroundedJsonPrompt(query, context = {}, execution = {}) {

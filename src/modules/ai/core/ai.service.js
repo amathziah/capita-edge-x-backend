@@ -470,9 +470,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
             throw new Error('Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.');
         }
 
-        const prompt = execution.toolResults?.length
-            ? this.buildGroundedJsonPrompt(query, context, execution)
-            : this.buildEvidencePrompt(query, context, execution);
+        const prompt = this.buildEvidencePrompt(query, context, execution);
         const rawHistory = context.history || [];
         const history = this._sanitiseHistory(rawHistory);
         const targetModels = [selectedModel.name, ...(budget.models || this.models).filter(m => m !== selectedModel.name)];
@@ -481,8 +479,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         for (const modelName of targetModels) {
             try {
                 this._consumeToken();
-                const useJsonMode = Boolean(execution.toolResults?.length);
-                const modelInstance = this.getModel(modelName, useJsonMode, false);
+                const modelInstance = this.getModel(modelName, false, false);
                 if (!modelInstance) continue;
 
                 const chat = modelInstance.startChat({ history });
@@ -491,51 +488,8 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
                 const budgetStatus = await this.getBudgetStatus(userId, orgId);
                 const rawText = response.text().trim();
 
-                if (useJsonMode) {
-                    let payload = null;
-                    try {
-                        payload = JSON.parse(rawText);
-                    } catch {
-                        payload = null;
-                    }
-
-                    const validation = this.validateGroundedPayload(payload || {}, execution, queryRisk);
-                    if (!payload || !validation.ok || payload.verification_status === 'insufficient_evidence') {
-                        const fallbackText = execution.toolResults?.length
-                            ? this.buildToolBackedFallbackAnswer(query, execution)
-                            : this.buildUnverifiedAnswer(queryRisk, validation.issues);
-                        return {
-                            text: this._sanitizeAssistantText(fallbackText),
-                            action: null,
-                            data: {
-                                ...this.buildSafetyMetadata(execution, queryRisk),
-                                verificationIssues: validation.issues,
-                                usedToolFallback: Boolean(execution.toolResults?.length)
-                            },
-                            usage: response.usageMetadata,
-                            provider: execution.toolResults?.length
-                                ? `system:grounding_fallback:${modelName}`
-                                : `system:grounding_guard:${modelName}`,
-                            budget: budgetStatus
-                        };
-                    }
-
-                    this.dedupService.markComplete(orgId, dedupParams).catch(() => {});
-                    return {
-                        text: this._sanitizeAssistantText(this.formatGroundedPayload(payload)),
-                        action: this.extractAction(payload.next_action, query),
-                        data: {
-                            ...this.buildSafetyMetadata(execution, queryRisk),
-                            verificationStatus: payload.verification_status
-                        },
-                        usage: response.usageMetadata,
-                        provider: `cloud:${modelName}:orchestrated`,
-                        budget: budgetStatus
-                    };
-                }
-
-                // Guard: if no tool evidence, reject any response that contains
-                // private-data numbers (amounts, counts, dates) to prevent hallucination.
+                // Guard: no tool evidence + private data query → reject any numeric response
+                // to prevent the LLM from hallucinating the user's own business figures.
                 if (!execution.toolResults?.length && queryRisk.asksForPrivateData) {
                     const strayNumbers = this._extractClaimNumbers(rawText);
                     if (strayNumbers.length > 0) {
@@ -545,7 +499,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
                             action: null,
                             data: {
                                 ...this.buildSafetyMetadata(execution, queryRisk),
-                                verificationIssues: [`evidence_prompt_numeric_hallucination:${strayNumbers.slice(0, 3).join(',')}`]
+                                verificationIssues: [`hallucination_guard:${strayNumbers.slice(0, 3).join(',')}`]
                             },
                             usage: response.usageMetadata,
                             provider: `system:hallucination_guard:${modelName}`,
@@ -574,9 +528,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         if (lastError && this.isRetryable(lastError)) {
             console.error('[AI] All models exhausted. Last error:', lastError.message);
             return {
-                text: this._sanitizeAssistantText(execution.toolResults?.length
-                    ? this.buildToolBackedFallbackAnswer(query, execution)
-                    : 'I’m temporarily unable to reach the AI model. Try again in a moment or ask a narrower grounded question.'),
+                text: 'The AI service is temporarily unavailable. Please try again in a moment.',
                 action: null,
                 data: this.buildSafetyMetadata(execution, queryRisk),
                 usage: null,
@@ -663,9 +615,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
             throw new Error('Cloud Busy: AI engine is currently in cooldown. Please try again in 60s.');
         }
 
-        const prompt = execution.toolResults?.length
-            ? this.buildGroundedJsonPrompt(query, context, execution)
-            : this.buildEvidencePrompt(query, context, execution);
+        const prompt = this.buildEvidencePrompt(query, context, execution);
         const rawHistory = context.history || [];
         const history = this._sanitiseHistory(rawHistory);
         const targetModels = [selectedModel.name, ...(budget.models || this.models).filter(m => m !== selectedModel.name)];
@@ -675,8 +625,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         for (const modelName of targetModels) {
             try {
                 this._consumeToken();
-                const useJsonMode = Boolean(execution.toolResults?.length);
-                const modelInstance = this.getModel(modelName, useJsonMode, false);
+                const modelInstance = this.getModel(modelName, false, false);
                 if (!modelInstance) continue;
 
                 const chat = modelInstance.startChat({ history });
@@ -688,16 +637,13 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
                             const chunkText = chunk.text();
                             if (chunkText) {
                                 fullText += chunkText;
-                                if (!useJsonMode) {
-                                    yield { type: 'token', text: chunkText };
-                                }
+                                yield { type: 'token', text: chunkText };
                             }
                         } catch {
                             // Ignore malformed chunk
                         }
                     }
                 } catch (streamErr) {
-                    // Stream-level error (parse failure, safety filter, etc.) — retry next model
                     console.error(`[AI] Stream failed mid-way on ${modelName}:`, streamErr.message);
                     fullText = '';
                     lastError = streamErr;
@@ -706,57 +652,9 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
 
                 const finalResponse = await currentResult.response;
                 const budgetStatus = await this.getBudgetStatus(userId, orgId);
-
                 const rawText = fullText.trim();
 
-                if (useJsonMode) {
-                    let payload = null;
-                    try {
-                        payload = JSON.parse(rawText);
-                    } catch {
-                        payload = null;
-                    }
-
-                    const validation = this.validateGroundedPayload(payload || {}, execution, queryRisk);
-                    if (!payload || !validation.ok || payload.verification_status === 'insufficient_evidence') {
-                        const fallbackText = execution.toolResults?.length
-                            ? this.buildToolBackedFallbackAnswer(query, execution)
-                            : this.buildUnverifiedAnswer(queryRisk, validation.issues);
-                        yield {
-                            type: 'complete',
-                        text: this._sanitizeAssistantText(fallbackText),
-                            action: null,
-                            usage: finalResponse?.usageMetadata,
-                            provider: execution.toolResults?.length
-                                ? `system:grounding_fallback:${modelName}`
-                                : `system:grounding_guard:${modelName}`,
-                            budget: budgetStatus,
-                            data: {
-                                ...this.buildSafetyMetadata(execution, queryRisk),
-                                verificationIssues: validation.issues,
-                                usedToolFallback: Boolean(execution.toolResults?.length)
-                            }
-                        };
-                        return;
-                    }
-
-                    this.dedupService.markComplete(orgId, streamDedupParams).catch(() => {});
-                    yield {
-                        type: 'complete',
-                        text: this._sanitizeAssistantText(this.formatGroundedPayload(payload)),
-                        action: this.extractAction(payload.next_action, query),
-                        usage: finalResponse?.usageMetadata,
-                        provider: `cloud:${modelName}:orchestrated`,
-                        budget: budgetStatus,
-                        data: {
-                            ...this.buildSafetyMetadata(execution, queryRisk),
-                            verificationStatus: payload.verification_status
-                        }
-                    };
-                    return;
-                }
-
-                // Guard: reject any evidence-prompt response that contains private-data numbers
+                // Guard: no tool evidence + private data query → reject numeric hallucinations.
                 if (!execution.toolResults?.length && queryRisk.asksForPrivateData) {
                     const strayNumbers = this._extractClaimNumbers(rawText);
                     if (strayNumbers.length > 0) {
@@ -770,7 +668,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
                             budget: budgetStatus,
                             data: {
                                 ...this.buildSafetyMetadata(execution, queryRisk),
-                                verificationIssues: [`evidence_prompt_numeric_hallucination:${strayNumbers.slice(0, 3).join(',')}`]
+                                verificationIssues: [`hallucination_guard:${strayNumbers.slice(0, 3).join(',')}`]
                             }
                         };
                         return;
@@ -801,9 +699,7 @@ If no tools are needed (e.g. pure conversational or pure navigation action_reque
         if (lastError && this.isRetryable(lastError)) {
             yield {
                 type: 'complete',
-                text: this._sanitizeAssistantText(execution.toolResults?.length
-                    ? this.buildToolBackedFallbackAnswer(query, execution)
-                    : 'I’m temporarily unable to reach the AI model. Try again in a moment or ask a narrower grounded question.'),
+                text: 'The AI service is temporarily unavailable. Please try again in a moment.',
                 action: null,
                 usage: null,
                 provider: 'system:model_fallback',

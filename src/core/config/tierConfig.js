@@ -210,25 +210,25 @@ export const hasTierFeature = (tier, feature) => {
 // ═══════════════════════════════════════════════════════════════════════
 
 export const AI_PRICING = {
-    'gemini-3.1-flash-preview': {
-        inputPer1M: 0.10,  // USD (Est)
-        outputPer1M: 0.40,  // USD (Est)
-    },
-    'gemini-3-flash-preview': {
-        inputPer1M: 0.10,
-        outputPer1M: 0.40,
-    },
+    // Primary — Tier-1: 1K RPM, 10K RPD
     'gemini-2.5-flash': {
         inputPer1M: 0.075,
         outputPer1M: 0.30,
     },
-    'gemini-2.5-pro': {
-        inputPer1M: 0.125,
-        outputPer1M: 0.375,
+    // Fallback 1 — Tier-1: 4K RPM, unlimited RPD (most headroom)
+    'gemini-2.5-flash-lite': {
+        inputPer1M: 0.018,
+        outputPer1M: 0.072,
     },
+    // Fallback 2 — Tier-1: 2K RPM, unlimited RPD
     'gemini-2.0-flash': {
         inputPer1M: 0.075,
         outputPer1M: 0.30,
+    },
+    // Embedding (intent classification only)
+    'gemini-embedding-001': {
+        inputPer1M: 0.00,
+        outputPer1M: 0.00,
     },
 };
 

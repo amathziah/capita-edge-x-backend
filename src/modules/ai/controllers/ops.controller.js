@@ -34,13 +34,13 @@ export const negotiateSettlement = async (req, res) => {
     if (error || !invoice) throw new APIError('Invoice not found', 404);
 
     const offer = await aiService.generateSettlementOffer(invoice);
-    const { tokens, cost } = calculateAICost(offer?.usage, 'gemini-2.0-flash');
+    const { tokens, cost } = calculateAICost(offer?.usage, 'gemini-2.5-flash');
 
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         customer_id: invoice.customer_id,
-        model_name: 'gemini-2.0-flash',
+        model_name: 'gemini-2.5-flash',
         total_tokens: tokens,
         cost
     }]);
@@ -64,12 +64,12 @@ export const processCommand = async (req, res) => {
     if (!command) throw new APIError('Command text required', 400);
 
     const action = await aiService.parseCommand(command);
-    const { tokens, cost } = calculateAICost(action.usage, 'gemini-2.0-flash');
+    const { tokens, cost } = calculateAICost(action.usage, 'gemini-2.5-flash');
 
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model_name: 'gemini-2.0-flash',
+        model_name: 'gemini-2.5-flash',
         total_tokens: tokens,
         cost
     }]);
@@ -103,13 +103,13 @@ export const generateCollectionDraft = async (req, res) => {
     if (error || !invoice) throw new APIError('Invoice not found', 404);
 
     const draft = await aiService.generateCollectionDraft(invoice, 'INR', forceAggressive);
-    const { tokens, cost } = calculateAICost(draft.usage, 'gemini-2.0-flash');
+    const { tokens, cost } = calculateAICost(draft.usage, 'gemini-2.5-flash');
 
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
         customer_id: invoice.customer_id,
-        model_name: 'gemini-2.0-flash',
+        model_name: 'gemini-2.5-flash',
         total_tokens: tokens,
         cost
     }]);

@@ -9,7 +9,7 @@ import AIGroundingService from './grounding.service.js';
 import AIRuntimeService from './runtime.service.js';
 import AIStructuredTaskService from './structuredTask.service.js';
 import circuitBreakerService from '../../../core/services/circuitBreaker.service.js';
-import aiModelRouterService from '../infra/modelRouter.service.js';
+import aiModelRouterService, { MODEL_FALLBACK_CHAIN } from '../infra/modelRouter.service.js';
 import aiCacheService from '../infra/responseCache.service.js';
 import aiDeduplicationService from '../infra/deduplication.service.js';
 import aiObservabilityService from '../../../core/services/aiObservability.service.js';
@@ -50,17 +50,19 @@ class AIService {
 // TIER CONFIG — Same model quality for ALL tiers.
         // Strategy: Gate by FEATURES + QUERY COUNT, not model intelligence.
         // Free users get amazing answers → converts to paid.
+        // All tiers share the same ordered fallback chain so a 429 on
+        // gemini-2.5-flash automatically retries on the lite/2.0 variants.
         // ═══════════════════════════════════════════════════
         this.tierModels = {
-            starter: ['gemini-2.5-flash'],
-            free:    ['gemini-2.5-flash'],
-            solo:    ['gemini-2.5-flash'],
-            solo_pro: ['gemini-2.5-flash'],
-            enterprise: ['gemini-2.5-flash'],
+            starter:    MODEL_FALLBACK_CHAIN,
+            free:       MODEL_FALLBACK_CHAIN,
+            solo:       MODEL_FALLBACK_CHAIN,
+            solo_pro:   MODEL_FALLBACK_CHAIN,
+            enterprise: MODEL_FALLBACK_CHAIN,
         };
 
         // Defaults/Fallback
-        this.models = ['gemini-2.5-flash'];
+        this.models = MODEL_FALLBACK_CHAIN;
         this.budgetService = new AIBudgetService({
             tierModels: this.tierModels,
             fallbackModels: this.models
@@ -327,7 +329,7 @@ Available Tools:
 ${JSON.stringify(tools, null, 2)}
 
 Intent Categories:
-- conversational: greetings, "what can you do?", or pure small-talk
+- conversational: ANY greeting, small-talk, or non-financial message. Examples: "hi", "hello", "how are you", "how are you doing", "good morning", "thanks", "who are you", "what can you do", "are you online", "how's it going". These NEVER need tools.
 - business_health: broad queries like "how is my business", "what should I focus on"
 - cash_flow: "safe to spend", "cash runway", "liquidity"
 - payments_recent: queries specifically about recent collections or received payments
@@ -337,7 +339,7 @@ Intent Categories:
 - compliance_knowledge: queries about tax rules, HR policies, general compliance (not workspace-specific)
 - customer_insights: "who is my top customer", "biggest client", "customer health", "regular customers"
 - action_request: PURE NAVIGATION ONLY. e.g. "open invoices", "go to dashboard", "create a customer". NEVER use this for data questions.
-- general_advice: open-ended non-data queries that do not match above.
+- general_advice: open-ended financial/business questions that do not require live data and do not match the above categories. NOT for greetings or small-talk — those are always conversational.
 
 Rules for Tool Selection:
 - If the user uses possessive pronouns ("my", "our") or mentions private business entities (their invoices, their customers), you MUST select at least one relevant tool.

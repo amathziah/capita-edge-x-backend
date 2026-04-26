@@ -8,7 +8,7 @@ export const insightsCache = new Map();
 export const CACHE_TTL = LIMITS.AI_CACHE_TTL_MS;
 export const AI_ACCESS_EXHAUSTED_MESSAGE = 'AI access is temporarily unavailable for this workspace right now. Upgrade or wait for the next usage cycle to continue.';
 
-export const calculateAICost = (usage, model = 'gemini-2.0-flash') => {
+export const calculateAICost = (usage, model = 'gemini-2.5-flash') => {
     if (!usage) return { tokens: 0, cost: 0 };
 
     const pricing = AI_PRICING[model] || AI_PRICING['gemini-2.5-flash'] || AI_PRICING['gemini-2.0-flash'];

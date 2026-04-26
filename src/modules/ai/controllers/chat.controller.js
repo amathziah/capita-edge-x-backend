@@ -240,7 +240,7 @@ export const magicFill = async (req, res) => {
     if (!text) throw new APIError('Text input is required', 400);
 
     const parsed = await aiService.parseInvoiceText(text);
-    const modelUsed = parsed.provider?.split(':')?.[1] || 'gemini-3-flash-preview';
+    const modelUsed = parsed.provider?.split(':')?.[1] || 'gemini-2.5-flash';
     const { tokens, cost } = calculateAICost(parsed.usage, modelUsed);
 
     await supabase.from('ai_requests').insert([{
@@ -265,7 +265,7 @@ export const auditInvoice = async (req, res) => {
     }
 
     const audit = await aiService.auditInvoice(req.body, req.user?.id);
-    const modelUsed = audit.provider?.split(':')?.[1] || 'gemini-3-flash-preview';
+    const modelUsed = audit.provider?.split(':')?.[1] || 'gemini-2.5-flash';
     const { tokens, cost } = calculateAICost(audit.usage, modelUsed);
 
     await supabase.from('ai_requests').insert([{
@@ -345,7 +345,7 @@ export const getInsights = async (req, res) => {
     let tokens = 0;
     let cost = 0;
     if (insights.usage) {
-        const usageData = calculateAICost(insights.usage, 'gemini-2.0-flash');
+        const usageData = calculateAICost(insights.usage, 'gemini-2.5-flash');
         tokens = usageData.tokens;
         cost = usageData.cost;
     }
@@ -358,7 +358,7 @@ export const getInsights = async (req, res) => {
     await supabase.from('ai_requests').insert([{
         organization_id: req.user.organizationId,
         user_id: req.user.id,
-        model_name: 'gemini-2.0-flash',
+        model_name: 'gemini-2.5-flash',
         total_tokens: tokens,
         cost
     }]);

@@ -265,13 +265,58 @@ class AIOrchestratorService {
 
         // Simple greetings / short acknowledgments — static response to avoid LLM calls
         const lowerQuery = String(query || '').toLowerCase().trim();
-        const isSimpleGreeting = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night)|okay|ok|alright|sure|got it|great|cool|sounds good|noted)[\s!.?]*$/i.test(lowerQuery)
+        const isSimpleGreeting = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night)|okay|ok|alright|sure|got it|great|cool|sounds good|noted|yes|yes please|yep|yeah|go ahead|open it|show me|let's go|let me see)[\s!.?]*$/i.test(lowerQuery)
             || /^how are you[\s!?.]*$/i.test(lowerQuery);
         if (isSimpleGreeting) {
-            const isAck = /^(okay|ok|alright|sure|got it|great|cool|sounds good|noted)[\s!.?]*$/i.test(lowerQuery);
+            const isAck = /^(okay|ok|alright|sure|got it|great|cool|sounds good|noted|yes|yes please|yep|yeah|go ahead|open it|show me|let's go|let me see)[\s!.?]*$/i.test(lowerQuery);
             const isThanks = /^(thanks|thank you)[\s!.?]*$/i.test(lowerQuery);
+
+            // If the user is acknowledging and we have a pending workspace from the last bot turn,
+            // auto-open it instead of giving a generic reply.
+            const pendingDomain = session.context?.pendingWorkspaceDomain;
+            if (isAck && pendingDomain) {
+                // Clear the pending intent
+                session.context.pendingWorkspaceDomain = null;
+
+                try {
+                    const workspace = await aiGuidedDeskService.getWorkspace(pendingDomain, context.organizationId, 'overview');
+                    const domainLabel = workspace?.label || pendingDomain;
+                    const text = `Here's your ${domainLabel}.`;
+                    const response = {
+                        text,
+                        action: null,
+                        provider: 'system:workspace_auto_open',
+                        usage: null,
+                        data: {
+                            type: 'workspace_view',
+                            workspace: {
+                                component: workspace?.component,
+                                domain: pendingDomain,
+                                label: workspace?.label,
+                                specialistLabel: workspace?.specialistLabel,
+                                selectedView: 'overview',
+                                availableViews: workspace?.availableViews,
+                                data: workspace?.data,
+                                meta: workspace?.meta
+                            },
+                            confidence: 'grounded',
+                            grounded: true,
+                            intent: plan.intent,
+                            domain: pendingDomain,
+                            provenance: []
+                        },
+                        traceId
+                    };
+                    aiSessionManagerService.addMessage(session, { role: 'assistant', content: text, intent: 'workspace_open', domain: pendingDomain });
+                    return response;
+                } catch (wsErr) {
+                    console.error('[Orchestrator] Auto-open workspace failed:', wsErr.message);
+                    // Fall through to normal ack response
+                }
+            }
+
             const text = isAck
-                ? 'Got it. What would you like to look at next — invoices, payments, expenses, or compliance?'
+                ? 'Got it. What would you like to look at — invoices, payments, expenses, or compliance?'
                 : isThanks
                     ? 'Happy to help. Let me know if you need anything else.'
                     : 'Hi! What would you like to know? I can pull your live data for invoices, payments, expenses, and compliance — or answer general finance questions.';
@@ -344,6 +389,14 @@ class AIOrchestratorService {
             }
         }
 
+        // If the AI said it needs to open a workspace (no tool evidence, data query),
+        // store the intended domain so the next acknowledgment can auto-open it.
+        if (!toolResults.length && plan.primaryDomain && ['invoices', 'payments', 'expenses', 'compliance', 'customers'].includes(plan.primaryDomain)) {
+            session.context.pendingWorkspaceDomain = plan.primaryDomain;
+        } else {
+            session.context.pendingWorkspaceDomain = null;
+        }
+
         // Update session
         if (plan.parsedEntities) {
             aiSessionManagerService.extractEntities(session, plan.parsedEntities);
@@ -406,17 +459,62 @@ class AIOrchestratorService {
             return;
         }
 
-        // Simple greetings — static response to avoid unnecessary LLM calls
+        // Simple greetings / acknowledgments — static response to avoid unnecessary LLM calls
         const lowerQueryStream = String(query || '').toLowerCase().trim();
-        const isSimpleGreetingStream = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night))[\s!.?]*$/i.test(lowerQueryStream)
+        const isSimpleGreetingStream = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night)|okay|ok|alright|sure|got it|great|cool|sounds good|noted|yes|yes please|yep|yeah|go ahead|open it|show me|let's go|let me see)[\s!.?]*$/i.test(lowerQueryStream)
             || /^how are you[\s!?.]*$/i.test(lowerQueryStream);
         if (isSimpleGreetingStream) {
+            const isAckStream = /^(okay|ok|alright|sure|got it|great|cool|sounds good|noted|yes|yes please|yep|yeah|go ahead|open it|show me|let's go|let me see)[\s!.?]*$/i.test(lowerQueryStream);
             const isThanksStream = /^(thanks|thank you)[\s!.?]*$/i.test(lowerQueryStream);
+
+            // Auto-open pending workspace if user is acknowledging
+            const pendingDomainStream = session.context?.pendingWorkspaceDomain;
+            if (isAckStream && pendingDomainStream) {
+                session.context.pendingWorkspaceDomain = null;
+                try {
+                    const workspace = await aiGuidedDeskService.getWorkspace(pendingDomainStream, context.organizationId, 'overview');
+                    const domainLabel = workspace?.label || pendingDomainStream;
+                    yield {
+                        type: 'complete',
+                        text: `Here's your ${domainLabel}.`,
+                        action: null,
+                        usage: null,
+                        provider: 'system:workspace_auto_open',
+                        budget: null,
+                        data: {
+                            type: 'workspace_view',
+                            workspace: {
+                                component: workspace?.component,
+                                domain: pendingDomainStream,
+                                label: workspace?.label,
+                                specialistLabel: workspace?.specialistLabel,
+                                selectedView: 'overview',
+                                availableViews: workspace?.availableViews,
+                                data: workspace?.data,
+                                meta: workspace?.meta
+                            },
+                            confidence: 'grounded',
+                            grounded: true,
+                            intent: plan.intent,
+                            domain: pendingDomainStream,
+                            provenance: []
+                        },
+                        traceId
+                    };
+                    aiSessionManagerService.addMessage(session, { role: 'assistant', content: `Here's your ${domainLabel}.`, intent: 'workspace_open', domain: pendingDomainStream });
+                    return;
+                } catch (wsErr) {
+                    console.error('[Orchestrator] Stream auto-open workspace failed:', wsErr.message);
+                }
+            }
+
             yield {
                 type: 'complete',
-                text: isThanksStream
-                    ? 'Happy to help. Let me know if you need anything else.'
-                    : 'Hi! What would you like to know? I can pull your live data for invoices, payments, expenses, and compliance — or answer general finance questions.',
+                text: isAckStream
+                    ? 'Got it. What would you like to look at — invoices, payments, expenses, or compliance?'
+                    : isThanksStream
+                        ? 'Happy to help. Let me know if you need anything else.'
+                        : 'Hi! What would you like to know? I can pull your live data for invoices, payments, expenses, and compliance — or answer general finance questions.',
                 action: null,
                 usage: null,
                 provider: 'system:conversational',
@@ -489,6 +587,13 @@ class AIOrchestratorService {
 
                 yield { ...chunk, traceId, data: enrichedData };
             }
+        }
+
+        // Track pending workspace domain for follow-up acknowledgment
+        if (!toolResults.length && plan.primaryDomain && ['invoices', 'payments', 'expenses', 'compliance', 'customers'].includes(plan.primaryDomain)) {
+            session.context.pendingWorkspaceDomain = plan.primaryDomain;
+        } else {
+            session.context.pendingWorkspaceDomain = null;
         }
 
         if (lastEvent && plan.parsedEntities) {

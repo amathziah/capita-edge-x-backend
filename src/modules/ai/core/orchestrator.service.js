@@ -269,9 +269,12 @@ class AIOrchestratorService {
             || /^how are you[\s!?.]*$/i.test(lowerQuery);
         if (isSimpleGreeting) {
             const isAck = /^(okay|ok|alright|sure|got it|great|cool|sounds good|noted)[\s!.?]*$/i.test(lowerQuery);
+            const isThanks = /^(thanks|thank you)[\s!.?]*$/i.test(lowerQuery);
             const text = isAck
-                ? 'What would you like to know? I can help with invoices, payments, expenses, compliance, GST, cash flow, or any general finance question.'
-                : 'Hello! I\'m Capita — your finance assistant.\n\nI can answer questions about invoices, payments, expenses, compliance, GST, cash flow, and more. I can also pull your live workspace data when you need specific numbers.\n\nWhat would you like to know?';
+                ? 'Got it. What would you like to look at next — invoices, payments, expenses, or compliance?'
+                : isThanks
+                    ? 'Happy to help. Let me know if you need anything else.'
+                    : 'Hi! What would you like to know? I can pull your live data for invoices, payments, expenses, and compliance — or answer general finance questions.';
             const response = {
                 text,
                 action: null,
@@ -408,9 +411,12 @@ class AIOrchestratorService {
         const isSimpleGreetingStream = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night))[\s!.?]*$/i.test(lowerQueryStream)
             || /^how are you[\s!?.]*$/i.test(lowerQueryStream);
         if (isSimpleGreetingStream) {
+            const isThanksStream = /^(thanks|thank you)[\s!.?]*$/i.test(lowerQueryStream);
             yield {
                 type: 'complete',
-                text: 'Hello — I am Capita, your AI CFO.\n\nI have access to your live financial workspace. Ask me about your cash position, overdue invoices, recent payments, or what you should focus on today.',
+                text: isThanksStream
+                    ? 'Happy to help. Let me know if you need anything else.'
+                    : 'Hi! What would you like to know? I can pull your live data for invoices, payments, expenses, and compliance — or answer general finance questions.',
                 action: null,
                 usage: null,
                 provider: 'system:conversational',

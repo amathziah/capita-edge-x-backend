@@ -1,3 +1,51 @@
+// Helpers for grounding LLM JSON output against source numbers (invoice OCR /
+// audit / collection draft validators). Kept inline so this service is
+// self-contained.
+const _normaliseClaimNumber = (value) => {
+    if (value === null || value === undefined) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const cleaned = raw.replace(/,/g, '');
+    const numeric = Number(cleaned.replace(/%$/, ''));
+    if (!Number.isFinite(numeric)) return null;
+    return `${numeric}${cleaned.endsWith('%') ? '%' : ''}`;
+};
+
+const _extractClaimNumbers = (text = '') => {
+    const matches = String(text).match(/\b\d[\d,]*(?:\.\d+)?%?\b/g) || [];
+    return matches.map(_normaliseClaimNumber).filter(Boolean);
+};
+
+const _collectEvidenceFacts = (value, acc = { numbers: new Set() }) => {
+    if (value === null || value === undefined) return acc;
+    if (typeof value === 'number') {
+        const n = _normaliseClaimNumber(value);
+        if (n) acc.numbers.add(n);
+        return acc;
+    }
+    if (typeof value === 'string') {
+        for (const n of _extractClaimNumbers(value)) acc.numbers.add(n);
+        return acc;
+    }
+    if (Array.isArray(value)) {
+        value.forEach(item => _collectEvidenceFacts(item, acc));
+        return acc;
+    }
+    if (typeof value === 'object') {
+        Object.values(value).forEach(item => _collectEvidenceFacts(item, acc));
+    }
+    return acc;
+};
+
+const _collectExecutionEvidence = (execution = {}) => {
+    const numbers = new Set();
+    for (const entry of execution.toolResults || []) {
+        _collectEvidenceFacts(entry?.result?.data, { numbers });
+        _collectEvidenceFacts(entry?.result?.meta, { numbers });
+    }
+    return { numbers };
+};
+
 class AIStructuredTaskService {
     constructor({
         cacheKey,
@@ -11,8 +59,6 @@ class AIStructuredTaskService {
         getModel,
         isRetryable,
         executeWithLock,
-        collectExecutionEvidence,
-        extractClaimNumbers,
     } = {}) {
         this.cacheKey = cacheKey;
         this.cacheGet = cacheGet;
@@ -25,8 +71,8 @@ class AIStructuredTaskService {
         this.getModel = getModel || (() => null);
         this.isRetryable = isRetryable || (() => false);
         this.executeWithLock = executeWithLock || (async (key, fn) => fn());
-        this.collectExecutionEvidence = collectExecutionEvidence || (() => ({ numbers: new Set() }));
-        this.extractClaimNumbers = extractClaimNumbers || (() => []);
+        this.collectExecutionEvidence = _collectExecutionEvidence;
+        this.extractClaimNumbers = _extractClaimNumbers;
     }
 
     parseJsonText(rawText = '') {

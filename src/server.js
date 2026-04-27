@@ -10,7 +10,6 @@ import { errorHandler, notFoundHandler } from './core/middleware/errorHandler.js
 import { authenticateUser } from './core/middleware/auth.js';
 import { sanitizeInput } from './core/middleware/validation.js';
 import redisService from './core/services/redis.service.js';
-import aiEmbeddingIntentService from './modules/ai/intent/embedding.service.js';
 
 
 // Routes
@@ -151,8 +150,7 @@ export const app = createApp();
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
     const startServer = async () => {
         await redisService.connect();
-        await aiEmbeddingIntentService.initialize();
-        
+
         app.listen(PORT, () => {
             console.log(`✅ Backend server running on http://localhost:${PORT}`);
             console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);

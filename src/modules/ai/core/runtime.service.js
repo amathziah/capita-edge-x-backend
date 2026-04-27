@@ -57,6 +57,20 @@ class AIRuntimeService {
         return this.genAI.getGenerativeModel(config);
     }
 
+    getModelWithTools(modelName, { tools, systemInstruction, maxOutputTokens = 1500, temperature = 0.4 } = {}) {
+        if (!this.genAI) return null;
+
+        return this.genAI.getGenerativeModel({
+            model: modelName,
+            systemInstruction,
+            tools: tools ? [{ functionDeclarations: tools }] : undefined,
+            generationConfig: {
+                maxOutputTokens,
+                temperature,
+            }
+        });
+    }
+
     sanitiseHistory(history = []) {
         const filtered = history.filter(h => {
             const text = h?.parts?.[0]?.text || '';

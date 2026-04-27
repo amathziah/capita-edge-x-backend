@@ -1,106 +1,123 @@
 import aiToolRegistryService from '../workspace/toolRegistry.service.js';
-import aiTraceService from '../infra/trace.service.js';
-import aiIntentService from '../intent/basic.service.js';
-import aiEnhancedIntentService from '../intent/enhanced.service.js';
 import aiGuidedDeskService from '../workspace/guidedDesk.service.js';
-import aiService from './ai.service.js';
+import aiTraceService from '../infra/trace.service.js';
 import aiCachingService from '../infra/cache.service.js';
 import aiSessionManagerService from '../agent/session.service.js';
+import aiService from './ai.service.js';
+import aiModelRouterService, { MODEL_FALLBACK_CHAIN } from '../infra/modelRouter.service.js';
 
-const FINANCE_DATA_KEYWORDS = [
-    'invoice', 'invoices', 'payment', 'payments', 'expense', 'expenses',
-    'compliance', 'gst', 'tds', 'overdue', 'receivable', 'receivables',
-    'revenue', 'profit', 'cash', 'spend', 'budget', 'collections',
-    'customer', 'customers', 'client', 'clients', 'billing', 'receipt',
-    'transaction', 'transactions', 'balance', 'due', 'outstanding'
-];
+/**
+ * AI Orchestrator — agentic tool-use loop.
+ *
+ * Single path: build system prompt → call Gemini with tools → if model returns
+ * functionCall, run tool, feed result back, loop (up to MAX_TOOL_TURNS) → emit
+ * the final text answer. No regex intent classifiers. No static greeting paths.
+ * The LLM decides when to use tools and when to just talk.
+ */
 
-// Domain detection keywords for workspace auto-opening
-const DOMAIN_KEYWORDS = {
-    invoices: ['invoice', 'invoices', 'overdue', 'receivable', 'receivables', 'collections', 'debtor', 'aging', 'unpaid', 'outstanding'],
-    payments: ['payment', 'payments', 'receipt', 'receipts', 'cash in', 'money in', 'received', 'collections'],
-    expenses: ['expense', 'expenses', 'spend', 'spending', 'cost', 'costs', 'vendor', 'burn', 'outflow'],
-    compliance: ['compliance', 'gst', 'tds', 'tax', 'filing', 'deadline', 'return', 'due'],
-    customers: ['customer', 'customers', 'client', 'clients', 'churn', 'retention']
-};
+const MAX_TOOL_TURNS = 3;
+const SUPPORTED_DOMAINS = ['invoices', 'payments', 'expenses', 'compliance', 'customers'];
 
 class AIOrchestratorService {
-
-    async buildExecutionPlan(query, context = {}) {
-        // Try cache first for simple queries
-        const cacheKey = aiCachingService.getCacheKey('plan', context.organizationId, query);
-        const cachedPlan = aiCachingService.getFromMemory(cacheKey);
-        if (cachedPlan && !context.skipCache) {
-            console.log('[Orchestrator] Using cached execution plan');
-            return cachedPlan;
-        }
-
-        // Use enhanced intent detection with confidence scoring
-        const intentResult = aiEnhancedIntentService.detectWithConfidence(query, {
-            ...context,
-            lastIntent: context.lastIntent,
-            lastQuery: context.lastQuery
-        });
-
-        let tools = aiEnhancedIntentService.getToolsForIntents([intentResult.primaryIntent, ...intentResult.secondaryIntents]);
-        let intent = intentResult.primaryIntent;
-
-        // Fallback: If no tools detected but data-driven intent found
-        if (tools.length === 0) {
-            const fallbackIntent = aiIntentService.detect(query);
-            if (fallbackIntent !== 'conversational' && fallbackIntent !== 'general_advice') {
-                const fallbackTools = aiIntentService.getToolsForIntent(fallbackIntent);
-                if (fallbackTools.length > 0) {
-                    intent = fallbackIntent;
-                    tools = fallbackTools.map(toolId => ({ toolId, args: {} }));
-                }
-            }
-        }
-
-        const plan = {
-            intent,
-            primaryDomain: intentResult.domain,
-            specialistLabel: intentResult.specialistLabel,
-            mode: tools.length > 0 ? 'grounded' : 'general',
-            tools,
-            confidence: intentResult.confidence,
-            complexity: intentResult.complexity,
-            suggestedActions: intentResult.suggestedActions,
-            timeRange: intentResult.timeRange,
-            parsedEntities: intentResult.parsedEntities
-        };
-
-        // Cache the plan
-        aiCachingService.setMemoryCache(cacheKey, plan, 'intent');
-
-        return plan;
+    constructor() {
+        this.toolRegistry = aiToolRegistryService;
+        this.runtime = aiService.runtimeService;
     }
 
-    async executePlan(plan, context = {}) {
-        const traceId = plan.traceId || null;
-        const steps = plan.tools || [];
+    // ─────────────────────────────────────────────────────────────────────────
+    // System prompt — single source of truth
+    // ─────────────────────────────────────────────────────────────────────────
 
-        const settled = await Promise.allSettled(steps.map(async (step) => {
-            const definition = aiToolRegistryService.getToolDefinition(step.toolId);
-            const cacheKey = aiCachingService.getCacheKey(
-                'tool',
-                context.organizationId,
-                `${step.toolId}:${JSON.stringify(step.args)}`
-            );
-            const cachedResult = aiCachingService.getFromMemory(cacheKey);
+    buildSystemPrompt(context = {}) {
+        const currency = context.currency || context.settings?.currency || 'INR';
+        const segment = context.businessType || context.settings?.businessType || 'solopreneur';
+        const today = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
-            if (cachedResult) {
-                return {
-                    toolId: step.toolId,
-                    label: definition?.label || step.toolId,
-                    uiComponent: definition?.uiComponent || null,
-                    args: step.args || {},
-                    result: cachedResult
-                };
+        return `You are Capita, an AI finance assistant for Indian small businesses and freelancers.
+
+Today's date: ${today}
+Currency: ${currency}
+Business segment: ${segment}
+
+YOUR ROLE
+You answer finance questions and pull live workspace data when needed. You have four live workspaces:
+- Invoices (overdue, receivables, collections)
+- Payments (receipts, money in)
+- Expenses (spend, burn rate)
+- Compliance (GST, TDS, deadlines)
+
+WHEN TO USE TOOLS
+- Use a tool ONLY when the user asks about THEIR specific data (their invoices, their payments, etc.).
+- Do NOT use tools for greetings, thanks, acknowledgments, or general finance questions ("what is GST?", "how does net-30 work?").
+- For general knowledge questions, answer directly from your training — be concise and practical.
+- For "what can you do?" — list the four workspaces with one example question each. Do not call tools.
+
+RESPONSE STYLE
+- Lead with the answer. No name-greetings. Never open with the user's or business's name.
+- Simple/general questions: 1–3 sentences. Do not elaborate unless asked.
+- Data-grounded answers: one verdict sentence + 2–4 bullets + one specific next step. No padding.
+- Plain language. No jargon, no hedging, no filler.
+- If urgent, say "Urgent" or "Act today". If healthy, say "No immediate issues".
+
+GROUNDING RULES (when you have used a tool)
+- Every number, name, date, and status MUST come from the tool result. Never invent or estimate business figures.
+- If a fact is missing from tool data, say so — don't guess.
+- For GST/TDS/tax/legal: append "Verify against the latest official source before acting."
+
+CONVERSATIONAL FLOW
+- If the user acknowledges (yes, sure, ok, go ahead) and you previously offered to open a workspace, call the matching tool now.
+- If a follow-up references a previous answer, use the conversation history — don't ask the user to repeat.
+
+Markdown is allowed. Keep it minimal — short paragraphs, simple bullets.`;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    _historyToGeminiContents(history = []) {
+        return history
+            .filter(m => m && (m.content || m.text) && m.role)
+            .map(m => ({
+                role: m.role === 'assistant' || m.role === 'model' ? 'model' : 'user',
+                parts: [{ text: String(m.content || m.text).slice(0, 4000) }]
+            }));
+    }
+
+    _extractTextFromResponse(response) {
+        try {
+            const candidates = response?.candidates || [];
+            for (const c of candidates) {
+                const parts = c?.content?.parts || [];
+                const text = parts.map(p => p.text).filter(Boolean).join('').trim();
+                if (text) return text;
             }
+            return '';
+        } catch {
+            return '';
+        }
+    }
 
-            const result = await aiToolRegistryService.executeTool(step.toolId, context, step.args || {});
-            aiCachingService.setMemoryCache(cacheKey, result, 'workspace');
+    _extractFunctionCalls(response) {
+        const calls = [];
+        try {
+            const candidates = response?.candidates || [];
+            for (const c of candidates) {
+                const parts = c?.content?.parts || [];
+                for (const p of parts) {
+                    if (p.functionCall) {
+                        calls.push({ name: p.functionCall.name, args: p.functionCall.args || {} });
+                    }
+                }
+            }
+        } catch { /* ignore */ }
+        return calls;
+    }
+
+    async _runTool(toolName, args, context, traceId) {
+        const start = Date.now();
+        try {
+            const result = await this.toolRegistry.executeTool(toolName, context, args || {});
 
             aiTraceService.log({
                 traceId,
@@ -108,133 +125,214 @@ class AIOrchestratorService {
                 userId: context.user?.id,
                 conversationId: context.conversationId || null,
                 stage: 'tool',
-                toolId: step.toolId,
-                query: context.query || null,
-                input: { args: step.args || {} },
-                output: { meta: result?.meta || {}, data: result?.data || {} }
+                toolId: toolName,
+                input: { args: args || {} },
+                output: { meta: result?.meta || {}, durationMs: Date.now() - start }
             }).catch(() => {});
 
-            return {
-                toolId: step.toolId,
-                label: definition?.label || step.toolId,
-                uiComponent: definition?.uiComponent || null,
-                args: step.args || {},
-                result
-            };
-        }));
+            return { ok: true, data: result?.data || null, meta: result?.meta || null };
+        } catch (err) {
+            aiTraceService.log({
+                traceId,
+                organizationId: context.organizationId,
+                userId: context.user?.id,
+                stage: 'error',
+                toolId: toolName,
+                input: { args: args || {} },
+                output: { error: err.message }
+            }).catch(() => {});
 
-        const toolResults = [];
-        const failedTools = [];
-
-        settled.forEach((outcome, i) => {
-            if (outcome.status === 'fulfilled') {
-                toolResults.push(outcome.value);
-            } else {
-                const step = steps[i];
-                console.error(`[Orchestrator] Tool ${step.toolId} failed:`, outcome.reason?.message);
-                failedTools.push({ toolId: step.toolId, error: outcome.reason?.message || String(outcome.reason) });
-                aiTraceService.log({
-                    traceId,
-                    organizationId: context.organizationId,
-                    userId: context.user?.id,
-                    stage: 'error',
-                    toolId: step.toolId,
-                    input: { args: step.args || {} },
-                    output: { error: outcome.reason?.message || String(outcome.reason) }
-                }).catch(() => {});
-            }
-        });
-
-        return { toolResults, failedTools };
+            return { ok: false, error: err.message };
+        }
     }
 
-    /**
-     * Check if query should trigger guided workspace auto-opening
-     */
-    _shouldOpenGuidedWorkspace(query = '') {
-        const lowerQuery = String(query || '').toLowerCase();
-        
-        for (const [domain, keywords] of Object.entries(DOMAIN_KEYWORDS)) {
-            const hasKeyword = keywords.some(kw => lowerQuery.includes(kw));
-            if (hasKeyword) {
-                return domain;
+    _findFirstUiTool(toolCalls = [], toolResults = []) {
+        for (let i = 0; i < toolCalls.length; i++) {
+            const uiComponent = this.toolRegistry.getUiComponent(toolCalls[i].name);
+            if (uiComponent && toolResults[i]?.ok) {
+                return {
+                    component: uiComponent,
+                    domain: uiComponent.replace('ai_domain_', ''),
+                    data: toolResults[i].data || {},
+                    meta: toolResults[i].meta || {}
+                };
             }
         }
-        
         return null;
     }
 
-    /**
-     * Check if we should show guided choice (legacy behavior for action_request without finance keywords)
-     */
-    _shouldShowGuidedChoice(plan, query = '') {
-        const manualIntent = aiIntentService.detect(query);
-        const intent = manualIntent === 'action_request' ? 'action_request' : (plan.intent || manualIntent);
-
-        if (intent !== 'action_request') return false;
-
-        const lowerQuery = String(query || '').toLowerCase();
-        const hasFinanceKeyword = FINANCE_DATA_KEYWORDS.some(kw => lowerQuery.includes(kw));
-
-        if (hasFinanceKeyword) return false;
-
-        return true;
+    async _enrichWorkspace(workspace, organizationId) {
+        if (!workspace || !SUPPORTED_DOMAINS.includes(workspace.domain)) return workspace;
+        try {
+            const ws = await aiGuidedDeskService.getWorkspace(workspace.domain, organizationId, 'overview');
+            return {
+                component: workspace.component,
+                domain: workspace.domain,
+                label: ws?.label,
+                specialistLabel: ws?.specialistLabel,
+                selectedView: 'overview',
+                availableViews: ws?.availableViews,
+                data: ws?.data,
+                meta: ws?.meta
+            };
+        } catch (err) {
+            console.error('[Orchestrator] Workspace enrich failed:', err.message);
+            return workspace;
+        }
     }
 
-    /**
-     * Build workspace response for frontend - includes guided workspace data
-     */
-    _buildWorkspaceResponse(toolResults, plan, query, organizationId) {
-        // Find the primary tool with uiComponent (workspace tool)
-        const workspaceTool = toolResults.find(t => t.uiComponent);
-        
-        if (!workspaceTool) return null;
+    // ─────────────────────────────────────────────────────────────────────────
+    // Core agentic loop
+    // ─────────────────────────────────────────────────────────────────────────
 
-        const domain = workspaceTool.uiComponent.replace('ai_domain_', '');
-        
-        // Build the guided workspace response
-        const workspace = aiGuidedDeskService.getWorkspace(domain, organizationId, 'overview');
-        
-        // This returns a Promise - we'll handle it in the caller
+    async _runAgenticLoop(query, context, { traceId } = {}) {
+        const orgId = context.organizationId;
+        const userId = context.user?.id || 'anon';
+
+        // Budget + circuit checks
+        const budget = await aiService._checkPlanBudget(orgId);
+        if (!budget.allowed) {
+            throw new Error('AI access is temporarily unavailable. Upgrade or wait for the next usage cycle.');
+        }
+        if (!this.runtime.hasModelClient() || this.runtime.isCircuitOpen() || !this.runtime.canMakeRequest()) {
+            throw new Error('AI engine is in cooldown. Please try again in 60s.');
+        }
+
+        const tier = budget.tier || 'starter';
+        const complexity = aiModelRouterService.detectComplexity(query, 0);
+        const selected = aiModelRouterService.selectModel(complexity, tier);
+        const fallbackChain = [selected.name, ...MODEL_FALLBACK_CHAIN.filter(m => m !== selected.name)];
+
+        const systemInstruction = this.buildSystemPrompt(context);
+        const tools = this.toolRegistry.getGeminiFunctionDeclarations();
+        const history = this._historyToGeminiContents(context.history || []);
+
+        const contents = [...history, { role: 'user', parts: [{ text: query }] }];
+
+        const toolCalls = [];
+        const toolResults = [];
+        let finalText = '';
+        let usage = null;
+        let providerModel = null;
+
+        for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+            this.runtime.consumeToken();
+
+            let response = null;
+            for (const modelName of fallbackChain) {
+                try {
+                    const model = this.runtime.getModelWithTools(modelName, {
+                        tools,
+                        systemInstruction,
+                        maxOutputTokens: 1200,
+                        temperature: 0.4
+                    });
+                    if (!model) continue;
+
+                    const result = await model.generateContent({ contents });
+                    response = result.response;
+                    providerModel = modelName;
+                    if (response?.usageMetadata) usage = response.usageMetadata;
+                    break;
+                } catch (err) {
+                    if (this.runtime.isRetryable(err)) continue;
+                    throw err;
+                }
+            }
+            if (!response) throw new Error('No model available.');
+
+            const calls = this._extractFunctionCalls(response);
+            const text = this._extractTextFromResponse(response);
+
+            if (calls.length === 0) {
+                finalText = text;
+                break;
+            }
+
+            // Append model turn (function calls) to contents
+            contents.push({
+                role: 'model',
+                parts: calls.map(c => ({ functionCall: { name: c.name, args: c.args } }))
+            });
+
+            const settled = await Promise.all(calls.map(c => this._runTool(c.name, c.args, context, traceId)));
+            calls.forEach((c, i) => { toolCalls.push(c); toolResults.push(settled[i]); });
+
+            // Append function responses
+            contents.push({
+                role: 'user',
+                parts: settled.map((r, i) => ({
+                    functionResponse: {
+                        name: calls[i].name,
+                        response: r.ok ? { data: r.data, meta: r.meta } : { error: r.error }
+                    }
+                }))
+            });
+        }
+
+        // If we exhausted tool turns without final text, force one final text-only call
+        if (!finalText) {
+            for (const modelName of fallbackChain) {
+                try {
+                    const model = this.runtime.getModelWithTools(modelName, {
+                        systemInstruction,
+                        maxOutputTokens: 1200,
+                        temperature: 0.4
+                    });
+                    if (!model) continue;
+                    const result = await model.generateContent({ contents });
+                    finalText = this._extractTextFromResponse(result.response) || 'I could not produce a complete answer.';
+                    if (result.response?.usageMetadata) usage = result.response.usageMetadata;
+                    providerModel = modelName;
+                    break;
+                } catch (err) {
+                    if (this.runtime.isRetryable(err)) continue;
+                    throw err;
+                }
+            }
+        }
+
+        let workspace = this._findFirstUiTool(toolCalls, toolResults);
+        if (workspace) {
+            workspace = await this._enrichWorkspace(workspace, orgId);
+        }
+
+        const grounded = toolResults.some(r => r.ok);
+        const primaryDomain = workspace?.domain || null;
+
         return {
-            component: workspaceTool.uiComponent,
-            domain,
-            data: workspaceTool.result?.data || {},
-            toolId: workspaceTool.toolId
+            text: finalText.trim(),
+            usage,
+            provider: `gemini:${providerModel || 'unknown'}`,
+            data: {
+                type: workspace ? 'workspace_view' : (grounded ? 'grounded_answer' : 'general'),
+                workspace,
+                confidence: grounded ? 'grounded' : 'general',
+                grounded,
+                domain: primaryDomain,
+                toolsUsed: toolCalls.map(c => c.name),
+                provenance: toolCalls.map(c => ({ tool: c.name }))
+            },
+            budget: await aiService.getBudgetStatus(userId, orgId)
         };
     }
 
-    // ── Non-streaming ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // Public API
+    // ─────────────────────────────────────────────────────────────────────────
 
     async processQuery(query, context = {}) {
         const traceId = aiTraceService.createTraceId();
-        
-        // Get or create session for context management
+
         const session = await aiSessionManagerService.getOrCreateSession(
-            context.organizationId,
-            context.user?.id,
-            context.conversationId
+            context.organizationId, context.user?.id, context.conversationId
         );
 
-        // Build context with session info
-        const enhancedContext = {
-            ...context,
-            sessionId: session.id,
-            sessionContext: aiSessionManagerService.buildAIContext(session, query),
-            lastIntent: session.metadata.currentDomain,
-            lastQuery: session.messages.length > 0 ? session.messages[session.messages.length - 1].content : null
-        };
-
-        // Check cache for complete response
-        const cachedResponse = await aiCachingService.get('chat', context.organizationId, query);
-        if (cachedResponse && !context.skipCache) {
-            console.log('[Orchestrator] Using cached response');
-            cachedResponse.data.traceId = traceId;
-            return cachedResponse.data;
+        const cached = await aiCachingService.get('chat', context.organizationId, query);
+        if (cached && !context.skipCache) {
+            cached.data.traceId = traceId;
+            return cached.data;
         }
-
-        const plan = await this.buildExecutionPlan(query, enhancedContext);
-        plan.traceId = traceId;
 
         await aiTraceService.log({
             traceId,
@@ -243,194 +341,31 @@ class AIOrchestratorService {
             conversationId: context.conversationId || null,
             stage: 'plan',
             query,
-            input: { query, complexity: plan.complexity },
-            output: plan
+            input: { query },
+            output: {}
         });
 
-        // Guided choice — only for pure navigation (action_request intent with no data question words)
-        const isGuidedChoice = this._shouldShowGuidedChoice(plan, query);
-        if (isGuidedChoice) {
-            const response = aiGuidedDeskService.buildGuidedChoiceResponse(query, {
-                intent: plan.intent,
-                primaryDomain: plan.primaryDomain,
-                specialistLabel: plan.specialistLabel
-            });
-            response.traceId = traceId;
-            
-            // Update session
-            aiSessionManagerService.addMessage(session, { role: 'assistant', content: response.text, intent: plan.intent, domain: plan.primaryDomain });
-            
-            return response;
-        }
+        const result = await this._runAgenticLoop(query, context, { traceId });
+        result.traceId = traceId;
+        result.action = null;
 
-        // Simple greetings / short acknowledgments — static response to avoid LLM calls
-        const lowerQuery = String(query || '').toLowerCase().trim();
-        const isSimpleGreeting = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night)|okay|ok|alright|sure|got it|great|cool|sounds good|noted|yes|yes please|yep|yeah|go ahead|open it|show me|let's go|let me see)[\s!.?]*$/i.test(lowerQuery)
-            || /^how are you[\s!?.]*$/i.test(lowerQuery);
-        if (isSimpleGreeting) {
-            const isAck = /^(okay|ok|alright|sure|got it|great|cool|sounds good|noted|yes|yes please|yep|yeah|go ahead|open it|show me|let's go|let me see)[\s!.?]*$/i.test(lowerQuery);
-            const isThanks = /^(thanks|thank you)[\s!.?]*$/i.test(lowerQuery);
+        aiSessionManagerService.addMessage(session, { role: 'user', content: query });
+        aiSessionManagerService.addMessage(session, {
+            role: 'assistant',
+            content: result.text,
+            domain: result.data?.domain
+        });
 
-            // If the user is acknowledging and we have a pending workspace from the last bot turn,
-            // auto-open it instead of giving a generic reply.
-            const pendingDomain = session.context?.pendingWorkspaceDomain;
-            if (isAck && pendingDomain) {
-                // Clear the pending intent
-                session.context.pendingWorkspaceDomain = null;
-
-                try {
-                    const workspace = await aiGuidedDeskService.getWorkspace(pendingDomain, context.organizationId, 'overview');
-                    const domainLabel = workspace?.label || pendingDomain;
-                    const text = `Here's your ${domainLabel}.`;
-                    const response = {
-                        text,
-                        action: null,
-                        provider: 'system:workspace_auto_open',
-                        usage: null,
-                        data: {
-                            type: 'workspace_view',
-                            workspace: {
-                                component: workspace?.component,
-                                domain: pendingDomain,
-                                label: workspace?.label,
-                                specialistLabel: workspace?.specialistLabel,
-                                selectedView: 'overview',
-                                availableViews: workspace?.availableViews,
-                                data: workspace?.data,
-                                meta: workspace?.meta
-                            },
-                            confidence: 'grounded',
-                            grounded: true,
-                            intent: plan.intent,
-                            domain: pendingDomain,
-                            provenance: []
-                        },
-                        traceId
-                    };
-                    aiSessionManagerService.addMessage(session, { role: 'assistant', content: text, intent: 'workspace_open', domain: pendingDomain });
-                    return response;
-                } catch (wsErr) {
-                    console.error('[Orchestrator] Auto-open workspace failed:', wsErr.message);
-                    // Fall through to normal ack response
-                }
-            }
-
-            const text = isAck
-                ? 'Got it. What would you like to look at — invoices, payments, expenses, or compliance?'
-                : isThanks
-                    ? 'Happy to help. Let me know if you need anything else.'
-                    : 'Hi! What would you like to know? I can pull your live data for invoices, payments, expenses, and compliance — or answer general finance questions.';
-            const response = {
-                text,
-                action: null,
-                provider: 'system:conversational',
-                usage: null,
-                data: {
-                    confidence: 'general',
-                    grounded: false,
-                    intent: plan.intent,
-                    domain: plan.primaryDomain,
-                    specialistLabel: plan.specialistLabel,
-                    provenance: []
-                },
-                traceId
-            };
-            aiSessionManagerService.addMessage(session, { role: 'assistant', content: text, intent: plan.intent, domain: plan.primaryDomain });
-            return response;
-        }
-
-        // Standard query execution
-        const { toolResults, failedTools } = await this.executePlan(plan, enhancedContext);
-
-        // Check if any tool has a workspace uiComponent - if so, include workspace data
-        const hasWorkspaceTool = toolResults.some(t => t.uiComponent);
-
-        const execution = {
-            intent: plan.intent,
-            primaryDomain: plan.primaryDomain,
-            specialistLabel: plan.specialistLabel,
-            mode: toolResults.length > 0 ? 'grounded' : 'general',
-            toolResults,
-            traceId
-        };
-
-        const response = await aiService.generateGroundedAnswer(query, enhancedContext, execution);
-        response.traceId = traceId;
-
-        // Attach tool-failure warnings so the frontend can surface them
-        if (failedTools.length > 0) {
-            response.data = response.data || {};
-            response.data.warnings = failedTools.map(f =>
-                `Some data could not be retrieved (${f.toolId.replace(/_/g, ' ')}). The response above is based on available data only.`
-            );
-            response.data.partialData = true;
-        }
-
-        // If we have a workspace tool, also provide the workspace data for frontend
-        if (hasWorkspaceTool) {
-            const workspaceTool = toolResults.find(t => t.uiComponent);
-            const workspaceDomain = workspaceTool.uiComponent.replace('ai_domain_', '');
-
-            try {
-                const workspace = await aiGuidedDeskService.getWorkspace(workspaceDomain, context.organizationId, 'overview');
-                response.data = response.data || {};
-                response.data.workspace = {
-                    component: workspaceTool.uiComponent,
-                    domain: workspaceDomain,
-                    label: workspace?.label,
-                    specialistLabel: workspace?.specialistLabel,
-                    selectedView: 'overview',
-                    availableViews: workspace?.availableViews,
-                    data: workspace?.data,
-                    meta: workspace?.meta
-                };
-            } catch (wsError) {
-                console.error('[Orchestrator] Failed to get workspace data:', wsError.message);
-            }
-        }
-
-        // If the AI said it needs to open a workspace (no tool evidence, data query),
-        // store the intended domain so the next acknowledgment can auto-open it.
-        if (!toolResults.length && plan.primaryDomain && ['invoices', 'payments', 'expenses', 'compliance', 'customers'].includes(plan.primaryDomain)) {
-            session.context.pendingWorkspaceDomain = plan.primaryDomain;
-        } else {
-            session.context.pendingWorkspaceDomain = null;
-        }
-
-        // Update session
-        if (plan.parsedEntities) {
-            aiSessionManagerService.extractEntities(session, plan.parsedEntities);
-        }
-        aiSessionManagerService.addMessage(session, { role: 'assistant', content: response.text, intent: plan.intent, domain: plan.primaryDomain });
-
-        // Cache response
-        await aiCachingService.set('chat', context.organizationId, query, response, { persist: true });
-
-        return response;
+        await aiCachingService.set('chat', context.organizationId, query, result, { persist: true });
+        return result;
     }
-
-    // ── Streaming version ─────────────────────────────────────────────────────
 
     async *processQueryStream(query, context = {}) {
         const traceId = aiTraceService.createTraceId();
-        
-        // Get session
+
         const session = await aiSessionManagerService.getOrCreateSession(
-            context.organizationId,
-            context.user?.id,
-            context.conversationId
+            context.organizationId, context.user?.id, context.conversationId
         );
-
-        const enhancedContext = {
-            ...context,
-            sessionId: session.id,
-            sessionContext: aiSessionManagerService.buildAIContext(session, query),
-            lastIntent: session.metadata.currentDomain,
-            lastQuery: session.messages.length > 0 ? session.messages[session.messages.length - 1].content : null
-        };
-
-        const plan = await this.buildExecutionPlan(query, enhancedContext);
-        plan.traceId = traceId;
 
         await aiTraceService.log({
             traceId,
@@ -439,167 +374,29 @@ class AIOrchestratorService {
             conversationId: context.conversationId || null,
             stage: 'plan',
             query,
-            input: { query, complexity: plan.complexity },
-            output: plan
+            input: { query },
+            output: {}
         });
 
-        // Guided choice — only for pure navigation (action_request intent with no data question words)
-        const isGuidedChoice = this._shouldShowGuidedChoice(plan, query);
-        if (isGuidedChoice) {
-            const event = {
-                type: 'complete',
-                ...aiGuidedDeskService.buildGuidedChoiceResponse(query, {
-                    intent: plan.intent,
-                    primaryDomain: plan.primaryDomain,
-                    specialistLabel: plan.specialistLabel
-                }),
-                traceId
-            };
-            yield event;
-            return;
-        }
+        const result = await this._runAgenticLoop(query, context, { traceId });
 
-        // Simple greetings / acknowledgments — static response to avoid unnecessary LLM calls
-        const lowerQueryStream = String(query || '').toLowerCase().trim();
-        const isSimpleGreetingStream = /^(hi|hello|hey|thanks|thank you|good\s*(morning|evening|afternoon|night)|okay|ok|alright|sure|got it|great|cool|sounds good|noted|yes|yes please|yep|yeah|go ahead|open it|show me|let's go|let me see)[\s!.?]*$/i.test(lowerQueryStream)
-            || /^how are you[\s!?.]*$/i.test(lowerQueryStream);
-        if (isSimpleGreetingStream) {
-            const isAckStream = /^(okay|ok|alright|sure|got it|great|cool|sounds good|noted|yes|yes please|yep|yeah|go ahead|open it|show me|let's go|let me see)[\s!.?]*$/i.test(lowerQueryStream);
-            const isThanksStream = /^(thanks|thank you)[\s!.?]*$/i.test(lowerQueryStream);
+        aiSessionManagerService.addMessage(session, { role: 'user', content: query });
+        aiSessionManagerService.addMessage(session, {
+            role: 'assistant',
+            content: result.text,
+            domain: result.data?.domain
+        });
 
-            // Auto-open pending workspace if user is acknowledging
-            const pendingDomainStream = session.context?.pendingWorkspaceDomain;
-            if (isAckStream && pendingDomainStream) {
-                session.context.pendingWorkspaceDomain = null;
-                try {
-                    const workspace = await aiGuidedDeskService.getWorkspace(pendingDomainStream, context.organizationId, 'overview');
-                    const domainLabel = workspace?.label || pendingDomainStream;
-                    yield {
-                        type: 'complete',
-                        text: `Here's your ${domainLabel}.`,
-                        action: null,
-                        usage: null,
-                        provider: 'system:workspace_auto_open',
-                        budget: null,
-                        data: {
-                            type: 'workspace_view',
-                            workspace: {
-                                component: workspace?.component,
-                                domain: pendingDomainStream,
-                                label: workspace?.label,
-                                specialistLabel: workspace?.specialistLabel,
-                                selectedView: 'overview',
-                                availableViews: workspace?.availableViews,
-                                data: workspace?.data,
-                                meta: workspace?.meta
-                            },
-                            confidence: 'grounded',
-                            grounded: true,
-                            intent: plan.intent,
-                            domain: pendingDomainStream,
-                            provenance: []
-                        },
-                        traceId
-                    };
-                    aiSessionManagerService.addMessage(session, { role: 'assistant', content: `Here's your ${domainLabel}.`, intent: 'workspace_open', domain: pendingDomainStream });
-                    return;
-                } catch (wsErr) {
-                    console.error('[Orchestrator] Stream auto-open workspace failed:', wsErr.message);
-                }
-            }
-
-            yield {
-                type: 'complete',
-                text: isAckStream
-                    ? 'Got it. What would you like to look at — invoices, payments, expenses, or compliance?'
-                    : isThanksStream
-                        ? 'Happy to help. Let me know if you need anything else.'
-                        : 'Hi! What would you like to know? I can pull your live data for invoices, payments, expenses, and compliance — or answer general finance questions.',
-                action: null,
-                usage: null,
-                provider: 'system:conversational',
-                budget: null,
-                data: {
-                    confidence: 'general',
-                    grounded: false,
-                    intent: plan.intent,
-                    domain: plan.primaryDomain,
-                    specialistLabel: plan.specialistLabel,
-                    provenance: []
-                },
-                traceId
-            };
-            return;
-        }
-
-        // Standard execution
-        const { toolResults, failedTools } = await this.executePlan(plan, enhancedContext);
-
-        // Check if any tool has a workspace uiComponent
-        const hasWorkspaceTool = toolResults.some(t => t.uiComponent);
-
-        const execution = {
-            intent: plan.intent,
-            primaryDomain: plan.primaryDomain,
-            specialistLabel: plan.specialistLabel,
-            mode: toolResults.length > 0 ? 'grounded' : 'general',
-            toolResults,
+        yield {
+            type: 'complete',
+            text: result.text,
+            action: null,
+            usage: result.usage,
+            provider: result.provider,
+            budget: result.budget,
+            data: result.data,
             traceId
         };
-
-        const stream = aiService.generateGroundedAnswerStream(query, enhancedContext, execution);
-        let lastEvent = null;
-
-        for await (const chunk of stream) {
-            lastEvent = chunk;
-            if (chunk.type === 'token') {
-                yield chunk;
-            } else if (chunk.type === 'complete') {
-                // Build enriched data with tool-failure warnings and workspace
-                const enrichedData = { ...chunk.data };
-
-                if (failedTools.length > 0) {
-                    enrichedData.warnings = failedTools.map(f =>
-                        `Some data could not be retrieved (${f.toolId.replace(/_/g, ' ')}). Response is based on available data only.`
-                    );
-                    enrichedData.partialData = true;
-                }
-
-                if (hasWorkspaceTool) {
-                    const workspaceTool = toolResults.find(t => t.uiComponent);
-                    const workspaceDomain = workspaceTool.uiComponent.replace('ai_domain_', '');
-                    try {
-                        const workspace = await aiGuidedDeskService.getWorkspace(workspaceDomain, context.organizationId, 'overview');
-                        enrichedData.workspace = {
-                            component: workspaceTool.uiComponent,
-                            domain: workspaceDomain,
-                            label: workspace?.label,
-                            specialistLabel: workspace?.specialistLabel,
-                            selectedView: 'overview',
-                            availableViews: workspace?.availableViews,
-                            data: workspace?.data,
-                            meta: workspace?.meta
-                        };
-                    } catch (wsError) {
-                        console.error('[Orchestrator] Failed to get workspace data:', wsError.message);
-                    }
-                }
-
-                yield { ...chunk, traceId, data: enrichedData };
-            }
-        }
-
-        // Track pending workspace domain for follow-up acknowledgment
-        if (!toolResults.length && plan.primaryDomain && ['invoices', 'payments', 'expenses', 'compliance', 'customers'].includes(plan.primaryDomain)) {
-            session.context.pendingWorkspaceDomain = plan.primaryDomain;
-        } else {
-            session.context.pendingWorkspaceDomain = null;
-        }
-
-        if (lastEvent && plan.parsedEntities) {
-            aiSessionManagerService.extractEntities(session, plan.parsedEntities);
-            aiSessionManagerService.addMessage(session, { role: 'assistant', content: lastEvent.text, intent: plan.intent, domain: plan.primaryDomain });
-        }
     }
 }
 

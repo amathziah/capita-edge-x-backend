@@ -146,6 +146,46 @@ class AIToolRegistryService {
         }));
     }
 
+    /**
+     * Returns Gemini-compatible functionDeclarations for native tool calling.
+     * Args are intentionally minimal — most tools take none; the few that do
+     * (customer/knowledge lookup) get a single string parameter.
+     */
+    getGeminiFunctionDeclarations() {
+        const argSchemas = {
+            get_customer_details: {
+                type: 'object',
+                properties: { customerId: { type: 'string', description: 'Customer ID or name to look up.' } }
+            },
+            get_customer_payment_history: {
+                type: 'object',
+                properties: { customerId: { type: 'string', description: 'Customer ID or name to look up.' } }
+            },
+            get_knowledge_base: {
+                type: 'object',
+                properties: { query: { type: 'string', description: 'The search query for the knowledge base.' } },
+                required: ['query']
+            },
+            get_business_advisor_context: {
+                type: 'object',
+                properties: { query: { type: 'string', description: 'The user\'s question for context.' } }
+            }
+        };
+
+        return Object.values(TOOL_DEFINITIONS).map(tool => ({
+            name: tool.id,
+            description: tool.description,
+            parameters: argSchemas[tool.id] || { type: 'object', properties: {} }
+        }));
+    }
+
+    /**
+     * Map a tool ID to its UI workspace component (if any).
+     */
+    getUiComponent(toolId) {
+        return TOOL_DEFINITIONS[toolId]?.uiComponent || null;
+    }
+
     async executeTool(toolId, context = {}, args = {}) {
         const organizationId = context.organizationId;
 

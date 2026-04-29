@@ -171,6 +171,8 @@ class AIReadModelService {
     }
 
     async getInvoiceWorkspace(organizationId) {
+        // Fetch ALL invoices for accurate aggregates. Pagination only applies to the
+        // list of invoices we surface to the UI/AI, never to the summary counts/sums.
         const [{ currency }, res] = await Promise.all([
             this.getOrganizationContext(organizationId),
             supabase
@@ -178,7 +180,6 @@ class AIReadModelService {
                 .select('*')
                 .eq('organization_id', organizationId)
                 .order('createdAt', { ascending: false })
-                .limit(50)
         ]);
 
         if (res.error) throw res.error;
@@ -205,14 +206,20 @@ class AIReadModelService {
             sentCount: 0,
             paidCount: 0,
             overdueCount: 0,
+            totalBilled: 0,
+            totalPaidAmount: 0,
             totalOutstanding: 0,
             overdueAmount: 0
         };
 
         invoices.forEach((invoice) => {
+            summary.totalBilled += invoice.total;
             if (invoice.status === 'draft') summary.draftCount += 1;
             if (invoice.status === 'sent' || invoice.status === 'partially_paid') summary.sentCount += 1;
-            if (invoice.status === 'paid') summary.paidCount += 1;
+            if (invoice.status === 'paid') {
+                summary.paidCount += 1;
+                summary.totalPaidAmount += invoice.total;
+            }
             if (invoice.status === 'overdue') {
                 summary.overdueCount += 1;
                 summary.overdueAmount += invoice.balanceDue;
@@ -226,7 +233,7 @@ class AIReadModelService {
             data: {
                 summary,
                 recentInvoices: invoices.slice(0, 5),
-                overdueInvoices: invoices.filter((invoice) => invoice.status === 'overdue').slice(0, 5),
+                overdueInvoices: invoices.filter((invoice) => invoice.status === 'overdue').slice(0, 10),
                 topDebtors: this._calculateTopDebtors(invoices),
                 currency
             },
@@ -235,7 +242,8 @@ class AIReadModelService {
                 generated_at: new Date().toISOString(),
                 organization_id: organizationId,
                 currency,
-                domain: 'invoices'
+                domain: 'invoices',
+                rowsScanned: invoices.length
             }
         };
     }
@@ -356,7 +364,6 @@ class AIReadModelService {
                 .select('*')
                 .eq('organization_id', organizationId)
                 .order('date', { ascending: false })
-                .limit(50)
         ]);
 
         if (paymentsRes.error) throw paymentsRes.error;

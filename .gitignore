@@ -1,6 +1,21 @@
-node_modules
+node_modules/
+
+# Env files — keep .env.example tracked, ignore everything else
 .env
+.env.*
+!.env.example
+
+# Logs / runtime
+*.log
 error.log
-temp
-uploads
+npm-debug.log*
+
+# Local data
+temp/
+uploads/
 database.sqlite
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

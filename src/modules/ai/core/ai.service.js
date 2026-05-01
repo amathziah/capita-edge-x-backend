@@ -73,31 +73,6 @@ class AIService {
             executeWithLock: this.executeWithLock.bind(this),
         });
 
-        // ═══════════════════════════════════════════════════════
-        // FEATURE GATING — Tools available per plan tier
-        // ALL features are available to ALL tiers. Strategy is to 
-        // give the best possible experience, and only limit by 
-        // the number of allowed queries per month.
-        // ═══════════════════════════════════════════════════════
-        this.tierToolAccess = {
-            starter: ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
-            free:    ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
-            solo:    ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
-            solo_pro: ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
-            enterprise: ['get_financial_summary', 'get_overdue_invoices', 'get_recent_transactions', 'get_customer_insights', 'get_customer_details'],
-        };
-
-        this.tierUpgradeMessages = {
-            get_customer_insights: {
-                requiredTier: 'Solo',
-                message: 'Customer Analytics is a Solo plan feature. Upgrade to unlock top client rankings, portfolio health scores, and revenue attribution across your entire customer base.'
-            },
-            get_customer_details: {
-                requiredTier: 'Solo',
-                message: 'Customer Intelligence is a Solo plan feature. Upgrade to unlock churn risk prediction, health scoring, and next-purchase date forecasting for individual customers.'
-            },
-        };
-
         this.modelRouter = aiModelRouterService;
         this.circuitBreaker = circuitBreakerService;
     }

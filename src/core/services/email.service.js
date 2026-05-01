@@ -51,6 +51,33 @@ class EmailService {
     }
 
     /**
+     * Resolve the "From" address for outgoing mail.
+     *
+     * Priority:
+     *   1. User-provided SMTP credentials → use their address (and authenticated)
+     *   2. Otherwise → fall back to the platform default for this category.
+     *      `category` controls which default mailbox to display:
+     *        - 'billing' → billing@capitaedgex.com (invoices, reminders, receipts)
+     *        - 'support' → support@capitaedgex.com
+     *        - 'finance' → finance@capitaedgex.com
+     *        - default  → EMAIL_FROM (info@capitaedgex.com)
+     */
+    resolveFromAddress(settings = {}, category = 'default') {
+        if (settings.smtp_user) {
+            return `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`;
+        }
+
+        const categoryMap = {
+            billing: process.env.EMAIL_BILLING,
+            support: process.env.EMAIL_SUPPORT,
+            finance: process.env.EMAIL_FINANCE,
+        };
+        const address = categoryMap[category] || process.env.EMAIL_FROM;
+        const name = process.env.EMAIL_FROM_NAME || settings.businessName || 'CapitaEdgeX';
+        return `"${name}" <${address}>`;
+    }
+
+    /**
      * Create dynamic transporter based on settings
      */
     createTransporter(settings = {}) {
@@ -105,13 +132,7 @@ class EmailService {
             return { success: true, messageId: `mock-invoice-${Date.now()}` };
         }
 
-        // Determine "From" address
-        // If using custom Gmail, "from" must match the auth user (Gmail enforces this usually)
-        // If settings.smtp_user is present, use that. Otherwise fallback to env.
-        const fromAddress = settings.smtp_user
-            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
-            : `"${process.env.EMAIL_FROM_NAME || settings.businessName}" <${process.env.EMAIL_FROM}>`;
-
+        const fromAddress = this.resolveFromAddress(settings, 'billing');
         const subject = `Invoice ${invoice.invoiceNumber} from ${settings.businessName || 'Your Business'}`;
         const html = this.generateInvoiceEmailHTML(invoice, settings);
 
@@ -166,10 +187,7 @@ class EmailService {
             return { success: true, messageId: `mock-reminder-${Date.now()}` };
         }
 
-        const fromAddress = settings.smtp_user
-            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
-            : `"${process.env.EMAIL_FROM_NAME || settings.businessName}" <${process.env.EMAIL_FROM}>`;
-
+        const fromAddress = this.resolveFromAddress(settings, 'billing');
         const daysOverdue = Math.floor((new Date() - new Date(invoice.dueDate)) / (1000 * 60 * 60 * 24));
         const subject = `Payment Reminder: Invoice ${invoice.invoiceNumber}`;
         const html = this.generateReminderEmailHTML(invoice, daysOverdue, settings);
@@ -225,10 +243,7 @@ class EmailService {
             return { success: true, messageId: `mock-custom-${Date.now()}` };
         }
 
-        const fromAddress = settings.smtp_user
-            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
-            : `"${process.env.EMAIL_FROM_NAME || settings.businessName}" <${process.env.EMAIL_FROM}>`;
-
+        const fromAddress = this.resolveFromAddress(settings, 'support');
         const mailOptions = {
             from: fromAddress,
             to: recipientEmail,
@@ -405,10 +420,7 @@ class EmailService {
             return { success: true, messageId: `mock-receipt-${Date.now()}` };
         }
 
-        const fromAddress = settings.smtp_user
-            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
-            : `"${process.env.EMAIL_FROM_NAME || settings.businessName}" <${process.env.EMAIL_FROM}>`;
-
+        const fromAddress = this.resolveFromAddress(settings, 'billing');
         const subject = emailType === 'INITIAL_RECEIPT'
             ? `Payment Received: Invoice ${invoice.invoiceNumber}`
             : `Receipt for Invoice ${invoice.invoiceNumber}`;
@@ -528,10 +540,7 @@ class EmailService {
             return { success: true, messageId: `mock-auth-${Date.now()}` };
         }
 
-        const fromAddress = settings.smtp_user
-            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
-            : `"${process.env.EMAIL_FROM_NAME || 'CapitaEdgeX'}" <${process.env.EMAIL_FROM}>`;
-
+        const fromAddress = this.resolveFromAddress(settings, 'default');
         const subject = `Confirm your account - ${settings.businessName || 'CapitaEdgeX'}`;
         const html = this.generateConfirmationEmailHTML(confirmationLink, settings);
 
@@ -570,10 +579,7 @@ class EmailService {
             return { success: true, messageId: `mock-otp-${Date.now()}` };
         }
 
-        const fromAddress = settings.smtp_user
-            ? `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`
-            : `"${process.env.EMAIL_FROM_NAME || 'CapitaEdgeX'}" <${process.env.EMAIL_FROM}>`;
-
+        const fromAddress = this.resolveFromAddress(settings, 'default');
         const subject = `CapitaEdgeX: Your Verification Code - ${otp}`;
         const html = this.generateOtpEmailHTML(otp, settings);
 

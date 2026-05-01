@@ -391,10 +391,11 @@ class AIGuidedDeskService {
             case 'invoices': {
                 const overdueCount = Number(data?.summary?.overdueCount || 0);
                 const overdueAmount = Number(data?.summary?.overdueAmount || 0);
+                const currency = data?.currency || '';
                 return {
                     title: 'Invoices',
                     summary: overdueCount > 0
-                        ? `You have ${overdueCount} overdue invoices worth ₹${overdueAmount.toLocaleString()}.`
+                        ? `You have ${overdueCount} overdue invoices worth ${currency} ${overdueAmount.toLocaleString()}.`
                         : 'No overdue invoices. Great!',
                     steps: [
                         {
@@ -417,10 +418,11 @@ class AIGuidedDeskService {
             }
             case 'payments': {
                 const monthCollected = Number(data?.summary?.collectedThisMonth || 0);
+                const currency = data?.currency || '';
                 return {
                     title: 'Money In',
                     summary: monthCollected > 0
-                        ? `You've received ₹${monthCollected.toLocaleString()} this month.`
+                        ? `You've received ${currency} ${monthCollected.toLocaleString()} this month.`
                         : 'No payments recorded this month.',
                     steps: [
                         {
@@ -441,10 +443,11 @@ class AIGuidedDeskService {
             }
             case 'expenses': {
                 const spendThisMonth = Number(data?.summary?.spendThisMonth || 0);
+                const currency = data?.currency || '';
                 return {
                     title: 'Money Out',
                     summary: spendThisMonth > 0
-                        ? `You've spent ₹${spendThisMonth.toLocaleString()} this month.`
+                        ? `You've spent ${currency} ${spendThisMonth.toLocaleString()} this month.`
                         : 'No expenses recorded.',
                     steps: [
                         {

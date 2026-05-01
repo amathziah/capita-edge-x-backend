@@ -3,13 +3,6 @@ import aiReadModelService from './readModel.service.js';
 import aiSemanticSearchService from '../search/semantic.service.js';
 
 const TOOL_DEFINITIONS = {
-    get_business_advisor_context: {
-        id: 'get_business_advisor_context',
-        label: 'Business Advisor Context',
-        description: 'Gets an overall AI summary of the business health. Use this for general queries like "how is my business doing", "what should I focus on", or "what is my overall health".',
-        uiComponent: null,
-        category: 'business_health'
-    },
     get_dashboard_snapshot: {
         id: 'get_dashboard_snapshot',
         label: 'Business Snapshot',
@@ -81,13 +74,6 @@ const TOOL_DEFINITIONS = {
         uiComponent: 'ai_domain_invoices',
         category: 'invoices'
     },
-    compare_invoices_vs_payments: {
-        id: 'compare_invoices_vs_payments',
-        label: 'Invoice vs Payment Comparison',
-        description: 'Compares total outstanding invoices against received payments to show collection efficiency. Use when comparing what\'s owed vs what\'s been collected.',
-        uiComponent: null,
-        category: 'comparison'
-    },
     get_cash_flow_trend: {
         id: 'get_cash_flow_trend',
         label: 'Cash Flow Trend',
@@ -129,6 +115,20 @@ const TOOL_DEFINITIONS = {
         description: 'Comprehensive metrics including KPIs like revenue growth, expense ratio, customer acquisition cost, etc. Use for detailed business analytics.',
         uiComponent: null,
         category: 'business_health'
+    },
+    predict_cash_shortfall: {
+        id: 'predict_cash_shortfall',
+        label: 'Cash Shortfall Predictor',
+        description: 'Predicts whether the business will face a cash shortfall in the next 30 days based on overdue receivables, expected payments, and upcoming expenses. Use for questions about cash runway, "will I run out of money", "can I afford X", or "what is my cash position next month".',
+        uiComponent: null,
+        category: 'cash_flow'
+    },
+    get_payment_patterns: {
+        id: 'get_payment_patterns',
+        label: 'Customer Payment Patterns',
+        description: 'Analyzes payment behavior patterns across all customers — who pays on time, who pays late, average delay days, and late-payer risk. Use for questions about which customers are reliable, who to follow up with first, or understanding collection risk.',
+        uiComponent: 'ai_domain_customers',
+        category: 'customers'
     }
 };
 
@@ -165,10 +165,6 @@ class AIToolRegistryService {
                 type: 'object',
                 properties: { query: { type: 'string', description: 'The search query for the knowledge base.' } },
                 required: ['query']
-            },
-            get_business_advisor_context: {
-                type: 'object',
-                properties: { query: { type: 'string', description: 'The user\'s question for context.' } }
             }
         };
 
@@ -190,8 +186,6 @@ class AIToolRegistryService {
         const organizationId = context.organizationId;
 
         switch (toolId) {
-            case 'get_business_advisor_context':
-                return aiReadModelService.getBusinessAdvisorContext(organizationId, args.query || context.query || '');
             case 'get_dashboard_snapshot':
                 return aiReadModelService.getDashboardSnapshot(organizationId);
             case 'get_recent_activity':
@@ -213,9 +207,10 @@ class AIToolRegistryService {
             case 'get_overdue_invoices':
                 return aiReadModelService.getOverdueReceivables(organizationId);
             
-            // New advanced tools
-            case 'compare_invoices_vs_payments':
-                return this.compareInvoicesVsPayments(organizationId);
+            case 'predict_cash_shortfall':
+                return this.predictCashShortfall(organizationId);
+            case 'get_payment_patterns':
+                return this.getPaymentPatterns(organizationId);
             case 'get_cash_flow_trend':
                 return this.getCashFlowTrend(organizationId);
             case 'get_profitability_analysis':
@@ -233,31 +228,144 @@ class AIToolRegistryService {
         }
     }
 
-    async compareInvoicesVsPayments(organizationId) {
-        const [invoices, payments] = await Promise.all([
+    async predictCashShortfall(organizationId) {
+        const [invoices, payments, expenses, snapshot] = await Promise.all([
             aiReadModelService.getInvoiceWorkspace(organizationId),
-            aiReadModelService.getPaymentWorkspace(organizationId)
+            aiReadModelService.getPaymentWorkspace(organizationId),
+            aiReadModelService.getExpenseWorkspace(organizationId),
+            aiReadModelService.getDashboardSnapshot(organizationId)
         ]);
 
-        const outstanding = invoices?.data?.summary?.totalOutstanding || 0;
-        const collected = payments?.data?.summary?.totalCollected || 0;
-        const collectionRate = outstanding + collected > 0 
-            ? (collected / (outstanding + collected)) * 100 
-            : 0;
+        const cashOnHand = snapshot?.data?.safeToSpend?.cashOnHand || 0;
+        const safeToSpend = snapshot?.data?.safeToSpend?.safeToSpend || 0;
+
+        // Expected cash inflows: invoices due in next 30 days
+        const today = new Date();
+        const in30Days = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+        const overdueAmount = invoices?.data?.summary?.overdueAmount || 0;
+        const totalOutstanding = invoices?.data?.summary?.totalOutstanding || 0;
+        const expectedInflows = totalOutstanding * 0.6; // conservative 60% collection rate
+
+        // Expected outflows: avg monthly expenses projected forward
+        const monthlyBurn = expenses?.data?.summary?.spendThisMonth || 0;
+        const projectedOutflows = monthlyBurn;
+
+        const netCash30Days = cashOnHand + expectedInflows - projectedOutflows;
+        const isShortfall = netCash30Days < 0;
+        const shortfallAmount = isShortfall ? Math.abs(netCash30Days) : 0;
+        const daysUntilShortfall = isShortfall && monthlyBurn > 0
+            ? Math.floor(cashOnHand / (monthlyBurn / 30))
+            : null;
+
+        const riskLevel = isShortfall ? 'high' : netCash30Days < monthlyBurn ? 'medium' : 'low';
 
         return {
             data: {
-                totalOutstanding: outstanding,
-                totalCollected: collected,
-                collectionRate: Math.round(collectionRate * 10) / 10,
-                pendingInvoices: invoices?.data?.summary?.totalOutstanding - invoices?.data?.summary?.overdueAmount || 0,
-                overdueAmount: invoices?.data?.summary?.overdueAmount || 0
+                cashOnHand,
+                safeToSpend,
+                expectedInflows: Math.round(expectedInflows),
+                projectedOutflows: Math.round(projectedOutflows),
+                netCash30Days: Math.round(netCash30Days),
+                isShortfall,
+                shortfallAmount: Math.round(shortfallAmount),
+                daysUntilShortfall,
+                riskLevel,
+                overdueReceivables: overdueAmount,
+                recommendation: isShortfall
+                    ? `Cash shortfall predicted in ${daysUntilShortfall || '< 30'} days. Prioritise collecting ${overdueAmount > 0 ? `the overdue receivables` : 'outstanding invoices'} immediately.`
+                    : riskLevel === 'medium'
+                    ? 'Cash is tight. Chase overdue invoices before committing to new expenses.'
+                    : 'Cash position looks healthy for the next 30 days.'
             },
             meta: {
-                source: 'compare_invoices_vs_payments',
+                source: 'predict_cash_shortfall',
                 generated_at: new Date().toISOString(),
                 organization_id: organizationId,
-                domain: 'comparison'
+                domain: 'cash_flow',
+                horizon_days: 30
+            }
+        };
+    }
+
+    async getPaymentPatterns(organizationId) {
+        const { data: payments, error } = await supabase
+            .from('payments')
+            .select('customer_id, amount, date, created_at')
+            .eq('organization_id', organizationId)
+            .order('date', { ascending: false })
+            .limit(200);
+
+        if (error || !payments?.length) {
+            return {
+                data: { patterns: [], summary: { totalCustomers: 0, latePayerCount: 0, onTimeRate: 0 } },
+                meta: { source: 'get_payment_patterns', generated_at: new Date().toISOString(), organization_id: organizationId, domain: 'customers' }
+            };
+        }
+
+        // Group by customer
+        const byCustomer = payments.reduce((acc, p) => {
+            if (!acc[p.customer_id]) acc[p.customer_id] = [];
+            acc[p.customer_id].push(p);
+            return acc;
+        }, {});
+
+        // Get customer names
+        const customerIds = Object.keys(byCustomer);
+        const { data: customers } = await supabase
+            .from('customers')
+            .select('id, name')
+            .in('id', customerIds)
+            .eq('organization_id', organizationId);
+
+        const nameMap = (customers || []).reduce((acc, c) => { acc[c.id] = c.name; return acc; }, {});
+
+        const patterns = customerIds.map(customerId => {
+            const pmts = byCustomer[customerId];
+            const totalPaid = pmts.reduce((s, p) => s + (p.amount || 0), 0);
+            const count = pmts.length;
+            const avgAmount = count > 0 ? totalPaid / count : 0;
+
+            // Classify payment frequency
+            const dates = pmts.map(p => new Date(p.date || p.created_at)).sort((a, b) => a - b);
+            const gaps = [];
+            for (let i = 1; i < dates.length; i++) {
+                gaps.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
+            }
+            const avgGapDays = gaps.length > 0 ? Math.round(gaps.reduce((s, g) => s + g, 0) / gaps.length) : null;
+            const reliability = count >= 3 ? (avgGapDays <= 35 ? 'reliable' : avgGapDays <= 60 ? 'slow' : 'irregular') : 'insufficient_data';
+
+            return {
+                customerId,
+                name: nameMap[customerId] || 'Unknown',
+                totalPaid: Math.round(totalPaid),
+                paymentCount: count,
+                avgPaymentAmount: Math.round(avgAmount),
+                avgDaysBetweenPayments: avgGapDays,
+                reliability,
+                lastPaymentDate: dates[dates.length - 1]?.toISOString().slice(0, 10) || null
+            };
+        }).sort((a, b) => b.totalPaid - a.totalPaid);
+
+        const latePayerCount = patterns.filter(p => p.reliability === 'slow' || p.reliability === 'irregular').length;
+        const reliableCount = patterns.filter(p => p.reliability === 'reliable').length;
+        const onTimeRate = patterns.length > 0 ? Math.round((reliableCount / patterns.length) * 100) : 0;
+
+        return {
+            data: {
+                patterns: patterns.slice(0, 10),
+                summary: {
+                    totalCustomers: patterns.length,
+                    reliablePayerCount: reliableCount,
+                    latePayerCount,
+                    onTimeRate,
+                    topPayer: patterns[0] || null
+                }
+            },
+            meta: {
+                source: 'get_payment_patterns',
+                generated_at: new Date().toISOString(),
+                organization_id: organizationId,
+                domain: 'customers'
             }
         };
     }

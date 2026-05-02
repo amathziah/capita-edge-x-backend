@@ -219,7 +219,11 @@ class AIActionExecutorService {
                     // Generate PDF in-memory (no temp file)
                     let pdfBuffer = null;
                     try {
-                        pdfBuffer = await pdfService.generateInvoicePDFBuffer(invoiceForPdf, orgSettings || {});
+                        const pdfSettings = { 
+                            ...(orgSettings || {}), 
+                            organization_name: org?.name 
+                        };
+                        pdfBuffer = await pdfService.generateInvoicePDFBuffer(invoiceForPdf, pdfSettings);
                     } catch (pdfErr) {
                         console.error('PDF buffer generation failed:', pdfErr);
                     }

@@ -79,7 +79,7 @@ class PDFService {
 
     getSeller(invoice = {}, settings = {}) {
         return {
-            name: invoice?.seller?.name || settings.owner_name || settings.businessName || 'Your Business',
+            name: settings.business_name || settings.businessName || settings.organization_name || settings.owner_name || 'Your Business',
             phone: invoice?.seller?.phone || settings.phone || '',
             email: invoice?.seller?.email || settings.email || '',
             address: invoice?.seller?.address || settings.address || '',

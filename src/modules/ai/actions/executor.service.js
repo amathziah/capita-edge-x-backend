@@ -164,30 +164,16 @@ class AIActionExecutorService {
             enrichedItems = items || [];
         }
 
-        // Fetch org + settings for "Billed From" preview
-        const { data: org } = await supabase
-            .from('organizations')
-            .select('*')
-            .eq('id', context.organizationId)
-            .single();
+        // 1. Parallel Lookups for speed
+        const [orgResult, configResult, integrationResult] = await Promise.all([
+            supabase.from('organizations').select('*').eq('id', context.organizationId).single(),
+            supabase.from('organization_configs').select('owner_name, business_name, address, gstin, phone, email, upi_id, bank_name, bank_account_number, bank_ifsc').eq('organization_id', context.organizationId).maybeSingle(),
+            supabase.from('organization_integrations').select('id').eq('organization_id', context.organizationId).in('provider', ['google', 'google_gmail']).maybeSingle()
+        ]);
 
-        const { data: orgSettings } = await supabase
-            .from('organization_configs')
-            .select('owner_name, business_name, address, gstin, phone, email, upi_id, bank_name, bank_account_number, bank_ifsc')
-            .eq('organization_id', context.organizationId)
-            .maybeSingle();
-
-        // Check for Google Integration if sendImmediately is true
-        let hasGoogleIntegration = false;
-        if (payload.sendImmediately) {
-            const { data: integration } = await supabase
-                .from('organization_integrations')
-                .select('id')
-                .eq('organization_id', context.organizationId)
-                .in('provider', ['google', 'google_gmail'])
-                .maybeSingle();
-            hasGoogleIntegration = !!integration;
-        }
+        const org = orgResult.data;
+        const orgSettings = configResult.data;
+        const hasGoogleIntegration = !!integrationResult.data;
 
         let message = 'Draft invoice created successfully.';
         if (payload.sendImmediately && (payload.customerEmail || customerId)) {

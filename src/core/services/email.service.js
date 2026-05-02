@@ -193,7 +193,7 @@ class EmailService {
                     }
 
                     const accessToken = tokenData.access_token;
-                    const fromName = settings.businessName || 'CapitaEdgeX';
+                    const fromName = settings.businessName || settings.business_name || settings.owner_name || 'Your Business';
                     const fromEmail = integration.metadata?.email;
                     const subject = `Invoice ${invoice.invoiceNumber} from ${fromName}`;
                     const html = this.generateInvoiceEmailHTML(invoice, settings);
@@ -426,7 +426,7 @@ class EmailService {
      * Generate HTML for invoice email
      */
     generateInvoiceEmailHTML(invoice, settings = {}) {
-        const businessName = settings.businessName || 'CapitaEdgeX';
+        const businessName = settings.businessName || settings.business_name || settings.owner_name || 'Your Business';
         const amount = invoice.total || 0;
         const currency = settings.currencySymbol || '₹';
         const dueDate = invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'N/A';

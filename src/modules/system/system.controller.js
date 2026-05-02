@@ -180,7 +180,7 @@ export const getSettings = async (req, res) => {
 };
 
 export const saveSetting = async (req, res) => {
-    const { key, value } = req.body;
+    let { key, value } = req.body;
 
     if (!key) {
         throw new APIError('Setting key is required', 400);
@@ -203,6 +203,24 @@ export const saveSetting = async (req, res) => {
     }
 
     const dbColumn = mapKeyToDb(key);
+
+    // Sanitize values for specific DB types
+    // 1. Handle empty strings for numeric columns
+    const numericColumns = ['daily_rate', 'default_gst_rate', 'default_due_days', 'follow_up_day_1', 'follow_up_day_2', 'follow_up_day_3', 'dead_stock_threshold_days'];
+    if (numericColumns.includes(dbColumn)) {
+        if (value === '' || value === null || value === undefined) {
+            value = null;
+        } else {
+            value = Number(value);
+            if (isNaN(value)) value = null;
+        }
+    }
+
+    // 2. Handle booleans
+    const booleanColumns = ['is_gst_registered', 'apply_gst_on_all_items', 'is_interstate', 'auto_follow_up', 'reorder_alerts_enabled', 'mrr_alerts_enabled', 'weekly_summary_enabled'];
+    if (booleanColumns.includes(dbColumn)) {
+        value = value === true || value === 'true';
+    }
 
     if (!CONFIG_COLUMNS.has(dbColumn)) {
         const config = await getOrCreateOrganizationConfig(req.user.organizationId);

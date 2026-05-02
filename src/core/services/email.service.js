@@ -173,23 +173,32 @@ class EmailService {
                     .maybeSingle();
 
                 if (integration && integration.refresh_token) {
-                    console.log(`📧 Using Gmail API (HTTPS) for org: ${settings.organizationId}`);
+                    console.log(`📧 Using Native Gmail API (HTTPS) for org: ${settings.organizationId}`);
                     
-                    const oauth2Client = new google.auth.OAuth2(
-                        process.env.GOOGLE_CLIENT_ID,
-                        process.env.GOOGLE_CLIENT_SECRET,
-                        `${process.env.APP_URL || 'http://localhost:5173'}/settings/integrations/google/callback`
-                    );
-                    oauth2Client.setCredentials({ refresh_token: integration.refresh_token });
+                    // 1. Get Access Token manually via Fetch
+                    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            client_id: process.env.GOOGLE_CLIENT_ID,
+                            client_secret: process.env.GOOGLE_CLIENT_SECRET,
+                            refresh_token: integration.refresh_token,
+                            grant_type: 'refresh_token',
+                        }),
+                    });
 
-                    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-                    
+                    const tokenData = await tokenResponse.json();
+                    if (!tokenData.access_token) {
+                        throw new Error(`Failed to refresh Google token: ${tokenData.error_description || tokenData.error || 'Unknown error'}`);
+                    }
+
+                    const accessToken = tokenData.access_token;
                     const fromName = settings.businessName || 'CapitaEdgeX';
                     const fromEmail = integration.metadata?.email;
                     const subject = `Invoice ${invoice.invoiceNumber} from ${fromName}`;
                     const html = this.generateInvoiceEmailHTML(invoice, settings);
 
-                    // Construct the raw email
+                    // 2. Construct the raw email
                     const boundary = 'foo_bar_baz';
                     const nl = '\n';
                     
@@ -223,26 +232,33 @@ class EmailService {
 
                     raw += `--${boundary}--`;
 
-                    // Base64url encode the raw message
                     const encodedMessage = Buffer.from(raw)
                         .toString('base64')
                         .replace(/\+/g, '-')
                         .replace(/\//g, '_')
                         .replace(/=+$/, '');
 
-                    const res = await gmail.users.messages.send({
-                        userId: 'me',
-                        requestBody: {
-                            raw: encodedMessage
-                        }
+                    // 3. Send via Fetch to Gmail API
+                    const sendResponse = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ raw: encodedMessage }),
                     });
 
-                    console.log('✅ Invoice sent via Gmail API:', res.data.id);
-                    return { success: true, messageId: res.data.id };
+                    const sendData = await sendResponse.json();
+                    if (!sendResponse.ok) {
+                        throw new Error(`Gmail API error: ${sendData.error?.message || 'Unknown error'}`);
+                    }
+
+                    console.log('✅ Invoice sent via Native Gmail API:', sendData.id);
+                    return { success: true, messageId: sendData.id };
                 }
             } catch (err) {
-                console.error('❌ Gmail API Dispatch Failed:', err.message);
-                // Fall back to SMTP if API fails
+                console.error('❌ Native Gmail Dispatch Failed:', err.message);
+                throw err; // Rethrow to let the executor log it in Notes
             }
         }
 

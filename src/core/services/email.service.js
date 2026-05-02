@@ -423,58 +423,46 @@ class EmailService {
     }
 
     /**
-     * Generate invoice email HTML
+     * Generate HTML for invoice email
      */
-    generateInvoiceEmailHTML(invoice, settings) {
+    generateInvoiceEmailHTML(invoice, settings = {}) {
+        const businessName = settings.businessName || 'CapitaEdgeX';
+        const amount = invoice.total || 0;
+        const currency = settings.currencySymbol || '₹';
+        const dueDate = invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'N/A';
+
         return `
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: #4F46E5; color: white; padding: 20px; text-align: center; }
-        .content { padding: 20px; background: #f9f9f9; }
-        .invoice-details { background: white; padding: 15px; margin: 20px 0; border-left: 4px solid #4F46E5; }
-        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-        .button { display: inline-block; padding: 12px 24px; background: #4F46E5; color: white; text-decoration: none; border-radius: 5px; margin: 10px 0; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>${settings.businessName || 'Invoice'}</h1>
-        </div>
-        <div class="content">
-            <p>Dear ${invoice.buyer?.name || 'Customer'},</p>
-            <p>Thank you for your business! Please find attached your invoice.</p>
-            
-            <div class="invoice-details">
-                <h3>Invoice Details</h3>
-                <p><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</p>
-                <p><strong>Date:</strong> ${new Date(invoice.createdAt).toLocaleDateString()}</p>
-                <p><strong>Due Date:</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</p>
-                <p><strong>Amount Due:</strong> ₹${invoice.total.toLocaleString()}</p>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; }
+                .header { border-bottom: 2px solid #059669; padding-bottom: 10px; margin-bottom: 20px; }
+                .details { background-color: #f9fafb; padding: 15px; border-radius: 6px; margin: 20px 0; }
+                .footer { margin-top: 30px; font-size: 0.85em; color: #6b7280; border-top: 1px solid #e5e7eb; padding-top: 15px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2 style="color: #059669; margin: 0;">New Invoice from ${businessName}</h2>
+                </div>
+                <p>Hello,</p>
+                <p>Please find the invoice <strong>${invoice.invoiceNumber}</strong> attached to this email.</p>
+                <div class="details">
+                    <p style="margin: 5px 0;"><strong>Invoice Number:</strong> ${invoice.invoiceNumber}</p>
+                    <p style="margin: 5px 0;"><strong>Amount Due:</strong> ${currency}${amount.toLocaleString()}</p>
+                    <p style="margin: 5px 0;"><strong>Due Date:</strong> ${dueDate}</p>
+                </div>
+                <p>If you have any questions, please feel free to reach out to us directly.</p>
+                <p>Best regards,<br><strong>${businessName}</strong></p>
+                <div class="footer">
+                    <p>This invoice was generated securely via <strong>CapitaEdgeX</strong>.</p>
+                </div>
             </div>
-
-            ${settings.paymentInstructions ? `
-            <div class="invoice-details">
-                <h3>Payment Instructions</h3>
-                <p>${settings.paymentInstructions}</p>
-                ${settings.bankDetails ? `<p>${settings.bankDetails}</p>` : ''}
-            </div>
-            ` : ''}
-
-            <p>If you have any questions, please don't hesitate to contact us.</p>
-            <p>Best regards,<br>${settings.businessName || 'Your Business'}</p>
-        </div>
-        <div class="footer">
-            <p>${settings.email || ''} | ${settings.phone || ''}</p>
-            <p>${settings.address || ''}</p>
-        </div>
-    </div>
-</body>
-</html>
+        </body>
+        </html>
         `;
     }
 

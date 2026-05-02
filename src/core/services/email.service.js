@@ -98,38 +98,19 @@ class EmailService {
                     .maybeSingle();
 
                 if (integration && integration.refresh_token) {
-                    console.log('📧 Using Google OAuth Integration for current action');
+                    console.log(`📧 Using Google OAuth Integration for org: ${settings.organizationId}`);
                     
-                    const oauth2Client = new google.auth.OAuth2(
-                        process.env.GOOGLE_CLIENT_ID,
-                        process.env.GOOGLE_CLIENT_SECRET,
-                        `${process.env.APP_URL || 'http://localhost:5173'}/settings/integrations/google/callback`
-                    );
-
-                    oauth2Client.setCredentials({
-                        refresh_token: integration.refresh_token
-                    });
-
                     // Set the email address in settings so it can be used for the From address
                     settings.integrationEmail = integration.metadata?.email;
 
-                    const accessTokenResponse = await oauth2Client.getAccessToken();
-                    if (!accessTokenResponse.token) {
-                        throw new Error('Could not retrieve access token from Google OAuth refresh token.');
-                    }
-
                     return nodemailer.createTransport({
                         service: 'gmail',
-                        timeout: 60000, // 60 seconds
-                        connectionTimeout: 60000,
-                        greetingTimeout: 60000,
                         auth: {
                             type: 'OAuth2',
                             user: integration.metadata?.email,
                             clientId: process.env.GOOGLE_CLIENT_ID,
                             clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-                            refreshToken: integration.refresh_token,
-                            accessToken: accessTokenResponse.token
+                            refreshToken: integration.refresh_token
                         }
                     });
                 } else {

@@ -162,6 +162,90 @@ class EmailService {
      * Send invoice email with PDF attachment
      */
     async sendInvoice(invoice, pdfPath, recipientEmail, settings = {}) {
+        // 1. Check for Google OAuth Integration (Bypasses SMTP block on Render)
+        if (settings.organizationId) {
+            try {
+                const { data: integration } = await supabase
+                    .from('organization_integrations')
+                    .select('*')
+                    .eq('organization_id', settings.organizationId)
+                    .eq('provider', 'google')
+                    .maybeSingle();
+
+                if (integration && integration.refresh_token) {
+                    console.log(`📧 Using Gmail API (HTTPS) for org: ${settings.organizationId}`);
+                    
+                    const oauth2Client = new google.auth.OAuth2(
+                        process.env.GOOGLE_CLIENT_ID,
+                        process.env.GOOGLE_CLIENT_SECRET
+                    );
+                    oauth2Client.setCredentials({ refresh_token: integration.refresh_token });
+
+                    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+                    
+                    const fromName = settings.businessName || 'CapitaEdgeX';
+                    const fromEmail = integration.metadata?.email;
+                    const subject = `Invoice ${invoice.invoiceNumber} from ${fromName}`;
+                    const html = this.generateInvoiceEmailHTML(invoice, settings);
+
+                    // Construct the raw email
+                    const boundary = 'foo_bar_baz';
+                    const nl = '\n';
+                    
+                    let raw = [
+                        `From: "${fromName}" <${fromEmail}>`,
+                        `To: ${recipientEmail}`,
+                        `Subject: ${subject}`,
+                        'MIME-Version: 1.0',
+                        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+                        '',
+                        `--${boundary}`,
+                        'Content-Type: text/html; charset="UTF-8"',
+                        'Content-Transfer-Encoding: 7bit',
+                        '',
+                        html,
+                        '',
+                    ].join(nl);
+
+                    if (pdfPath) {
+                        const content = Buffer.isBuffer(pdfPath) ? pdfPath : fs.readFileSync(pdfPath);
+                        raw += [
+                            `--${boundary}`,
+                            'Content-Type: application/pdf',
+                            'Content-Transfer-Encoding: base64',
+                            `Content-Disposition: attachment; filename="Invoice_${invoice.invoiceNumber}.pdf"`,
+                            '',
+                            content.toString('base64'),
+                            '',
+                        ].join(nl);
+                    }
+
+                    raw += `--${boundary}--`;
+
+                    // Base64url encode the raw message
+                    const encodedMessage = Buffer.from(raw)
+                        .toString('base64')
+                        .replace(/\+/g, '-')
+                        .replace(/\//g, '_')
+                        .replace(/=+$/, '');
+
+                    const res = await gmail.users.messages.send({
+                        userId: 'me',
+                        requestBody: {
+                            raw: encodedMessage
+                        }
+                    });
+
+                    console.log('✅ Invoice sent via Gmail API:', res.data.id);
+                    return { success: true, messageId: res.data.id };
+                }
+            } catch (err) {
+                console.error('❌ Gmail API Dispatch Failed:', err.message);
+                // Fall back to SMTP if API fails
+            }
+        }
+
+        // 2. Fallback to Nodemailer SMTP
         const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
@@ -201,14 +285,10 @@ class EmailService {
 
         try {
             const info = await transporter.sendMail(mailOptions);
-            console.log('Invoice email sent:', info.messageId);
+            console.log('Invoice email sent via SMTP:', info.messageId);
             return { success: true, messageId: info.messageId };
         } catch (error) {
-            console.error('Email send error:', error);
-            if (error.responseCode === 535 || error.code === 'EAUTH') {
-                const { APIError } = await import('../../core/middleware/errorHandler.js');
-                throw new APIError('Email authentication failed. Please check your SMTP credentials in Settings or .env file.', 401);
-            }
+            console.error('SMTP send error:', error);
             throw error;
         }
     }

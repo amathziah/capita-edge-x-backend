@@ -224,17 +224,24 @@ class AIActionExecutorService {
                         console.error('PDF buffer generation failed:', pdfErr);
                     }
 
-                    await emailService.sendInvoice(
+                    // Dispatch in the background so the AI can respond to the user immediately
+                    emailService.sendInvoice(
                         invoiceForPdf,
                         pdfBuffer,
                         targetEmail,
                         { organizationId: context.organizationId, ...(orgSettings || {}) }
-                    );
+                    ).catch(async (bgErr) => {
+                        console.error('[AI Executor] Background email dispatch failed:', bgErr);
+                        // Optional: Update invoice status to 'failed' in DB if you want to track it
+                        await supabase.from('invoices').update({ 
+                            notes: `Automatic send failed: ${bgErr.message}` 
+                        }).eq('id', invoice.id);
+                    });
 
-                    // Update status to sent
+                    // Update status to 'sent' optimistically (or 'processing')
                     await supabase.from('invoices').update({ status: 'sent' }).eq('id', invoice.id);
                     invoice.status = 'sent';
-                    message = `Invoice created and sent to ${targetEmail}.`;
+                    message = `Invoice created and is being sent to ${targetEmail} in the background.`;
                 } else {
                     message = 'Invoice created as draft (no email address found).';
                 }

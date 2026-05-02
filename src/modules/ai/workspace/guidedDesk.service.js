@@ -350,119 +350,43 @@ class AIGuidedDeskService {
     }
 
     _getDomainActions(domain) {
-        switch (domain) {
-            case 'invoices':
-                return [
-                    {
-                        id: 'create_invoice',
-                        type: 'navigate',
-                        label: 'Create Invoice',
-                        description: 'Quick create a new invoice.',
-                        to: '/dashboard/invoices/new'
-                    }
-                ];
-            case 'payments':
-                return [
-                    {
-                        id: 'open_payments_page',
-                        type: 'navigate',
-                        label: 'View Payments',
-                        description: 'Go to payments page.',
-                        to: '/dashboard/payments'
-                    }
-                ];
-            case 'expenses':
-                return [
-                    {
-                        id: 'open_expenses_page',
-                        type: 'navigate',
-                        label: 'View Expenses',
-                        description: 'Go to expenses page.',
-                        to: '/dashboard/expenses'
-                    }
-                ];
-            default:
-                return [];
-        }
+        return [];
     }
 
     _buildWorkspaceGuidance(domain, data = {}, selectedView = 'overview') {
+        const currency = data?.currency || '';
         switch (domain) {
             case 'invoices': {
                 const overdueCount = Number(data?.summary?.overdueCount || 0);
                 const overdueAmount = Number(data?.summary?.overdueAmount || 0);
-                const currency = data?.currency || '';
                 return {
                     title: 'Invoices',
                     summary: overdueCount > 0
                         ? `You have ${overdueCount} overdue invoices worth ${currency} ${overdueAmount.toLocaleString()}.`
                         : 'No overdue invoices. Great!',
-                    steps: [
-                        {
-                            id: 'invoice_overdue',
-                            label: overdueCount > 0 ? `${overdueCount} Overdue` : 'All Good',
-                            description: overdueCount > 0
-                                ? 'See who to chase.'
-                                : 'No action needed.',
-                            view: 'overdue'
-                        },
-                        {
-                            id: 'invoice_create',
-                            label: 'Create Invoice',
-                            description: 'Quick create a new invoice.',
-                            view: 'quick'
-                        }
-                    ],
+                    steps: [],
                     selectedView
                 };
             }
             case 'payments': {
                 const monthCollected = Number(data?.summary?.collectedThisMonth || 0);
-                const currency = data?.currency || '';
                 return {
                     title: 'Money In',
                     summary: monthCollected > 0
                         ? `You've received ${currency} ${monthCollected.toLocaleString()} this month.`
                         : 'No payments recorded this month.',
-                    steps: [
-                        {
-                            id: 'payment_recent',
-                            label: 'Recent Payments',
-                            description: 'See latest payments.',
-                            view: 'recent'
-                        },
-                        {
-                            id: 'payment_monthly',
-                            label: 'This Month',
-                            description: 'Total received.',
-                            view: 'monthly'
-                        }
-                    ],
+                    steps: [],
                     selectedView
                 };
             }
             case 'expenses': {
                 const spendThisMonth = Number(data?.summary?.spendThisMonth || 0);
-                const currency = data?.currency || '';
                 return {
                     title: 'Money Out',
                     summary: spendThisMonth > 0
                         ? `You've spent ${currency} ${spendThisMonth.toLocaleString()} this month.`
                         : 'No expenses recorded.',
-                    steps: [
-                        {
-                            id: 'expense_monthly',
-                            label: 'This Month',
-                            description: 'Total spent.',
-                            view: 'overview'
-                        },
-                        {
-                            id: 'expense_categories',
-                            label: 'Categories',
-                            description: 'Top spending categories.',
-                            view: 'categories'
-                        }
-                    ],
+                    steps: [],
                     selectedView
                 };
             }

@@ -137,18 +137,34 @@ class AIActionExecutorService {
         if (error) throw error;
         
         // Also insert a basic invoice item
+        let enrichedItems = [];
         if (invoice) {
-            await supabase.from('invoice_items').insert([{
+            const { data: items } = await supabase.from('invoice_items').insert([{
                 invoiceId: invoice.id,
                 description: payload.description || 'Consulting / Services',
                 quantity: 1,
                 price: amount,
                 organization_id: context.organizationId,
                 sort_order: 0
-            }]);
+            }]).select();
+            enrichedItems = items || [];
         }
 
-        return { status: 'created', invoice };
+        // Fetch org details for "Billed From" preview
+        const { data: org } = await supabase
+            .from('organizations')
+            .select('*')
+            .eq('id', context.organizationId)
+            .single();
+
+        return { 
+            status: 'created', 
+            invoice: { 
+                ...invoice, 
+                items: enrichedItems,
+                organization: org
+            } 
+        };
     }
 
     async sendReminder(action = {}, context = {}) {

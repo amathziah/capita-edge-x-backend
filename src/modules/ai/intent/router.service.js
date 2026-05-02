@@ -51,8 +51,8 @@ Query: ${JSON.stringify(query)}
 Decide:
 1. intent — one of:
    - "conversational" : greeting, "what can you do", general chit-chat, definitional ("what is GST")
-   - "data_question" : asks about THEIR data — needs tool calls but no multi-step plan
-   - "skill_invocation" : matches a skill trigger above (multi-step workflow with side-effects worth planning)
+   - "data_question" : tasks involving single actions like creating an invoice, drafting a customer, or asking about data. This uses function calling.
+   - "skill_invocation" : matches a skill trigger above (complex multi-step workflows like "chasing overdue payments" or "closing the month").
    - "unsupported" : finance-adjacent but outside the five domains
 2. domain — one of [invoices, payments, expenses, compliance, customers] or null
 3. suggestedSkill — exact skill id from the list above, or null

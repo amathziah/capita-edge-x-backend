@@ -1,7 +1,9 @@
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import fs from 'fs';
+import { google } from 'googleapis';
 import { DEFAULTS } from '../../core/config/constants.js';
+import { supabase } from '../../core/database/supabase.js';
 
 dotenv.config();
 
@@ -63,6 +65,10 @@ class EmailService {
      *        - default  → EMAIL_FROM (info@capitaedgex.com)
      */
     resolveFromAddress(settings = {}, category = 'default') {
+        if (settings.integrationEmail) {
+            return `"${settings.businessName || 'Business'}" <${settings.integrationEmail}>`;
+        }
+
         if (settings.smtp_user) {
             return `"${settings.businessName || 'Business'}" <${settings.smtp_user}>`;
         }
@@ -80,7 +86,50 @@ class EmailService {
     /**
      * Create dynamic transporter based on settings
      */
-    createTransporter(settings = {}) {
+    async createTransporter(settings = {}) {
+        // 0. Check for Native Google OAuth Integration
+        if (settings.organizationId) {
+            try {
+                const { data: integration } = await supabase
+                    .from('organization_integrations')
+                    .select('*')
+                    .eq('organization_id', settings.organizationId)
+                    .eq('provider', 'google')
+                    .maybeSingle();
+
+                if (integration && integration.refresh_token) {
+                    console.log('📧 Using Google OAuth Integration for current action');
+                    
+                    const oauth2Client = new google.auth.OAuth2(
+                        process.env.GOOGLE_CLIENT_ID,
+                        process.env.GOOGLE_CLIENT_SECRET,
+                        `${process.env.APP_URL || 'http://localhost:5173'}/settings/integrations/google/callback`
+                    );
+
+                    oauth2Client.setCredentials({
+                        refresh_token: integration.refresh_token
+                    });
+
+                    // Set the email address in settings so it can be used for the From address
+                    settings.integrationEmail = integration.metadata?.email;
+
+                    return nodemailer.createTransport({
+                        service: 'gmail',
+                        auth: {
+                            type: 'OAuth2',
+                            user: integration.metadata?.email,
+                            clientId: process.env.GOOGLE_CLIENT_ID,
+                            clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+                            refreshToken: integration.refresh_token,
+                            accessToken: (await oauth2Client.getAccessToken()).token
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to load Google OAuth integration:', err.message);
+            }
+        }
+
         // 1. If User has provided Gmail credentials, use them (Bypasses global mock mode if user explicitly configured)
         if (settings.smtp_user && settings.smtp_pass) {
             console.log('📧 Using User Gmail Credentials for current action');
@@ -109,7 +158,7 @@ class EmailService {
      */
     async verifyConnection(settings) {
         try {
-            const transporter = this.createTransporter(settings);
+            const transporter = await this.createTransporter(settings);
             await transporter.verify();
             return { success: true, message: 'Connection successful' };
         } catch (error) {
@@ -122,7 +171,7 @@ class EmailService {
      * Send invoice email with PDF attachment
      */
     async sendInvoice(invoice, pdfPath, recipientEmail, settings = {}) {
-        const transporter = this.createTransporter(settings);
+        const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
             console.log('------ MOCK INVOICE SENT ------');
@@ -177,7 +226,7 @@ class EmailService {
      * Send payment reminder
      */
     async sendPaymentReminder(invoice, recipientEmail, settings = {}, pdfPath = null) {
-        const transporter = this.createTransporter(settings);
+        const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
             console.log('------ MOCK REMINDER SENT ------');
@@ -233,7 +282,7 @@ class EmailService {
      * Send custom email
      */
     async sendCustomEmail(recipientEmail, subject, html, settings = {}, attachments = []) {
-        const transporter = this.createTransporter(settings);
+        const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
             console.log('------ MOCK CUSTOM EMAIL SENT ------');
@@ -410,7 +459,7 @@ class EmailService {
      * Send receipt email
      */
     async sendReceipt(invoice, pdfPath, recipientEmail, settings = {}, emailType = 'INITIAL_RECEIPT') {
-        const transporter = this.createTransporter(settings);
+        const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
             console.log('------ MOCK RECEIPT SENT ------');
@@ -530,7 +579,7 @@ class EmailService {
      * Send account confirmation email
      */
     async sendConfirmationEmail(recipientEmail, confirmationLink, settings = {}) {
-        const transporter = this.createTransporter(settings);
+        const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
             console.log('------ MOCK CONFIRMATION EMAIL SENT ------');
@@ -569,7 +618,7 @@ class EmailService {
      * Send OTP verification email
      */
     async sendOtpEmail(recipientEmail, otp, settings = {}) {
-        const transporter = this.createTransporter(settings);
+        const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
             console.log('------ MOCK OTP EMAIL SENT ------');

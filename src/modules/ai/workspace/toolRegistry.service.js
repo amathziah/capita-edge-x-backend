@@ -203,8 +203,10 @@ class AIToolRegistryService {
                 properties: {
                     customerId: { type: 'string', description: 'ID of the customer.' },
                     customerName: { type: 'string', description: 'Name of the customer if ID is not known.' },
+                    customerEmail: { type: 'string', description: 'Email address of the customer if known.' },
                     amount: { type: 'number', description: 'Total amount of the invoice.' },
-                    description: { type: 'string', description: 'Description of the goods or services.' }
+                    description: { type: 'string', description: 'Description of the goods or services.' },
+                    sendImmediately: { type: 'boolean', description: 'Set to true if the user explicitly asks to send the invoice right away.'}
                 },
                 required: ['amount']
             },

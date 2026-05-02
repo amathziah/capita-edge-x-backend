@@ -82,7 +82,13 @@ const KEY_MAPPING = {
 };
 
 const REVERSE_MAPPING = Object.fromEntries(
-    Object.entries(KEY_MAPPING).map(([k, v]) => [v, k])
+    Object.entries(KEY_MAPPING)
+        .sort(([a], [b]) => {
+            // Sort snake_case keys first, so camelCase keys (if they exist) 
+            // appear later and overwrite them in the final map.
+            return a.includes('_') ? -1 : 1;
+        })
+        .map(([k, v]) => [v, k])
 );
 
 /**

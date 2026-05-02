@@ -25,6 +25,7 @@ import analyticsRoutes from './modules/analytics/analytics.route.js';
 import systemRoutes from './modules/system/system.route.js';
 import reportRoutes from './modules/reports/report.route.js';
 import productsRoutes from './modules/products/products.route.js';
+import integrationRoutes from './modules/integrations/integration.route.js';
 
 // Load environment variables
 dotenv.config();
@@ -120,6 +121,7 @@ export const createApp = () => {
     app.use('/api/notifications', notificationRoutes);
     app.use('/api/system', systemRoutes);
     app.use('/api', systemRoutes);
+    app.use('/api/integrations', integrationRoutes);
 
     app.use('/api/reports', reportRoutes);
 

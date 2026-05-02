@@ -120,6 +120,9 @@ class EmailService {
 
                     return nodemailer.createTransport({
                         service: 'gmail',
+                        timeout: 60000, // 60 seconds
+                        connectionTimeout: 60000,
+                        greetingTimeout: 60000,
                         auth: {
                             type: 'OAuth2',
                             user: integration.metadata?.email,

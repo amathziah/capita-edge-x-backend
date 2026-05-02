@@ -177,7 +177,8 @@ class EmailService {
                     
                     const oauth2Client = new google.auth.OAuth2(
                         process.env.GOOGLE_CLIENT_ID,
-                        process.env.GOOGLE_CLIENT_SECRET
+                        process.env.GOOGLE_CLIENT_SECRET,
+                        `${process.env.APP_URL || 'http://localhost:5173'}/settings/integrations/google/callback`
                     );
                     oauth2Client.setCredentials({ refresh_token: integration.refresh_token });
 

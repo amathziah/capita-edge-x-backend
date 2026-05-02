@@ -232,9 +232,9 @@ class AIActionExecutorService {
                         { organizationId: context.organizationId, ...(orgSettings || {}) }
                     ).catch(async (bgErr) => {
                         console.error('[AI Executor] Background email dispatch failed:', bgErr);
-                        // Optional: Update invoice status to 'failed' in DB if you want to track it
+                        const errorDetail = bgErr.code || bgErr.name || 'Unknown Error';
                         await supabase.from('invoices').update({ 
-                            notes: `Automatic send failed: ${bgErr.message}` 
+                            notes: `Auto-send failed [${errorDetail}]: ${bgErr.message.slice(0, 100)}` 
                         }).eq('id', invoice.id);
                     });
 

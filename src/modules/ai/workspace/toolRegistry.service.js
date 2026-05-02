@@ -1,6 +1,7 @@
 import { supabase } from '../../../core/database/supabase.js';
 import aiReadModelService from './readModel.service.js';
 import aiSemanticSearchService from '../search/semantic.service.js';
+import aiActionExecutorService from '../actions/executor.service.js';
 
 const TOOL_DEFINITIONS = {
     get_dashboard_snapshot: {
@@ -129,6 +130,27 @@ const TOOL_DEFINITIONS = {
         description: 'Analyzes payment behavior patterns across all customers — who pays on time, who pays late, average delay days, and late-payer risk. Use for questions about which customers are reliable, who to follow up with first, or understanding collection risk.',
         uiComponent: 'ai_domain_customers',
         category: 'customers'
+    },
+    create_customer: {
+        id: 'create_customer',
+        label: 'Create Customer',
+        description: 'Creates a new customer record in the database. Use this when the user explicitly asks to create or add a new customer.',
+        uiComponent: null,
+        category: 'customers'
+    },
+    create_invoice_draft: {
+        id: 'create_invoice_draft',
+        label: 'Create Draft Invoice',
+        description: 'Drafts a new invoice for a customer. Use this when the user asks to create an invoice.',
+        uiComponent: null,
+        category: 'invoices'
+    },
+    send_reminder: {
+        id: 'send_reminder',
+        label: 'Send Invoice Reminder',
+        description: 'Sends a collection email or reminder to a customer for an overdue invoice. Use this when the user asks to chase or remind a client.',
+        uiComponent: null,
+        category: 'invoices'
     }
 };
 
@@ -165,6 +187,33 @@ class AIToolRegistryService {
                 type: 'object',
                 properties: { query: { type: 'string', description: 'The search query for the knowledge base.' } },
                 required: ['query']
+            },
+            create_customer: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string', description: 'Name of the customer or business.' },
+                    email: { type: 'string', description: 'Email address of the customer.' },
+                    phone: { type: 'string', description: 'Phone number of the customer.' },
+                    address: { type: 'string', description: 'Physical address of the customer.' }
+                },
+                required: ['name']
+            },
+            create_invoice_draft: {
+                type: 'object',
+                properties: {
+                    customerId: { type: 'string', description: 'ID of the customer.' },
+                    customerName: { type: 'string', description: 'Name of the customer if ID is not known.' },
+                    amount: { type: 'number', description: 'Total amount of the invoice.' },
+                    description: { type: 'string', description: 'Description of the goods or services.' }
+                },
+                required: ['amount']
+            },
+            send_reminder: {
+                type: 'object',
+                properties: {
+                    invoiceNumber: { type: 'string', description: 'The invoice number to remind them about.' },
+                    customerName: { type: 'string', description: 'Name of the customer.' }
+                }
             }
         };
 
@@ -223,6 +272,12 @@ class AIToolRegistryService {
                 return this.getUpcomingDeadlines(organizationId);
             case 'get_business_metrics_summary':
                 return this.getBusinessMetricsSummary(organizationId);
+            case 'create_customer':
+                return { data: await aiActionExecutorService.createCustomer({ data: args }, context) };
+            case 'create_invoice_draft':
+                return { data: await aiActionExecutorService.createInvoiceDraft({ data: args }, context) };
+            case 'send_reminder':
+                return { data: await aiActionExecutorService.sendReminder({ data: args }, context) };
             default:
                 throw new Error(`Unknown AI tool: ${toolId}`);
         }

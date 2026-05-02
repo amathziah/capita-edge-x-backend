@@ -60,6 +60,7 @@ PROACTIVE BEHAVIOUR (important differentiator)
 - If a tool result reveals an urgent issue (overdue > 30 days, cash shortfall predicted, compliance deadline < 7 days), flag it even if the user didn't ask.
 - Lead with the most urgent finding, not a summary of everything.
 - Always end a data-grounded answer with ONE specific next action ("Send a reminder to [Name] today" not "consider following up").
+- You can now perform actions! If the user asks you to create a customer, draft an invoice, or send a reminder, use the appropriate tool and confirm success.
 
 RESPONSE STYLE
 - Lead with the answer or the most urgent fact. Never open with a greeting or the user's name.
@@ -306,12 +307,23 @@ Markdown allowed. Keep it tight — short paragraphs, simple bullets.`;
             workspace = await this._enrichWorkspace(workspace, orgId);
         }
 
+        let actionPayload = null;
+        for (let i = 0; i < toolCalls.length; i++) {
+            if (['create_customer', 'create_invoice_draft', 'send_reminder'].includes(toolCalls[i].name) && toolResults[i]?.ok) {
+                actionPayload = {
+                    type: toolCalls[i].name,
+                    result: toolResults[i].data
+                };
+            }
+        }
+
         const grounded = toolResults.some(r => r.ok);
         const primaryDomain = workspace?.domain || null;
 
         return {
             text: finalText.trim(),
             usage,
+            action: actionPayload,
             provider: `gemini:${providerModel || 'unknown'}`,
             data: {
                 type: workspace ? 'workspace_view' : (grounded ? 'grounded_answer' : 'general'),
@@ -356,7 +368,7 @@ Markdown allowed. Keep it tight — short paragraphs, simple bullets.`;
 
         const result = await this._runAgenticLoop(query, context, { traceId });
         result.traceId = traceId;
-        result.action = null;
+        // Result.action is now populated by the loop if a mutation tool was used
 
         aiSessionManagerService.addMessage(session, { role: 'user', content: query });
         aiSessionManagerService.addMessage(session, {
@@ -399,7 +411,7 @@ Markdown allowed. Keep it tight — short paragraphs, simple bullets.`;
         yield {
             type: 'complete',
             text: result.text,
-            action: null,
+            action: result.action || null,
             usage: result.usage,
             provider: result.provider,
             budget: result.budget,

@@ -113,6 +113,11 @@ class EmailService {
                     // Set the email address in settings so it can be used for the From address
                     settings.integrationEmail = integration.metadata?.email;
 
+                    const accessTokenResponse = await oauth2Client.getAccessToken();
+                    if (!accessTokenResponse.token) {
+                        throw new Error('Could not retrieve access token from Google OAuth refresh token.');
+                    }
+
                     return nodemailer.createTransport({
                         service: 'gmail',
                         auth: {
@@ -121,12 +126,14 @@ class EmailService {
                             clientId: process.env.GOOGLE_CLIENT_ID,
                             clientSecret: process.env.GOOGLE_CLIENT_SECRET,
                             refreshToken: integration.refresh_token,
-                            accessToken: (await oauth2Client.getAccessToken()).token
+                            accessToken: accessTokenResponse.token
                         }
                     });
+                } else {
+                    console.log(`📧 No Google integration found or missing refresh token for org: ${settings.organizationId}. Falling back...`);
                 }
             } catch (err) {
-                console.error('Failed to load Google OAuth integration:', err.message);
+                console.error('❌ Failed to load Google OAuth integration:', err.message);
             }
         }
 

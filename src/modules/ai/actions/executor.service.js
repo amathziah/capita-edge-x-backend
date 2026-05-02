@@ -184,7 +184,7 @@ class AIActionExecutorService {
                 .from('organization_integrations')
                 .select('id')
                 .eq('organization_id', context.organizationId)
-                .eq('provider', 'google')
+                .in('provider', ['google', 'google_gmail'])
                 .maybeSingle();
             hasGoogleIntegration = !!integration;
         }

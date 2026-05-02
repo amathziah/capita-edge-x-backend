@@ -458,7 +458,7 @@ class EmailService {
                 <p>If you have any questions, please feel free to reach out to us directly.</p>
                 <p>Best regards,<br><strong>${businessName}</strong></p>
                 <div class="footer">
-                    <p>This invoice was generated securely via <strong>CapitaEdgeX</strong>.</p>
+                    <p>This invoice was generated securely by <strong>${businessName}</strong>.</p>
                 </div>
             </div>
         </body>

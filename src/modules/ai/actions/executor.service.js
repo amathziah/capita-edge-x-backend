@@ -86,7 +86,12 @@ class AIActionExecutorService {
 
     async createInvoiceDraft(action = {}, context = {}) {
         const payload = action.data || {};
-        const amount = Number(payload.amount || 0);
+        let items = payload.items || [];
+        
+        let amount = Number(payload.amount || 0);
+        if (amount <= 0 && items.length > 0) {
+            amount = items.reduce((sum, item) => sum + (Number(item.quantity || 1) * Number(item.price || 0)), 0);
+        }
         
         if (amount <= 0) {
             return {
@@ -99,7 +104,6 @@ class AIActionExecutorService {
         let customerEmail = payload.customerEmail || null;
         let customerName = payload.customerName || null;
         let customerAddress = payload.customerAddress || null;
-        let items = payload.items || [];
         
         if (!customerEmail || !customerAddress || !items || items.length === 0) {
             return {

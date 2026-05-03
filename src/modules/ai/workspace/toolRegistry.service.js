@@ -202,26 +202,26 @@ class AIToolRegistryService {
                 type: 'object',
                 properties: {
                     customerId: { type: 'string', description: 'ID of the customer.' },
-                    customerName: { type: 'string', description: 'Name of the customer if ID is not known.' },
-                    customerEmail: { type: 'string', description: 'Email address of the customer (Required).' },
-                    customerAddress: { type: 'string', description: 'Physical address of the customer (Required).' },
-                    amount: { type: 'number', description: 'Total amount of the invoice.' },
+                    customerName: { type: 'string', description: 'Name of the customer. Infer this from the conversation.' },
+                    customerEmail: { type: 'string', description: 'Email address of the customer (Required). Ask the user if missing.' },
+                    customerAddress: { type: 'string', description: 'Physical address of the customer (Required). Ask the user if missing.' },
+                    amount: { type: 'number', description: 'Total amount of the invoice. Infer from items.' },
                     items: {
                         type: 'array',
-                        description: 'List of line items for the invoice. Ask the user if missing.',
+                        description: 'List of line items for the invoice. Infer description, price, and quantity (default 1) from the user prompt.',
                         items: {
                             type: 'object',
                             properties: {
-                                description: { type: 'string' },
-                                quantity: { type: 'number' },
-                                price: { type: 'number' }
+                                description: { type: 'string', description: 'Item name or description' },
+                                quantity: { type: 'number', description: 'Item quantity (default 1)' },
+                                price: { type: 'number', description: 'Price per item' }
                             },
                             required: ['description', 'quantity', 'price']
                         }
                     },
                     description: { type: 'string', description: 'General description of the invoice.' }
                 },
-                required: ['customerName', 'customerEmail', 'customerAddress', 'amount', 'items']
+                required: ['customerName', 'customerEmail', 'customerAddress', 'items']
             },
             send_reminder: {
                 type: 'object',

@@ -96,28 +96,32 @@ class AIActionExecutorService {
         }
 
         let customerId = payload.customerId;
+        let customerEmail = payload.customerEmail || null;
+        let customerName = payload.customerName || null;
         
-        if (!customerId && (payload.customerName || payload.customerEmail)) {
+        if (!customerId && (customerName || customerEmail)) {
             let existing = null;
             
-            if (payload.customerEmail) {
-                 const { data } = await supabase.from('customers').select('id, name').eq('organization_id', context.organizationId).eq('email', payload.customerEmail).maybeSingle();
+            if (customerEmail) {
+                 const { data } = await supabase.from('customers').select('id, name, email').eq('organization_id', context.organizationId).eq('email', customerEmail).maybeSingle();
                  existing = data;
             }
-            if (!existing && payload.customerName) {
-                 const { data } = await supabase.from('customers').select('id, name').eq('organization_id', context.organizationId).ilike('name', `%${payload.customerName}%`).maybeSingle();
+            if (!existing && customerName) {
+                 const { data } = await supabase.from('customers').select('id, name, email').eq('organization_id', context.organizationId).ilike('name', `%${customerName}%`).maybeSingle();
                  existing = data;
             }
             
             if (existing) {
                 customerId = existing.id;
-                payload.customerName = existing.name;
+                customerName = existing.name;
+                customerEmail = customerEmail || existing.email || null;
             } else {
+                const resolvedName = customerName || customerEmail?.split('@')[0] || 'Unknown Customer';
                 const { data: newCustomer } = await supabase
                     .from('customers')
                     .insert([{
-                        name: payload.customerName || payload.customerEmail?.split('@')[0] || 'Unknown Customer',
-                        email: payload.customerEmail || null,
+                        name: resolvedName,
+                        email: customerEmail || null,
                         organization_id: context.organizationId,
                         user_id: context.user?.id || null
                     }])
@@ -125,17 +129,24 @@ class AIActionExecutorService {
                     .single();
                 if (newCustomer) {
                     customerId = newCustomer.id;
+                    customerName = resolvedName;
                 }
             }
         }
 
         const invoiceNumber = `INV-DRAFT-${Date.now().toString().slice(-6)}`;
         
+        // Build complete buyer object with email for preview and sending
+        const buyer = {
+            name: customerName || 'Unknown Customer',
+            ...(customerEmail ? { email: customerEmail } : {})
+        };
+
         const { data: invoice, error } = await supabase
             .from('invoices')
             .insert([{
                 customer_id: customerId || null,
-                buyer: { name: payload.customerName || 'Unknown Customer' },
+                buyer,
                 amount_paid: 0,
                 subtotal: amount,
                 total: amount,
@@ -164,104 +175,18 @@ class AIActionExecutorService {
             enrichedItems = items || [];
         }
 
-        // 1. Parallel Lookups for speed
-        const [orgResult, configResult, integrationResult] = await Promise.all([
+        // Parallel Lookups for speed
+        const [orgResult, configResult] = await Promise.all([
             supabase.from('organizations').select('*').eq('id', context.organizationId).single(),
-            supabase.from('organization_configs').select('owner_name, business_name, address, gstin, phone, email, upi_id, bank_name, bank_account_number, bank_ifsc').eq('organization_id', context.organizationId).maybeSingle(),
-            supabase.from('organization_integrations').select('id').eq('organization_id', context.organizationId).in('provider', ['google', 'google_gmail']).maybeSingle()
+            supabase.from('organization_configs').select('owner_name, business_name, address, gstin, phone, email, upi_id, bank_name, bank_account_number, bank_ifsc, payment_qr_filename').eq('organization_id', context.organizationId).maybeSingle()
         ]);
 
         const org = orgResult.data;
         const orgSettings = configResult.data;
-        const hasGoogleIntegration = !!integrationResult.data;
-
-        let message = 'Draft invoice created successfully.';
-        if (payload.sendImmediately && (payload.customerEmail || customerId)) {
-            try {
-                // ── Google Integration Gate ─────────────────────────────────
-                if (!hasGoogleIntegration) {
-                    return {
-                        status: 'blocked',
-                        message: `⚠️ Invoice created as draft (INV: ${invoiceNumber}), but could not be sent. You haven't connected your Gmail account yet. Please go to **Settings → Integrations** and connect Google to enable automated invoice dispatch.`
-                    };
-                }
-
-                // ── Payment Details Gate ─────────────────────────────────────
-                // Block sending if the org hasn't completed payment onboarding.
-                // A customer receiving an invoice must have a way to pay.
-                const hasUpi = Boolean(orgSettings?.upi_id);
-                const hasBankDetails = Boolean(orgSettings?.bank_name && orgSettings?.bank_account_number && orgSettings?.bank_ifsc);
-
-                if (!hasUpi && !hasBankDetails) {
-                    return {
-                        status: 'blocked',
-                        message: `⚠️ Invoice created as draft (INV: ${invoiceNumber}), but could not be sent. Your payment details are incomplete — the customer would have no way to pay. Please go to **Settings → Invoicing & Payments** and add your bank account or UPI ID first, then send the invoice manually.`
-                    };
-                }
-                // ────────────────────────────────────────────────────────────
-
-                // Fetch customer email if we only have ID
-                let targetEmail = payload.customerEmail;
-                if (!targetEmail && customerId) {
-                    const { data: cust } = await supabase.from('customers').select('email').eq('id', customerId).single();
-                    targetEmail = cust?.email;
-                }
-                
-                if (targetEmail) {
-
-                    // Build full invoice object with items for PDF rendering
-                    const invoiceForPdf = {
-                        ...invoice,
-                        items: enrichedItems,
-                        buyer: { name: payload.customerName || 'Customer', email: targetEmail }
-                    };
-
-                    // Generate PDF in-memory (no temp file)
-                    let pdfBuffer = null;
-                    try {
-                        const pdfSettings = { 
-                            ...(orgSettings || {}), 
-                            organization_name: org?.name 
-                        };
-                        pdfBuffer = await pdfService.generateInvoicePDFBuffer(invoiceForPdf, pdfSettings);
-                    } catch (pdfErr) {
-                        console.error('PDF buffer generation failed:', pdfErr);
-                    }
-
-                    // Dispatch in the background so the AI can respond to the user immediately
-                    emailService.sendInvoice(
-                        invoiceForPdf,
-                        pdfBuffer,
-                        targetEmail,
-                        { organizationId: context.organizationId, ...(orgSettings || {}) }
-                    ).catch(async (bgErr) => {
-                        console.error('[AI Executor] Background email dispatch failed:', bgErr);
-                        const errorDetail = bgErr.code || bgErr.name || 'Unknown Error';
-                        await supabase.from('invoices').update({ 
-                            notes: `Auto-send failed [${errorDetail}]: ${bgErr.message.slice(0, 100)}` 
-                        }).eq('id', invoice.id);
-                    });
-
-                    // Update status to 'sent' optimistically (or 'processing')
-                    await supabase.from('invoices').update({ status: 'sent' }).eq('id', invoice.id);
-                    invoice.status = 'sent';
-                    message = `Invoice created and is being sent to ${targetEmail} in the background.`;
-                } else {
-                    message = 'Invoice created as draft (no email address found).';
-                }
-            } catch (e) {
-                console.error('Error sending invoice immediately:', e);
-                if (e.message?.includes('authentication failed') || e.code === 'EAUTH') {
-                    message = 'Invoice drafted, but Gmail authentication failed. Your connection might have expired. Please re-connect Google in Settings.';
-                } else {
-                    message = `Invoice drafted, but email delivery failed: ${e.message || 'Unknown error'}`;
-                }
-            }
-        }
 
         return { 
             status: 'created', 
-            message,
+            message: 'Draft invoice created successfully.',
             invoice: { 
                 ...invoice, 
                 items: enrichedItems,

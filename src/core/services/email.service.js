@@ -87,18 +87,19 @@ class EmailService {
      * Create dynamic transporter based on settings
      */
     async createTransporter(settings = {}) {
+        const orgId = settings.organizationId || settings.organization_id;
         // 0. Check for Native Google OAuth Integration
-        if (settings.organizationId) {
+        if (orgId) {
             try {
                 const { data: integration } = await supabase
                     .from('organization_integrations')
                     .select('*')
-                    .eq('organization_id', settings.organizationId)
+                    .eq('organization_id', orgId)
                     .eq('provider', 'google')
                     .maybeSingle();
 
                 if (integration && integration.refresh_token) {
-                    console.log(`📧 Using Google OAuth Integration for org: ${settings.organizationId}`);
+                    console.log(`📧 Using Google OAuth Integration for org: ${orgId}`);
                     
                     // Set the email address in settings so it can be used for the From address
                     settings.integrationEmail = integration.metadata?.email;
@@ -114,7 +115,7 @@ class EmailService {
                         }
                     });
                 } else {
-                    console.log(`📧 No Google integration found or missing refresh token for org: ${settings.organizationId}. Falling back...`);
+                    console.log(`📧 No Google integration found or missing refresh token for org: ${orgId}. Falling back...`);
                 }
             } catch (err) {
                 console.error('❌ Failed to load Google OAuth integration:', err.message);
@@ -162,18 +163,19 @@ class EmailService {
      * Send invoice email with PDF attachment
      */
     async sendInvoice(invoice, pdfPath, recipientEmail, settings = {}) {
+        const orgId = settings.organizationId || settings.organization_id;
         // 1. Check for Google OAuth Integration (Bypasses SMTP block on Render)
-        if (settings.organizationId) {
+        if (orgId) {
             try {
                 const { data: integration } = await supabase
                     .from('organization_integrations')
                     .select('*')
-                    .eq('organization_id', settings.organizationId)
+                    .eq('organization_id', orgId)
                     .eq('provider', 'google')
                     .maybeSingle();
 
                 if (integration && integration.refresh_token) {
-                    console.log(`📧 Using Native Gmail API (HTTPS) for org: ${settings.organizationId}`);
+                    console.log(`📧 Using Native Gmail API (HTTPS) for org: ${orgId}`);
                     
                     // 1. Get Access Token manually via Fetch
                     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
@@ -314,6 +316,109 @@ class EmailService {
      * Send payment reminder
      */
     async sendPaymentReminder(invoice, recipientEmail, settings = {}, pdfPath = null) {
+        const daysOverdue = Math.floor((new Date() - new Date(invoice.dueDate)) / (1000 * 60 * 60 * 24));
+        const subject = `Payment Reminder: Invoice ${invoice.invoiceNumber}`;
+        const html = this.generateReminderEmailHTML(invoice, daysOverdue, settings);
+
+        const orgId = settings.organizationId || settings.organization_id;
+        // 1. Check for Google OAuth Integration (Bypasses SMTP block on Render)
+        if (orgId) {
+            try {
+                const { data: integration } = await supabase
+                    .from('organization_integrations')
+                    .select('*')
+                    .eq('organization_id', orgId)
+                    .eq('provider', 'google')
+                    .maybeSingle();
+
+                if (integration && integration.refresh_token) {
+                    console.log(`📧 Using Native Gmail API (HTTPS) for org: ${orgId}`);
+                    
+                    // 1. Get Access Token manually via Fetch
+                    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            client_id: process.env.GOOGLE_CLIENT_ID,
+                            client_secret: process.env.GOOGLE_CLIENT_SECRET,
+                            refresh_token: integration.refresh_token,
+                            grant_type: 'refresh_token',
+                        }),
+                    });
+
+                    const tokenData = await tokenResponse.json();
+                    if (!tokenData.access_token) {
+                        throw new Error(`Failed to refresh Google token: ${tokenData.error_description || tokenData.error || 'Unknown error'}`);
+                    }
+
+                    const accessToken = tokenData.access_token;
+                    const fromName = settings.businessName || settings.business_name || settings.owner_name || 'Your Business';
+                    const fromEmail = integration.metadata?.email;
+                    
+                    // 2. Construct the raw email
+                    const boundary = 'foo_bar_baz';
+                    const nl = '\n';
+                    
+                    let raw = [
+                        `From: "${fromName}" <${fromEmail}>`,
+                        `To: ${recipientEmail}`,
+                        `Subject: ${subject}`,
+                        'MIME-Version: 1.0',
+                        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+                        '',
+                        `--${boundary}`,
+                        'Content-Type: text/html; charset="UTF-8"',
+                        'Content-Transfer-Encoding: 7bit',
+                        '',
+                        html,
+                        '',
+                    ].join(nl);
+
+                    if (pdfPath) {
+                        const content = Buffer.isBuffer(pdfPath) ? pdfPath : fs.readFileSync(pdfPath);
+                        raw += [
+                            `--${boundary}`,
+                            'Content-Type: application/pdf',
+                            'Content-Transfer-Encoding: base64',
+                            `Content-Disposition: attachment; filename="Invoice_${invoice.invoiceNumber}.pdf"`,
+                            '',
+                            content.toString('base64'),
+                            '',
+                        ].join(nl);
+                    }
+
+                    raw += `--${boundary}--`;
+
+                    const encodedMessage = Buffer.from(raw)
+                        .toString('base64')
+                        .replace(/\+/g, '-')
+                        .replace(/\//g, '_')
+                        .replace(/=+$/, '');
+
+                    // 3. Send via Fetch to Gmail API
+                    const sendResponse = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ raw: encodedMessage }),
+                    });
+
+                    const sendData = await sendResponse.json();
+                    if (!sendResponse.ok) {
+                        throw new Error(`Gmail API error: ${sendData.error?.message || 'Unknown error'}`);
+                    }
+
+                    console.log('✅ Reminder sent via Native Gmail API:', sendData.id);
+                    return { success: true, messageId: sendData.id };
+                }
+            } catch (err) {
+                console.error('❌ Native Gmail Dispatch Failed:', err.message);
+                throw err; // Rethrow to let the executor log it in Notes
+            }
+        }
+
         const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
@@ -325,9 +430,7 @@ class EmailService {
         }
 
         const fromAddress = this.resolveFromAddress(settings, 'billing');
-        const daysOverdue = Math.floor((new Date() - new Date(invoice.dueDate)) / (1000 * 60 * 60 * 24));
-        const subject = `Payment Reminder: Invoice ${invoice.invoiceNumber}`;
-        const html = this.generateReminderEmailHTML(invoice, daysOverdue, settings);
+
 
         const mailOptions = {
             from: fromAddress,
@@ -535,6 +638,111 @@ class EmailService {
      * Send receipt email
      */
     async sendReceipt(invoice, pdfPath, recipientEmail, settings = {}, emailType = 'INITIAL_RECEIPT') {
+        const subject = emailType === 'INITIAL_RECEIPT'
+            ? `Payment Received: Invoice ${invoice.invoiceNumber}`
+            : `Receipt for Invoice ${invoice.invoiceNumber}`;
+
+        const html = this.generateReceiptEmailHTML(invoice, settings, emailType);
+
+        const orgId = settings.organizationId || settings.organization_id;
+        // 1. Check for Google OAuth Integration (Bypasses SMTP block on Render)
+        if (orgId) {
+            try {
+                const { data: integration } = await supabase
+                    .from('organization_integrations')
+                    .select('*')
+                    .eq('organization_id', orgId)
+                    .eq('provider', 'google')
+                    .maybeSingle();
+
+                if (integration && integration.refresh_token) {
+                    console.log(`📧 Using Native Gmail API (HTTPS) for org: ${orgId}`);
+                    
+                    // 1. Get Access Token manually via Fetch
+                    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({
+                            client_id: process.env.GOOGLE_CLIENT_ID,
+                            client_secret: process.env.GOOGLE_CLIENT_SECRET,
+                            refresh_token: integration.refresh_token,
+                            grant_type: 'refresh_token',
+                        }),
+                    });
+
+                    const tokenData = await tokenResponse.json();
+                    if (!tokenData.access_token) {
+                        throw new Error(`Failed to refresh Google token: ${tokenData.error_description || tokenData.error || 'Unknown error'}`);
+                    }
+
+                    const accessToken = tokenData.access_token;
+                    const fromName = settings.businessName || settings.business_name || settings.owner_name || 'Your Business';
+                    const fromEmail = integration.metadata?.email;
+                    
+                    // 2. Construct the raw email
+                    const boundary = 'foo_bar_baz';
+                    const nl = '\n';
+                    
+                    let raw = [
+                        `From: "${fromName}" <${fromEmail}>`,
+                        `To: ${recipientEmail}`,
+                        `Subject: ${subject}`,
+                        'MIME-Version: 1.0',
+                        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+                        '',
+                        `--${boundary}`,
+                        'Content-Type: text/html; charset="UTF-8"',
+                        'Content-Transfer-Encoding: 7bit',
+                        '',
+                        html,
+                        '',
+                    ].join(nl);
+
+                    if (pdfPath) {
+                        const content = Buffer.isBuffer(pdfPath) ? pdfPath : fs.readFileSync(pdfPath);
+                        raw += [
+                            `--${boundary}`,
+                            'Content-Type: application/pdf',
+                            'Content-Transfer-Encoding: base64',
+                            `Content-Disposition: attachment; filename="Receipt_${invoice.invoiceNumber}.pdf"`,
+                            '',
+                            content.toString('base64'),
+                            '',
+                        ].join(nl);
+                    }
+
+                    raw += `--${boundary}--`;
+
+                    const encodedMessage = Buffer.from(raw)
+                        .toString('base64')
+                        .replace(/\+/g, '-')
+                        .replace(/\//g, '_')
+                        .replace(/=+$/, '');
+
+                    // 3. Send via Fetch to Gmail API
+                    const sendResponse = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ raw: encodedMessage }),
+                    });
+
+                    const sendData = await sendResponse.json();
+                    if (!sendResponse.ok) {
+                        throw new Error(`Gmail API error: ${sendData.error?.message || 'Unknown error'}`);
+                    }
+
+                    console.log('✅ Receipt sent via Native Gmail API:', sendData.id);
+                    return { success: true, messageId: sendData.id };
+                }
+            } catch (err) {
+                console.error('❌ Native Gmail Dispatch Failed:', err.message);
+                throw err; // Rethrow to let the executor log it in Notes
+            }
+        }
+
         const transporter = await this.createTransporter(settings);
 
         if (!transporter && this.mockMode) {
@@ -546,11 +754,7 @@ class EmailService {
         }
 
         const fromAddress = this.resolveFromAddress(settings, 'billing');
-        const subject = emailType === 'INITIAL_RECEIPT'
-            ? `Payment Received: Invoice ${invoice.invoiceNumber}`
-            : `Receipt for Invoice ${invoice.invoiceNumber}`;
 
-        const html = this.generateReceiptEmailHTML(invoice, settings, emailType);
 
         const mailOptions = {
             from: fromAddress,

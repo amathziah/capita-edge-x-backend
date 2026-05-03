@@ -203,12 +203,25 @@ class AIToolRegistryService {
                 properties: {
                     customerId: { type: 'string', description: 'ID of the customer.' },
                     customerName: { type: 'string', description: 'Name of the customer if ID is not known.' },
-                    customerEmail: { type: 'string', description: 'Email address of the customer if known.' },
+                    customerEmail: { type: 'string', description: 'Email address of the customer (Required).' },
+                    customerAddress: { type: 'string', description: 'Physical address of the customer (Required).' },
                     amount: { type: 'number', description: 'Total amount of the invoice.' },
-                    description: { type: 'string', description: 'Description of the goods or services.' },
-                    sendImmediately: { type: 'boolean', description: 'Set to true if the user explicitly asks to send the invoice right away.'}
+                    items: {
+                        type: 'array',
+                        description: 'List of line items for the invoice. Ask the user if missing.',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                description: { type: 'string' },
+                                quantity: { type: 'number' },
+                                price: { type: 'number' }
+                            },
+                            required: ['description', 'quantity', 'price']
+                        }
+                    },
+                    description: { type: 'string', description: 'General description of the invoice.' }
                 },
-                required: ['amount']
+                required: ['customerName', 'customerEmail', 'customerAddress', 'amount', 'items']
             },
             send_reminder: {
                 type: 'object',

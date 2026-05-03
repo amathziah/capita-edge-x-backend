@@ -98,6 +98,15 @@ class AIActionExecutorService {
         let customerId = payload.customerId;
         let customerEmail = payload.customerEmail || null;
         let customerName = payload.customerName || null;
+        let customerAddress = payload.customerAddress || null;
+        let items = payload.items || [];
+        
+        if (!customerEmail || !customerAddress || !items || items.length === 0) {
+            return {
+                status: 'error',
+                message: 'I need the customer\'s email, address, and the specific items/services to bill before I can create an invoice. Please provide these details.'
+            };
+        }
         
         if (!customerId && (customerName || customerEmail)) {
             let existing = null;
@@ -122,6 +131,7 @@ class AIActionExecutorService {
                     .insert([{
                         name: resolvedName,
                         email: customerEmail || null,
+                        address: customerAddress || null,
                         organization_id: context.organizationId,
                         user_id: context.user?.id || null
                     }])
@@ -139,7 +149,8 @@ class AIActionExecutorService {
         // Build complete buyer object with email for preview and sending
         const buyer = {
             name: customerName || 'Unknown Customer',
-            ...(customerEmail ? { email: customerEmail } : {})
+            ...(customerEmail ? { email: customerEmail } : {}),
+            ...(customerAddress ? { address: customerAddress } : {})
         };
 
         const { data: invoice, error } = await supabase
@@ -161,10 +172,20 @@ class AIActionExecutorService {
 
         if (error) throw error;
         
-        // Also insert a basic invoice item
         let enrichedItems = [];
-        if (invoice) {
-            const { data: items } = await supabase.from('invoice_items').insert([{
+        if (invoice && items.length > 0) {
+            const itemsToInsert = items.map((it, idx) => ({
+                invoiceId: invoice.id,
+                description: it.description || 'Service',
+                quantity: Number(it.quantity || 1),
+                price: Number(it.price || amount),
+                organization_id: context.organizationId,
+                sort_order: idx
+            }));
+            const { data: insertedItems } = await supabase.from('invoice_items').insert(itemsToInsert).select();
+            enrichedItems = insertedItems || [];
+        } else if (invoice) {
+            const { data: fallbackItems } = await supabase.from('invoice_items').insert([{
                 invoiceId: invoice.id,
                 description: payload.description || 'Consulting / Services',
                 quantity: 1,
@@ -172,7 +193,7 @@ class AIActionExecutorService {
                 organization_id: context.organizationId,
                 sort_order: 0
             }]).select();
-            enrichedItems = items || [];
+            enrichedItems = fallbackItems || [];
         }
 
         // Parallel Lookups for speed

@@ -87,19 +87,6 @@ class AIActionExecutorService {
     async createInvoiceDraft(action = {}, context = {}) {
         const payload = action.data || {};
         let items = payload.items || [];
-        
-        let amount = Number(payload.amount || 0);
-        if (amount <= 0 && items.length > 0) {
-            amount = items.reduce((sum, item) => sum + (Number(item.quantity || 1) * Number(item.price || 0)), 0);
-        }
-        
-        if (amount <= 0) {
-            return {
-                status: 'error',
-                message: 'I cannot create an invoice for an amount of 0 or less. Please provide a valid amount.'
-            };
-        }
-
         let customerId = payload.customerId;
         let customerEmail = payload.customerEmail || null;
         let customerName = payload.customerName || null;
@@ -109,6 +96,18 @@ class AIActionExecutorService {
             return {
                 status: 'error',
                 message: 'I need the customer\'s email, address, and the specific items/services to bill before I can create an invoice. Please provide these details.'
+            };
+        }
+        
+        let amount = Number(payload.amount || 0);
+        if (amount <= 0 && items.length > 0) {
+            amount = items.reduce((sum, item) => sum + (Number(item.quantity || 1) * Number(item.price || 0)), 0);
+        }
+        
+        if (amount <= 0) {
+            return {
+                status: 'error',
+                message: 'I cannot create an invoice for an amount of 0 or less. Please check the prices provided.'
             };
         }
         

@@ -130,21 +130,16 @@ class AIActionExecutorService {
                 customerEmail = customerEmail || existing.email || null;
             } else {
                 const resolvedName = customerName || customerEmail?.split('@')[0] || 'Unknown Customer';
-                const { data: newCustomer } = await supabase
-                    .from('customers')
-                    .insert([{
+                return {
+                    status: 'action_required',
+                    type: 'open_customer_modal',
+                    data: {
                         name: resolvedName,
-                        email: customerEmail || null,
-                        address: customerAddress || null,
-                        organization_id: context.organizationId,
-                        user_id: context.user?.id || null
-                    }])
-                    .select()
-                    .single();
-                if (newCustomer) {
-                    customerId = newCustomer.id;
-                    customerName = resolvedName;
-                }
+                        email: customerEmail || '',
+                        address: customerAddress || ''
+                    },
+                    message: `Before I can create an invoice for ${resolvedName}, you need to add them to your CRM. I've opened the Add Client form for you. Once saved, just ask me to create the invoice again!`
+                };
             }
         }
 

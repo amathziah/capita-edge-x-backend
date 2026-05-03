@@ -397,7 +397,12 @@ Markdown allowed. Keep it tight.`;
         let actionPayload = null;
         for (let i = 0; i < toolCalls.length; i++) {
             if (['create_customer', 'create_invoice_draft', 'send_reminder'].includes(toolCalls[i].name) && toolResults[i]?.ok) {
-                actionPayload = { type: toolCalls[i].name, result: toolResults[i].data };
+                const resData = toolResults[i].data?.data || toolResults[i].data;
+                if (resData?.type) {
+                    actionPayload = { type: resData.type, result: resData.data || resData };
+                } else {
+                    actionPayload = { type: toolCalls[i].name, result: toolResults[i].data };
+                }
             }
         }
 
